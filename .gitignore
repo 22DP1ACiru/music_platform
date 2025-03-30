@@ -1,1 +1,45 @@
+# Environment variables
 .env
+.env.*.local # Common pattern for framework-specific local overrides
+
+# Python / Django
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.sqlite3 # If you ever temporarily use sqlite
+/staticfiles/ # Collected static files (should be generated on deploy)
+/mediafiles/  # User uploaded media (should NOT be in git)
+*.log       # Log files
+# If using a virtual environment outside Docker (less likely in this setup)
+# venv/
+# env/
+# .venv/
+
+# Node / Vue / Vite
+node_modules/
+dist/          # Build output directory
+.npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+coverage/      # Test coverage reports
+.DS_Store      # macOS specific
+Thumbs.db      # Windows specific
+
+# IDE / Editor directories
+.vscode/
+.idea/
+*.swp # Vim swap files
+
+# Docker (usually not needed if context is managed well, but sometimes)
+# docker-compose.override.yml # If used for local-only overrides
+
+# Celery
+celerybeat-schedule # Celery Beat schedule file
+
+# Operating System files
+.DS_Store
+Thumbs.db
