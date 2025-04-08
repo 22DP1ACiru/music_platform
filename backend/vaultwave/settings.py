@@ -119,6 +119,7 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
         # Configure auth methods later
+         'rest_framework.authentication.SessionAuthentication',
          'rest_framework_simplejwt.authentication.JWTAuthentication',
     ]
 }
