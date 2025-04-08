@@ -3,19 +3,19 @@ from .models import Genre, Artist, Release, Track, Comment, Highlight
 
 @admin.register(Genre)
 class GenreAdmin(admin.ModelAdmin):
-    list_display = ('name',)
-    # Add search_fields, prepopulated_fields for slug if you add it
+    list_display = ('name')
+    search_fields = ('name')
 
 @admin.register(Artist)
 class ArtistAdmin(admin.ModelAdmin):
     list_display = ('name', 'user')
-    search_fields = ('name', 'user__username')
+    search_fields = ('name', 'user__username', 'bio', 'artist_picture')
 
 # Inline editing for Tracks within a Release admin page
 class TrackInline(admin.TabularInline):
     model = Track
     extra = 1 # How many empty forms to show
-    fields = ('track_number', 'title', 'audio_file', 'genre', 'duration_seconds') # Customize fields displayed
+    fields = ('track_number', 'title', 'audio_file', 'genre', 'duration_seconds') 
 
 @admin.register(Release)
 class ReleaseAdmin(admin.ModelAdmin):

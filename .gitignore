@@ -11,10 +11,7 @@ __pycache__/
 /staticfiles/ # Collected static files (should be generated on deploy)
 /mediafiles/  # User uploaded media (should NOT be in git)
 *.log       # Log files
-# If using a virtual environment outside Docker (less likely in this setup)
-# venv/
-# env/
-# .venv/
+
 
 # Node / Vue / Vite
 node_modules/
