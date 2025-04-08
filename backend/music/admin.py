@@ -3,8 +3,8 @@ from .models import Genre, Artist, Release, Track, Comment, Highlight
 
 @admin.register(Genre)
 class GenreAdmin(admin.ModelAdmin):
-    list_display = ('name')
-    search_fields = ('name')
+    list_display = ('name',)
+    search_fields = ('name',)
 
 @admin.register(Artist)
 class ArtistAdmin(admin.ModelAdmin):
