@@ -12,23 +12,27 @@ from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser
 class IsOwnerOrReadOnly(permissions.BasePermission):
     """
     Object-level permission to only allow owners of an object to edit it.
-    Assumes the model instance has an `artist.user` attribute.
+    Checks for obj.user, obj.owner, or obj.artist.user.
     """
     def has_object_permission(self, request, view, obj):
-        # Read permissions are allowed to any request,
-        # so we'll always allow GET, HEAD or OPTIONS requests.
+        # Read permissions are allowed to any request
         if request.method in permissions.SAFE_METHODS:
             return True
 
-        # Write permissions are only allowed to the owner of the release.
-        # Check if the object's artist's user is the same as the request user.
-        # This requires the object (obj) to have an 'artist' field,
-        # and the artist object to have a 'user' field.
-        if hasattr(obj, 'artist') and hasattr(obj.artist, 'user'):
-             return obj.artist.user == request.user
-      
-        return False # Default deny if ownership cannot be determined this way
+        # Check for common ownership patterns
+        if hasattr(obj, 'user'): # For Artist, Comment, UserProfile
+            return obj.user == request.user
+        if hasattr(obj, 'owner'): # For Playlist
+            return obj.owner == request.user
+        if hasattr(obj, 'artist') and hasattr(obj.artist, 'user'): # For Release, Track
+            # For Track, we check the release's artist
+            if hasattr(obj, 'release') and hasattr(obj.release, 'artist'):
+                 return obj.release.artist.user == request.user
+            # For Release directly
+            return obj.artist.user == request.user
 
+        # Deny if no ownership attribute found
+        return False
 
 class GenreViewSet(viewsets.ModelViewSet):
     queryset = Genre.objects.all().order_by('name')
@@ -38,7 +42,7 @@ class GenreViewSet(viewsets.ModelViewSet):
 class ArtistViewSet(viewsets.ModelViewSet):
     queryset = Artist.objects.all()
     serializer_class = ArtistSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     # Add logic here later to ensure user matches artist on update/delete
 
 class ReleaseViewSet(viewsets.ModelViewSet):
@@ -107,7 +111,7 @@ class TrackViewSet(viewsets.ModelViewSet):
 class CommentViewSet(viewsets.ModelViewSet):
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly] # Must be logged in to comment
+    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
 
     # Override perform_create to automatically set the user
     def perform_create(self, serializer):
