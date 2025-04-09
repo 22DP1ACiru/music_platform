@@ -13,7 +13,7 @@ interface TrackInfo {
   id: number;
   title: string;
   track_number: number | null;
-  duration_seconds: number | null;
+  duration_in_seconds: number | null;
   audio_file: string; // URL to the audio
 }
 interface ReleaseDetail extends Release {
@@ -81,11 +81,25 @@ watch(
 );
 
 // Helper function to format duration (optional)
-const formatDuration = (seconds: number | null | undefined): string => {
-  if (seconds === null || seconds === undefined) return "--:--";
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
+const formatDuration = (totalSeconds: number | null | undefined): string => {
+  if (totalSeconds === null || totalSeconds === undefined || totalSeconds < 0) {
+    return "--:--";
+  }
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const formattedSeconds = seconds.toString().padStart(2, "0");
+  const formattedMinutes = minutes.toString().padStart(2, "0");
+
+  if (hours > 0) {
+    // Include hours if duration is an hour or more
+    return `${hours}:${formattedMinutes}:${formattedSeconds}`;
+  } else {
+    // Only show minutes and seconds if less than an hour
+    return `${minutes}:${formattedSeconds}`;
+  }
 };
 </script>
 
@@ -139,7 +153,7 @@ const formatDuration = (seconds: number | null | undefined): string => {
             <span class="track-number">{{ track.track_number }}.</span>
             <span class="track-title">{{ track.title }}</span>
             <span class="track-duration">{{
-              formatDuration(track.duration_seconds)
+              formatDuration(track.duration_in_seconds)
             }}</span>
             <!-- Add Play button later -->
             <!-- <button @click="playTrack(track)">Play</button> -->

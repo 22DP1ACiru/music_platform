@@ -20,7 +20,8 @@ class TrackSerializer(serializers.ModelSerializer):
     class Meta:
         model = Track
         fields = [
-            'id', 'title', 'track_number', 'audio_file', 'duration_seconds',
+            'id', 'title', 'track_number', 'audio_file',
+            'duration_in_seconds',
             'release', 'release_title', 'artist_name', # 'release' gives the ID
             'genre', # Genre ID
             'created_at'

@@ -1,6 +1,8 @@
 from django.db import models
 from django.conf import settings # For AUTH_USER_MODEL
 from django.utils import timezone # For release_date checks
+from mutagen import File as MutagenFile # For audio file metadata
+from mutagen import MutagenError
 
 # Define upload path functions
 def artist_pic_path(instance, filename):
@@ -88,15 +90,56 @@ class Release(models.Model):
 class Track(models.Model):
     release = models.ForeignKey(Release, on_delete=models.CASCADE, related_name='tracks')
     title = models.CharField(max_length=255)
-    # The actual audio file
     audio_file = models.FileField(upload_to=track_audio_path)
     track_number = models.PositiveIntegerField(null=True, blank=True, help_text="Order within the release")
     genre = models.ForeignKey(Genre, on_delete=models.SET_NULL, null=True, blank=True, related_name='tracks')
-    duration_seconds = models.PositiveIntegerField(null=True, blank=True, help_text="Duration in seconds (can be auto-populated)")
+    duration_in_seconds = models.PositiveIntegerField(null=True, blank=True, help_text="Duration in seconds (auto-populated)")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):  
         return f"{self.title} from {self.release.title} by {self.release.artist.name})"
+
+    def save(self, *args, **kwargs):
+        """Override save to calculate duration if audio file exists and duration is not set."""
+        get_duration = False
+        if self.pk: # Check if instance already exists (for updates)
+            try:
+                old_instance = Track.objects.get(pk=self.pk)
+                # Check if file changed or duration is missing
+                if old_instance.audio_file != self.audio_file or self.duration_in_seconds is None:
+                    get_duration = True
+            except Track.DoesNotExist:
+                get_duration = True # Should not happen if self.pk exists, but safe check
+        elif self.audio_file: # New instance with a file
+             get_duration = True
+
+        # Only calculate if needed and file exists
+        if get_duration and self.audio_file:
+            try:
+                # Ensure the file pointer is at the beginning if it was read before
+                self.audio_file.seek(0)
+                # Use MutagenFile which auto-detects type
+                audio = MutagenFile(self.audio_file)
+                if audio and audio.info:
+                    # Get duration in seconds and round it
+                    self.duration_in_seconds = round(audio.info.length)
+                    print(f"Calculated duration for {self.title}: {self.duration_in_seconds}s")
+                else:
+                     # File might be corrupted or unsupported by mutagen directly
+                     self.duration_in_seconds = None
+                     print(f"Could not get audio info for {self.title}")
+                # Reset pointer again after reading
+                self.audio_file.seek(0)
+            except MutagenError as e:
+                # Handle cases where mutagen fails to read the file
+                print(f"Mutagen error reading {self.title}: {e}")
+                self.duration_in_seconds = None
+            except Exception as e:
+                # Catch other potential file reading errors
+                print(f"Error reading audio file {self.title}: {e}")
+                self.duration_in_seconds = None
+
+        super().save(*args, **kwargs)
 
     class Meta:
          # Order by release, then track number
