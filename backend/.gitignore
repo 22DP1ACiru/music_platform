@@ -1,8 +1,0 @@
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.sqlite3 # If you ever temporarily use sqlite
-staticfiles # Collected static files (should be generated on deploy)
-mediafiles  # User uploaded media (should NOT be in git)
-*.log       # Log files
