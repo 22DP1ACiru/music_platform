@@ -8,8 +8,9 @@ class GenreAdmin(admin.ModelAdmin):
 
 @admin.register(Artist)
 class ArtistAdmin(admin.ModelAdmin):
-    list_display = ('name', 'user')
-    search_fields = ('name', 'user__username', 'bio', 'artist_picture')
+    list_display = ('name', 'user', 'location')
+    search_fields = ('name', 'user__username', 'location')
+    fields = ('user', 'name', 'bio', 'artist_picture', 'location', 'website_url')
 
 # Inline editing for Tracks within a Release admin page
 class TrackInline(admin.TabularInline):

@@ -11,7 +11,7 @@ class ArtistSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Artist
-        fields = ['id', 'user', 'name', 'bio', 'artist_picture']
+        fields = ['id', 'user', 'name', 'bio', 'artist_picture', 'location', 'website_url']
 
 class TrackSerializer(serializers.ModelSerializer):
     release_title = serializers.CharField(source='release.title', read_only=True)

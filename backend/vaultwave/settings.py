@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 import environ
 from pathlib import Path
+from datetime import timedelta
 import os
 
 env = environ.Env(
@@ -114,14 +115,47 @@ AUTH_PASSWORD_VALIDATORS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
-        # Set default permissions - start restrictive or open for dev
-         'rest_framework.permissions.AllowAny',
+         'rest_framework.permissions.IsAuthenticatedOrReadOnly',
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
         # Configure auth methods later
-         'rest_framework.authentication.SessionAuthentication',
          'rest_framework_simplejwt.authentication.JWTAuthentication',
+         'rest_framework.authentication.SessionAuthentication',
     ]
+}
+
+SIMPLE_JWT = {
+    # How long an access token is valid for
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60), # Example: 1 hour
+    # How long a refresh token is valid for
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),    # Example: 1 week
+    'ROTATE_REFRESH_TOKENS': True, # Get a new refresh token when refreshing
+    'BLACKLIST_AFTER_ROTATION': True, # Add old refresh token to blacklist
+    'UPDATE_LAST_LOGIN': True, # Update user's last_login field on token refresh
+
+    'ALGORITHM': 'HS256', # Standard algorithm
+    'SIGNING_KEY': SECRET_KEY,
+    'VERIFYING_KEY': None,
+    'AUDIENCE': None,
+    'ISSUER': None,
+    'JWK_URL': None,
+    'LEEWAY': 0,
+
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+    'USER_AUTHENTICATION_RULE': 'rest_framework_simplejwt.authentication.default_user_authentication_rule',
+
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
+    'TOKEN_USER_CLASS': 'rest_framework_simplejwt.models.TokenUser',
+
+    'JTI_CLAIM': 'jti',
+
+    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
+    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=5), # Not typically used with access/refresh pair
+    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1), # Not typically used
 }
 
 # Internationalization
