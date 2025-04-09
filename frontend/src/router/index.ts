@@ -27,7 +27,19 @@ const router = createRouter({
     {
       path: "/releases",
       name: "releases",
-      component: () => import("../views/ReleasesListView.vue"),
+      component: () => import("../views/ReleaseListView.vue"),
+    },
+    {
+      path: "/releases/:id",
+      name: "release-detail",
+      component: () => import("../views/ReleaseDetailView.vue"),
+      props: true,
+    },
+    {
+      path: "/artists/:id",
+      name: "artist-detail",
+      component: () => import("../views/ArtistDetailView.vue"),
+      props: true,
     },
   ],
 });

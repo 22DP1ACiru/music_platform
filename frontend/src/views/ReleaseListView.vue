@@ -16,6 +16,7 @@ interface Release {
 }
 
 const releases = ref<Release[]>([]);
+const props = defineProps<{ id: string | string[] }>();
 const isLoading = ref(true);
 const error = ref<string | null>(null);
 
@@ -46,9 +47,12 @@ onMounted(fetchReleases);
     <div v-else-if="releases.length === 0">No releases found.</div>
 
     <div v-else class="releases-grid">
-      <div v-for="release in releases" :key="release.id" class="release-card">
-        <!-- Link to detail page (add later) -->
-        <!-- <RouterLink :to="{ name: 'release-detail', params: { id: release.id } }"> -->
+      <RouterLink
+        v-for="release in releases"
+        :key="release.id"
+        :to="{ name: 'release-detail', params: { id: release.id } }"
+        class="release-card"
+      >
         <img
           v-if="release.cover_art"
           :src="release.cover_art"
@@ -62,8 +66,7 @@ onMounted(fetchReleases);
         <p>{{ release.artist.name }}</p>
         <!-- </RouterLink> -->
         <span class="release-type">{{ release.release_type }}</span>
-        <!-- </RouterLink> -->
-      </div>
+      </RouterLink>
     </div>
   </div>
 </template>
@@ -82,6 +85,9 @@ onMounted(fetchReleases);
   text-align: center;
   background-color: var(--color-background-soft);
   transition: transform 0.2s ease-in-out;
+  display: block;
+  color: inherit;
+  text-decoration: none;
 }
 .release-card:hover {
   transform: translateY(-5px);
