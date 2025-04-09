@@ -1,8 +1,8 @@
 from django.shortcuts import render
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, generics
 from django.contrib.auth.models import User
 from .models import UserProfile
-from .serializers import UserSerializer, UserProfileSerializer
+from .serializers import UserSerializer, UserProfileSerializer, RegisterSerializer
 
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -18,3 +18,10 @@ class UserProfileViewSet(viewsets.ModelViewSet):
     queryset = UserProfile.objects.all()
     serializer_class = UserProfileSerializer
 
+class RegisterView(generics.CreateAPIView):
+    """
+    API endpoint for user registration.
+    """
+    queryset = User.objects.all()
+    permission_classes = (permissions.AllowAny,) # Anyone can register
+    serializer_class = RegisterSerializer

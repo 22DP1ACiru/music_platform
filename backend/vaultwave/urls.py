@@ -3,7 +3,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from users.views import UserViewSet, UserProfileViewSet
+from users.views import UserViewSet, UserProfileViewSet, RegisterView
 from music.views import (
     GenreViewSet, ArtistViewSet, ReleaseViewSet,
     TrackViewSet, CommentViewSet, HighlightViewSet
@@ -34,14 +34,20 @@ router.register(r'playlists', PlaylistViewSet, basename='playlist')
 urlpatterns = [
     path('admin/', admin.site.urls),
 
+    # --- Router-generated API Endpoints ---
     path('api/', include(router.urls)),
 
+    # --- Browsable API ---
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
 
-    # JWT Authentication
+    # --- JWT Authentication ---
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/token/verify/', TokenVerifyView.as_view(), name='token_verify'),
+
+    # --- User Registration ---
+    # Add the registration endpoint under /api/
+    path('api/register/', RegisterView.as_view(), name='register'),
 ]
 
 # Serve media files during development

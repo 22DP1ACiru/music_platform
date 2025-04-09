@@ -111,6 +111,17 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
+
+    # --- Custom validators ---
+    {
+        'NAME': 'users.validators.UppercaseValidator',
+    },
+    {
+        'NAME': 'users.validators.NumberValidator',
+    },
+    {
+        'NAME': 'users.validators.SymbolValidator',
+    },
 ]
 
 REST_FRAMEWORK = {
@@ -190,3 +201,16 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC' 
+
+FORBIDDEN_USERNAME_SUBSTRINGS = [
+    'admin',
+    'root',
+    'staff',
+    'support',
+    'help',
+    'moderator',
+    'superuser',
+    'vaultwave',
+    'system',
+    'info',
+]
