@@ -2,13 +2,12 @@
 import { RouterLink, useRouter } from "vue-router";
 import { useAuth } from "@/composables/useAuth";
 
-const { isLoggedIn, logout } = useAuth();
+const { isLoggedIn, logout, user } = useAuth();
 const router = useRouter();
 
 const handleLogout = () => {
   logout(); // Clear tokens and state
-  // Redirect to home after logout
-  router.push({ name: "home" });
+  router.push({ name: "login" }); // Redirect to login page
 };
 </script>
 
@@ -29,6 +28,9 @@ const handleLogout = () => {
 
       <!-- Show Logout/Profile if logged in -->
       <template v-else>
+        <span v-if="user" class="username-display"
+          >Hi, {{ user.username }}</span
+        >
         <!-- Add Profile link later -->
         <!-- <RouterLink to="/profile">Profile</RouterLink> -->
         <button @click="handleLogout" class="logout-button">Logout</button>
@@ -72,5 +74,11 @@ const handleLogout = () => {
 
 .navbar-links button.logout-button:hover {
   color: #ff4d4d; /* Example hover effect for logout */
+}
+
+.username-display {
+  margin-left: 1rem;
+  color: var(--color-text);
+  font-style: italic;
 }
 </style>

@@ -1,6 +1,8 @@
 from django.shortcuts import render
 from rest_framework import viewsets, permissions, generics
 from django.contrib.auth.models import User
+from rest_framework.response import Response
+from rest_framework.decorators import action
 from .models import UserProfile
 from .serializers import UserSerializer, UserProfileSerializer, RegisterSerializer
 
@@ -10,6 +12,14 @@ class UserViewSet(viewsets.ReadOnlyModelViewSet):
     """
     queryset = User.objects.all().order_by('-date_joined')
     serializer_class = UserSerializer
+
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def me(self, request):
+        """
+        Return the details of the currently authenticated user.
+        """
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
 
 class UserProfileViewSet(viewsets.ModelViewSet):
     """

@@ -31,9 +31,8 @@ const handleLogin = async (payload: LoginPayload) => {
     if (response.data.access && response.data.refresh) {
       localStorage.setItem("accessToken", response.data.access);
       localStorage.setItem("refreshToken", response.data.refresh);
-      // --- Normally you'd update a central auth state here ---
-      login(response.data.access, response.data.refresh);
-      console.log("Tokens stored in localStorage");
+      await login(response.data.access, response.data.refresh);
+      console.log("Tokens stored in localStorage and user fetched");
 
       // Redirect to home page after successful login
       alert("Login Successful!"); // Simple feedback
