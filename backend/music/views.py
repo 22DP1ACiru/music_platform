@@ -8,6 +8,7 @@ from .serializers import (
     TrackSerializer, CommentSerializer, HighlightSerializer
 )
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser
+from django_filters.rest_framework import DjangoFilterBackend 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
     """
@@ -48,6 +49,8 @@ class ArtistViewSet(viewsets.ModelViewSet):
 class ReleaseViewSet(viewsets.ModelViewSet):
     serializer_class = ReleaseSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['artist', 'genre', 'release_type'] 
 
     def get_queryset(self):
         """

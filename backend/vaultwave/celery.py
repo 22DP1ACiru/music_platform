@@ -4,7 +4,7 @@ from celery import Celery
 # Set the default Django settings module for the 'celery' program.
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'vaultwave.settings')
 
-app = Celery('core') # Use your project name
+app = Celery('vaultwave') # Use your project name
 
 # Using a string here means the worker doesn't have to serialize
 # the configuration object to child processes.
