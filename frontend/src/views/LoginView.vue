@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import axios from "axios";
 import LoginForm from "@/components/LoginForm.vue";
-import { useAuth } from "@/composables/useAuth";
+import { useAuthStore } from "@/stores/auth";
 
-const { login } = useAuth();
+const authStore = useAuthStore();
 const router = useRouter();
 const errorMessage = ref<string | null>(null);
 const isLoading = ref(false);
@@ -22,48 +21,12 @@ const handleLogin = async (payload: LoginPayload) => {
   console.log("Logging in user:", payload.username);
 
   try {
-    // Use relative path; baseURL is set in main.ts
-    // Send POST request to the token endpoint
-    const response = await axios.post("/token/", payload);
-
-    console.log("Login successful:", response.data);
-
-    if (response.data.access && response.data.refresh) {
-      localStorage.setItem("accessToken", response.data.access);
-      localStorage.setItem("refreshToken", response.data.refresh);
-      await login(response.data.access, response.data.refresh);
-      console.log("Tokens stored in localStorage and user fetched");
-
-      // Redirect to home page after successful login
-      alert("Login Successful!"); // Simple feedback
-      router.push({ name: "home" });
-    } else {
-      // Should not happen if API returns 200 OK, but good practice
-      throw new Error("Token data missing in response");
-    }
+    // Call the store action, passing the payload and router
+    await authStore.login(payload, router);
   } catch (error: any) {
-    console.error("Login failed:", error);
-    if (axios.isAxiosError(error) && error.response) {
-      // Handle specific errors (e.g., 401 Unauthorized)
-      if (error.response.status === 401) {
-        errorMessage.value = "Login failed: Invalid username or password.";
-      } else {
-        // Try to extract specific error messages if available
-        const errors = error.response.data;
-        if (typeof errors === "object" && errors !== null && errors.detail) {
-          errorMessage.value = errors.detail;
-        } else {
-          errorMessage.value = `Login failed (Status: ${error.response.status}). Please try again.`;
-        }
-      }
-    } else {
-      errorMessage.value = "An unexpected network error occurred during login.";
-    }
-    // Clear potentially stored tokens on failure
-    localStorage.removeItem("accessToken");
-    localStorage.removeItem("refreshToken");
-    // --- Normally update auth state here too ---
-    // logout();
+    // Error message is set within the action
+    errorMessage.value = authStore.authError || "Login failed.";
+    console.error("LoginView: Login action failed", error);
   } finally {
     isLoading.value = false;
   }
@@ -73,13 +36,10 @@ const handleLogin = async (payload: LoginPayload) => {
 <template>
   <div class="login-page">
     <h2>Login</h2>
-    <!-- Use the LoginForm component -->
-    <LoginForm @submitLogin="handleLogin" />
 
-    <!-- Display loading/error messages -->
+    <LoginForm @submitLogin="handleLogin" />
     <p v-if="isLoading">Logging in...</p>
     <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
-
     <p>
       Don't have an account?
       <router-link to="/register">Register here</router-link>

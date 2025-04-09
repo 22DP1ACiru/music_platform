@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { RouterLink, useRouter } from "vue-router";
-import { useAuth } from "@/composables/useAuth";
+import { useAuthStore } from "@/stores/auth";
 
-const { isLoggedIn, logout, user } = useAuth();
+const authStore = useAuthStore();
 const router = useRouter();
 
-const handleLogout = () => {
-  logout(); // Clear tokens and state
-  router.push({ name: "login" }); // Redirect to login page
+const handleLogout = async () => {
+  await authStore.logout(router);
 };
 </script>
 
@@ -17,22 +16,18 @@ const handleLogout = () => {
       <RouterLink to="/" class="brand-link">Vaultwave</RouterLink>
     </div>
     <div class="navbar-links">
-      <!-- Always show About -->
       <RouterLink to="/about">About</RouterLink>
 
-      <!-- Show Login/Register if NOT logged in -->
-      <template v-if="!isLoggedIn">
+      <template v-if="!authStore.isLoggedIn">
         <RouterLink to="/login">Login</RouterLink>
         <RouterLink to="/register">Register</RouterLink>
       </template>
 
-      <!-- Show Logout/Profile if logged in -->
       <template v-else>
-        <span v-if="user" class="username-display"
-          >Hi, {{ user.username }}</span
-        >
-        <!-- Add Profile link later -->
-        <!-- <RouterLink to="/profile">Profile</RouterLink> -->
+        <span v-if="authStore.authUser" class="username-display">
+          Hi, {{ authStore.authUser.username }}
+        </span>
+        <span v-else class="username-display">Loading...</span>
         <button @click="handleLogout" class="logout-button">Logout</button>
       </template>
     </div>
