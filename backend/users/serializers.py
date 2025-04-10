@@ -2,6 +2,8 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from .models import UserProfile
+from music.serializers import ArtistSerializer
+from music.models import Artist
 from django.conf import settings
 
 # Serializer for the built-in User model (only exposing basic info)
@@ -13,10 +15,24 @@ class UserSerializer(serializers.ModelSerializer):
 # Serializer for the UserProfile model
 class UserProfileSerializer(serializers.ModelSerializer):
     user = serializers.StringRelatedField()
+    artist_profile_data = serializers.SerializerMethodField(read_only=True) 
 
     class Meta:
         model = UserProfile
-        fields = ['id', 'user', 'bio', 'profile_picture', 'location', 'website_url']
+        fields = ['id', 'user', 'bio', 'profile_picture', 'location', 'website_url', 'artist_profile_data']
+
+    def get_artist_profile_data(self, obj):
+        """Check if user has an artist profile and serialize it."""
+        try:
+            # obj is the UserProfile instance. Access the user, then the related artist profile.
+            artist = obj.user.artist_profile
+            # Pass context which might contain the request if needed by nested serializer
+            return ArtistSerializer(artist, context=self.context).data
+        except Artist.DoesNotExist:
+            return None # Return null if no artist profile exists
+        # Handle potential AttributeError if obj.user is somehow None (shouldn't happen with OneToOneField)
+        except AttributeError:
+             return None
 
 # Serializer for user registration
 class RegisterSerializer(serializers.ModelSerializer):

@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from "vue";
 import axios from "axios";
 import { useAuthStore } from "@/stores/auth"; // Use Pinia store
-import { RouterLink } from "vue-router";
+import { useRouter, RouterLink } from "vue-router";
 import ProfileEditForm from "@/components/ProfileEditForm.vue";
 
 // Define interface for the profile data fetched from API
@@ -29,8 +29,14 @@ const error = ref<string | null>(null);
 const isEditing = ref(false); // State to control edit mode
 const editError = ref<string | null>(null);
 
+const router = useRouter();
+
 // Get base user info from the store (username, email)
 const currentUser = computed(() => authStore.authUser);
+
+const goToCreateArtist = () => {
+  router.push({ name: "artist-create" });
+};
 
 const fetchProfile = async () => {
   isLoading.value = true;
@@ -121,11 +127,10 @@ onMounted(fetchProfile);
               {{ profileData.artist_profile_data.name }}
             </RouterLink>
           </p>
-          <!-- Maybe add link to edit artist profile -->
         </div>
-        <div v-else>
-          <!-- Add "Become Artist" button later -->
-          <p>No artist profile linked yet.</p>
+        <div v-else class="artist-create-section">
+          <p>Ready to share your music?</p>
+          <button @click="goToCreateArtist">Become an Artist</button>
         </div>
       </div>
       <button @click="isEditing = true" class="edit-button">

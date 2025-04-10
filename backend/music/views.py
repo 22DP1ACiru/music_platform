@@ -20,7 +20,13 @@ class ArtistViewSet(viewsets.ModelViewSet):
     queryset = Artist.objects.all()
     serializer_class = ArtistSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    # Add logic here later to ensure user matches artist on update/delete
+    
+    def perform_create(self, serializer):
+        """Link the new artist to the requesting user and prevent duplicates."""
+        if Artist.objects.filter(user=self.request.user).exists():
+             raise ValidationError("You already have an associated artist profile.")
+        # Save the instance, automatically linking the user from the request context
+        serializer.save(user=self.request.user)
 
 class ReleaseViewSet(viewsets.ModelViewSet):
     serializer_class = ReleaseSerializer
