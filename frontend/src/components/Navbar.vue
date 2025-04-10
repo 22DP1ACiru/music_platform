@@ -16,7 +16,8 @@ const handleLogout = async () => {
       <RouterLink to="/" class="brand-link">Vaultwave</RouterLink>
     </div>
     <div class="navbar-links">
-      <RouterLink to="/about">About</RouterLink>
+      <RouterLink to="/releases">Releases</RouterLink>
+      <!-- <RouterLink to="/about">About</RouterLink> -->
 
       <template v-if="!authStore.isLoggedIn">
         <RouterLink to="/login">Login</RouterLink>
@@ -24,9 +25,16 @@ const handleLogout = async () => {
       </template>
 
       <template v-else>
-        <span v-if="authStore.authUser" class="username-display">
+        <!-- <span v-if="authStore.authUser" class="username-display">
           Hi, {{ authStore.authUser.username }}
-        </span>
+        </span> -->
+        <RouterLink
+          to="/profile"
+          v-if="authStore.authUser"
+          class="username-display"
+        >
+          Hi, {{ authStore.authUser.username }}
+        </RouterLink>
         <span v-else class="username-display">Loading...</span>
         <button @click="handleLogout" class="logout-button">Logout</button>
       </template>
