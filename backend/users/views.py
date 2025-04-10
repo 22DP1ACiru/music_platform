@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from .models import UserProfile
 from .serializers import UserSerializer, UserProfileSerializer, RegisterSerializer
+from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from music.permissions import IsOwnerOrReadOnly
 
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
@@ -29,6 +30,23 @@ class UserProfileViewSet(viewsets.ModelViewSet):
     queryset = UserProfile.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     serializer_class = UserProfileSerializer
+
+    @action(detail=False, methods=['get', 'put', 'patch'], permission_classes=[permissions.IsAuthenticated])
+    def me(self, request):
+        # Get the profile associated with the requesting user
+        # Use get_object_or_404 for cleaner error handling if profile doesn't exist
+        from django.shortcuts import get_object_or_404
+        profile = get_object_or_404(UserProfile, user=request.user)
+
+        if request.method == 'GET':
+            serializer = self.get_serializer(profile)
+            return Response(serializer.data)
+        elif request.method in ['PUT', 'PATCH']:
+            # Use partial=True for PATCH to allow partial updates
+            serializer = self.get_serializer(profile, data=request.data, partial=(request.method == 'PATCH'))
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data)
     
 class RegisterView(generics.CreateAPIView):
     """

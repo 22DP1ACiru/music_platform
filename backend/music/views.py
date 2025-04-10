@@ -7,7 +7,7 @@ from .serializers import (
     GenreSerializer, ArtistSerializer, ReleaseSerializer,
     TrackSerializer, CommentSerializer, HighlightSerializer
 )
-from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser\
+from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser
 from music.permissions import IsOwnerOrReadOnly
 from django_filters.rest_framework import DjangoFilterBackend 
 
