@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from .models import UserProfile
 from .serializers import UserSerializer, UserProfileSerializer, RegisterSerializer
+from music.permissions import IsOwnerOrReadOnly
 
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -26,8 +27,9 @@ class UserProfileViewSet(viewsets.ModelViewSet):
     API endpoint that allows user profiles to be viewed or edited.
     """
     queryset = UserProfile.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     serializer_class = UserProfileSerializer
-
+    
 class RegisterView(generics.CreateAPIView):
     """
     API endpoint for user registration.

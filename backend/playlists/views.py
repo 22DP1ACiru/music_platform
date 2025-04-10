@@ -3,10 +3,11 @@ from rest_framework import viewsets, permissions
 from .models import Playlist
 from .serializers import PlaylistSerializer
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
+from music.permissions import IsOwnerOrReadOnly
 
 class PlaylistViewSet(viewsets.ModelViewSet):
     serializer_class = PlaylistSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly] # Must be logged in to create/edit
+    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly] # Must be logged in to create/edit
 
     # Ensure users only see their own playlists + public ones,
     # and can only edit their own.

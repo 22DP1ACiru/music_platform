@@ -180,6 +180,43 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
+  async function refreshTokenAction() {
+    const currentRefreshToken = refreshToken.value; // Get from state
+    if (!currentRefreshToken) {
+      console.error("Auth Store: No refresh token to attempt refresh.");
+      await logout(); // Trigger full logout if no refresh token
+      return false; // Indicate refresh failed
+    }
+    isLoading.value = true; // Optional: Set loading state
+    try {
+      // Make refresh request WITHOUT the interceptor adding the expired access token
+      // You might need a separate axios instance or configure the main one carefully
+      const response = await axios.post("/token/refresh/", {
+        refresh: currentRefreshToken,
+      });
+
+      const newAccess = response.data.access;
+      const newRefresh = response.data.refresh; // May not exist if rotation is off
+
+      localStorage.setItem("accessToken", newAccess);
+      accessToken.value = newAccess; // Update state
+      if (newRefresh) {
+        localStorage.setItem("refreshToken", newRefresh);
+        refreshToken.value = newRefresh; // Update state
+      }
+      console.log("Auth Store: Token refresh successful.");
+      // Update default headers for subsequent requests if needed
+      axios.defaults.headers.common["Authorization"] = `Bearer ${newAccess}`;
+      return true; // Indicate refresh succeeded
+    } catch (err) {
+      console.error("Auth Store: Token refresh failed:", err);
+      await logout(); // Trigger full logout on refresh failure
+      return false; // Indicate refresh failed
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
   // Return state, getters, and actions
   return {
     // State (refs)
@@ -199,5 +236,6 @@ export const useAuthStore = defineStore("auth", () => {
     fetchUser,
     register,
     tryAutoLogin,
+    refreshTokenAction,
   };
 });

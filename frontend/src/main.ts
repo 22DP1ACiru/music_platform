@@ -5,10 +5,14 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import router from "./router";
 import axios from "axios";
+import { useAuthStore } from "./stores/auth";
 
-// --- Axios Configuration ---
-// Get the API URL from the environment variable injected by Docker Compose via Vite
-// Vite exposes env vars prefixed with VITE_ to the client code via import.meta.env
+const app = createApp(App);
+const pinia = createPinia();
+app.use(pinia);
+
+const authStore = useAuthStore();
+
 const apiUrl = import.meta.env.VITE_API_URL;
 if (!apiUrl) {
   console.error("Error: VITE_API_URL environment variable is not set!");
@@ -17,117 +21,95 @@ if (!apiUrl) {
   console.log("API Base URL set to:", axios.defaults.baseURL);
 }
 
-// Function to get token (reads directly for interceptor simplicity)
-const getAuthToken = () => localStorage.getItem("accessToken");
-
-// Add a request interceptor
+// Request Interceptor (Uses localStorage, could also use authStore.accessToken getter)
 axios.interceptors.request.use(
   (config) => {
-    const token = getAuthToken();
-    // Add header ONLY if token exists and request is to our API
-    // (prevents sending token to external URLs if you ever use axios for that)
-    // Check if config.url exists and is relative (starts with '/') or absolute to our baseURL
+    // const token = authStore.accessToken; // Alternative using store state directly
+    const token = localStorage.getItem("accessToken"); // Keep using localStorage for simplicity here if preferred
     const isApiUrl =
       config.url &&
       (config.url.startsWith("/") ||
         config.url.startsWith(axios.defaults.baseURL || ""));
-
     if (token && config.headers && isApiUrl) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    return config; // Continue with the request configuration
+    return config;
   },
   (error) => {
-    // Handle request configuration errors
     console.error("Axios request interceptor error:", error);
     return Promise.reject(error);
   }
 );
 
+// Response Interceptor (Modified to use authStore action)
 axios.interceptors.response.use(
-  (response) => {
-    // Any status code that lie within the range of 2xx cause this function to trigger
-    // Do nothing, just return response
-    return response;
-  },
+  (response) => response, // Pass through successful responses
   async (error) => {
-    // Any status codes that falls outside the range of 2xx cause this function to trigger
     const originalRequest = error.config;
 
-    // Check if it's a 401 error and not a retry request already
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true; // Mark that we've tried to retry this request
-      console.warn("Access token expired or invalid. Attempting refresh...");
-
-      const refreshToken = localStorage.getItem("refreshToken");
-      if (!refreshToken) {
-        console.error("No refresh token available. Logging out.");
-        // Call logout logic from useAuth (needs careful handling if outside component)
-        // For simplicity now, maybe just redirect:
-        // window.location.href = '/login'; // Force redirect
-        return Promise.reject(error); // Reject if no refresh token
-      }
+    // Check if it's a 401, not a refresh attempt itself, and not already retried
+    if (
+      error.response?.status === 401 &&
+      originalRequest.url !== "/token/refresh/" &&
+      !originalRequest._retry
+    ) {
+      originalRequest._retry = true;
+      console.warn(
+        "Interceptor: Access token expired/invalid. Attempting refresh via store action..."
+      );
 
       try {
-        // Request a new token using the refresh token
-        const refreshResponse = await axios.post("/token/refresh/", {
-          refresh: refreshToken,
-        });
+        // --- Call the Pinia Store Action ---
+        const refreshedSuccessfully = await authStore.refreshTokenAction();
+        // -----------------------------------
 
-        const newAccessToken = refreshResponse.data.access;
-        // Potentially a new refresh token if rotation is enabled
-        const newRefreshToken = refreshResponse.data.refresh;
-
-        console.log("Token refresh successful.");
-        localStorage.setItem("accessToken", newAccessToken);
-        if (newRefreshToken) {
-          localStorage.setItem("refreshToken", newRefreshToken);
+        if (refreshedSuccessfully) {
+          console.log(
+            "Interceptor: Token refresh successful via store. Retrying original request."
+          );
+          // Update header for the *original* request before retrying
+          // Use the NEW token, preferably read directly after refresh
+          const newAccessToken = localStorage.getItem("accessToken"); // Or use a getter from store if available immediately
+          if (newAccessToken && originalRequest.headers) {
+            originalRequest.headers[
+              "Authorization"
+            ] = `Bearer ${newAccessToken}`;
+          }
+          return axios(originalRequest); // Retry original request
+        } else {
+          // Refresh failed, the store action should have handled logout/state clearing
+          console.error(
+            "Interceptor: Refresh token action failed. User should be logged out."
+          );
+          // Redirect happens in the store action (if router is passed) or manually here if needed
+          if (window.location.pathname !== "/login") {
+            // Avoid redirect loop if already on login
+            router.push({ name: "login" }); // Use router instance
+          }
+          return Promise.reject(error); // Reject the original error
         }
-
-        // --- Update the auth state (Needs access to the store/composable instance) ---
-        // This is tricky outside components. A central store (Pinia) is better.
-        // For now, localStorage is updated, but the reactive state isn't.
-        // ---------------------------------------------------------------------------
-
-        // Update the Authorization header of the original request
-        axios.defaults.headers.common[
-          "Authorization"
-        ] = `Bearer ${newAccessToken}`;
-        if (originalRequest.headers) {
-          originalRequest.headers["Authorization"] = `Bearer ${newAccessToken}`;
+      } catch (storeActionError) {
+        // Catch errors from the store action itself (e.g., network error during refresh)
+        console.error(
+          "Interceptor: Error occurred during store refreshTokenAction:",
+          storeActionError
+        );
+        // Ensure user is logged out / redirected if store action failed unexpectedly
+        if (authStore.isLoggedIn) {
+          // Double check state
+          await authStore.logout(router); // Attempt logout via store
+        } else if (window.location.pathname !== "/login") {
+          router.push({ name: "login" }); // Fallback redirect
         }
-
-        // Retry the original request with the new token
-        console.log("Retrying original request with new token.");
-        return axios(originalRequest);
-      } catch (refreshError: any) {
-        console.error("Token refresh failed:", refreshError);
-        // Refresh token is invalid or expired, log the user out
-        localStorage.removeItem("accessToken");
-        localStorage.removeItem("refreshToken");
-        // --- Update the auth state ---
-        // logout(); // Call logout from store/composable
-
-        console.error("Logging out due to refresh failure.");
-        // Redirect to login
-        window.location.href = "/login"; // Or use router if available
-        return Promise.reject(refreshError);
+        return Promise.reject(storeActionError); // Reject with the store action error
       }
     }
-
-    // For other errors, just pass them on
+    // For other errors or if it was already a retry, just pass them on
     return Promise.reject(error);
   }
 );
 
-const app = createApp(App);
-const pinia = createPinia();
-
-app.use(pinia);
 app.use(router);
-
-import { useAuthStore } from "./stores/auth";
-const authStore = useAuthStore();
-authStore.tryAutoLogin();
-
 app.mount("#app");
+
+authStore.tryAutoLogin();

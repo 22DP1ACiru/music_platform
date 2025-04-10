@@ -7,33 +7,9 @@ from .serializers import (
     GenreSerializer, ArtistSerializer, ReleaseSerializer,
     TrackSerializer, CommentSerializer, HighlightSerializer
 )
-from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser
+from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser\
+from music.permissions import IsOwnerOrReadOnly
 from django_filters.rest_framework import DjangoFilterBackend 
-
-class IsOwnerOrReadOnly(permissions.BasePermission):
-    """
-    Object-level permission to only allow owners of an object to edit it.
-    Checks for obj.user, obj.owner, or obj.artist.user.
-    """
-    def has_object_permission(self, request, view, obj):
-        # Read permissions are allowed to any request
-        if request.method in permissions.SAFE_METHODS:
-            return True
-
-        # Check for common ownership patterns
-        if hasattr(obj, 'user'): # For Artist, Comment, UserProfile
-            return obj.user == request.user
-        if hasattr(obj, 'owner'): # For Playlist
-            return obj.owner == request.user
-        if hasattr(obj, 'artist') and hasattr(obj.artist, 'user'): # For Release, Track
-            # For Track, we check the release's artist
-            if hasattr(obj, 'release') and hasattr(obj.release, 'artist'):
-                 return obj.release.artist.user == request.user
-            # For Release directly
-            return obj.artist.user == request.user
-
-        # Deny if no ownership attribute found
-        return False
 
 class GenreViewSet(viewsets.ModelViewSet):
     queryset = Genre.objects.all().order_by('name')
@@ -108,7 +84,7 @@ class ReleaseViewSet(viewsets.ModelViewSet):
 class TrackViewSet(viewsets.ModelViewSet):
     queryset = Track.objects.select_related('release__artist', 'genre') # Optimization
     serializer_class = TrackSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     # Add filtering by release later (e.g., /api/releases/1/tracks/)
 
 class CommentViewSet(viewsets.ModelViewSet):
