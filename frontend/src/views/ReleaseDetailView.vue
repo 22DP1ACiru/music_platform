@@ -1,8 +1,8 @@
-<!-- src/views/ReleaseDetailView.vue -->
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
 import { useRouter, RouterLink } from "vue-router";
 import axios from "axios";
+import { usePlayerStore } from "@/stores/player";
 
 // Define interfaces based on your ReleaseSerializer and nested serializers
 interface ArtistInfo {
@@ -28,6 +28,7 @@ interface Release {
   title: string;
 }
 
+const playerStore = usePlayerStore();
 const router = useRouter(); // For potential navigation (e.g., back button)
 const release = ref<ReleaseDetail | null>(null);
 const props = defineProps<{ id: string | string[] }>();
@@ -63,6 +64,17 @@ const fetchReleaseDetail = async (id: string | string[]) => {
   } finally {
     isLoading.value = false;
   }
+};
+
+const handlePlayTrack = (track: TrackInfo) => {
+  // Construct the object expected by the player store's playTrack action
+  playerStore.playTrack({
+    id: track.id,
+    title: track.title,
+    audio_file: track.audio_file,
+    artistName: release.value?.artist?.name, // Get artist name from release data
+    // Add cover art etc. later if needed
+  });
 };
 
 // Fetch data when the component is mounted AND when the route ID changes
@@ -155,8 +167,10 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
             <span class="track-duration">{{
               formatDuration(track.duration_in_seconds)
             }}</span>
-            <!-- Add Play button later -->
-            <!-- <button @click="playTrack(track)">Play</button> -->
+            <
+            <button @click="handlePlayTrack(track)" class="play-button">
+              Play
+            </button>
           </li>
         </ol>
         <p v-else>No tracks found for this release.</p>

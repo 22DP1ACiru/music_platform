@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted, watch, computed } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import axios from "axios";
+import { useAuthStore } from "@/stores/auth";
+import ArtistEditForm from "@/components/ArtistEditForm.vue";
 
 // --- Interfaces ---
 interface ArtistDetail {
@@ -24,12 +26,26 @@ const props = defineProps<{
   id: string;
 }>();
 
+const authStore = useAuthStore();
 const router = useRouter();
 const artist = ref<ArtistDetail | null>(null);
 const releases = ref<ReleaseSummary[]>([]);
 const isLoadingArtist = ref(true);
 const isLoadingReleases = ref(true);
 const error = ref<string | null>(null);
+const isEditing = ref(false);
+const editError = ref<string | null>(null);
+
+const isOwner = computed(() => {
+  // Check if user is logged in, auth user data exists, artist data exists,
+  // and the username from the artist data matches the logged-in user's username.
+  return (
+    authStore.isLoggedIn &&
+    authStore.authUser &&
+    artist.value &&
+    artist.value.user === authStore.authUser.username
+  );
+});
 
 // --- Fetch Artist Details ---
 const fetchArtistDetail = async (artistId: string) => {
@@ -85,6 +101,17 @@ const loadData = (artistId: string) => {
   }
 };
 
+const onArtistUpdate = (updatedArtistData: ArtistDetail) => {
+  artist.value = { ...artist.value, ...updatedArtistData }; // Merge updates
+  isEditing.value = false; // Exit edit mode
+  editError.value = null; // Clear edit errors
+  alert("Artist profile updated successfully!");
+};
+
+const handleUpdateError = (errorMessage: string | null) => {
+  editError.value = errorMessage;
+};
+
 onMounted(() => {
   loadData(props.id);
 });
@@ -104,7 +131,7 @@ watch(
     <div v-else-if="error" class="error-message">{{ error }}</div>
 
     <!-- Artist Info Display -->
-    <div v-else-if="artist" class="artist-header">
+    <div v-else-if="artist && !isEditing" class="artist-header">
       <img
         v-if="artist.artist_picture"
         :src="artist.artist_picture"
@@ -130,8 +157,37 @@ watch(
         </div>
         <p v-if="artist.bio" class="artist-bio">{{ artist.bio }}</p>
         <p v-else class="artist-bio">No biography available.</p>
-        <!-- Add Edit button later if user == artist.user -->
+        <button
+          v-if="isOwner"
+          @click="
+            isEditing = true;
+            editError = null;
+          "
+          class="edit-button"
+        >
+          Edit Artist Profile
+        </button>
       </div>
+    </div>
+
+    <!-- Edit Mode -->
+    <div v-else-if="artist && isEditing && isOwner">
+      <!-- Double check owner for safety -->
+      <h2>Edit Artist Profile</h2>
+      <!-- Display edit errors -->
+      <p v-if="editError" class="error-message">{{ editError }}</p>
+      <!-- === Use the ArtistEditForm component === -->
+      <ArtistEditForm
+        :artist-id="props.id"
+        :initial-data="artist"
+        @artist-updated="onArtistUpdate"
+        @cancel-edit="
+          isEditing = false;
+          editError = null;
+        "
+        @update-error="handleUpdateError"
+      />
+      <!-- ======================================= -->
     </div>
 
     <!-- Releases Section -->

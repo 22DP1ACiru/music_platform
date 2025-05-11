@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RouterView } from "vue-router";
 import Navbar from "./components/Navbar.vue";
+import AudioPlayer from "./components/AudioPlayer.vue";
 </script>
 
 <template>
@@ -11,6 +12,8 @@ import Navbar from "./components/Navbar.vue";
   <main>
     <RouterView />
   </main>
+
+  <AudioPlayer />
 
   <footer>
     <p>© {{ new Date().getFullYear() }} Vaultwave</p>
@@ -27,6 +30,7 @@ header {
 
 main {
   padding: 0 2rem;
+  padding-bottom: 70px;
 }
 
 footer {
