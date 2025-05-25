@@ -4,21 +4,184 @@
   box-sizing: border-box;
 }
 
+:root {
+  /* Define your base color palette here */
+  --vt-c-white: #ffffff;
+  --vt-c-white-soft: #f9f9f9;
+  --vt-c-white-mute: #f1f1f1;
+
+  --vt-c-black: #1a1a1a;
+  --vt-c-black-soft: #242424;
+  --vt-c-black-mute: #2f2f2f;
+
+  --vt-c-indigo: #213547; /* Example primary text color for light mode */
+  --vt-c-divider-light-1: rgba(60, 60, 60, 0.29);
+  --vt-c-divider-dark-1: rgba(84, 84, 84, 0.65);
+
+  --vt-c-text-light-1: var(--vt-c-indigo);
+  --vt-c-text-light-2: rgba(60, 60, 60, 0.7);
+  --vt-c-text-dark-1: var(--vt-c-white);
+  --vt-c-text-dark-2: rgba(235, 235, 235, 0.64);
+
+  /* Semantic Colors */
+  --color-background: var(--vt-c-white);
+  --color-background-soft: var(--vt-c-white-soft);
+  --color-background-mute: var(--vt-c-white-mute);
+
+  --color-border: var(--vt-c-divider-light-1);
+  --color-border-hover: var(--vt-c-divider-light-1); /* Adjust as needed */
+
+  --color-heading: var(--vt-c-text-light-1);
+  --color-text: var(--vt-c-text-light-1);
+  --color-text-light: var(--vt-c-text-light-2); /* For less important text */
+
+  --color-link: #007bff; /* Example link color */
+  --color-link-hover: #0056b3;
+
+  --color-accent: #007bff; /* Example accent color (buttons, active states) */
+  --color-accent-hover: #0056b3;
+
+  --vt-c-red: #ff3b30;
+  --vt-c-red-dark: #d92c20;
+  --vt-c-red-soft: #ffe5e3;
+
+  /* === Audio Player Specific Variables === */
+  /* Light Theme Defaults for Player */
+  --c-player-bg: #f8f9fa; /* Lighter background for player */
+  --c-player-border: #dee2e6; /* Softer border */
+  --c-player-text: #212529; /* Dark text for readability */
+  --c-player-title: #000;
+  --c-player-artist: #495057;
+  --c-player-time: #495057;
+  --c-player-controls-main-icon: #343a40;
+  --c-player-controls-main-icon-hover: var(--color-accent);
+  --c-player-controls-side-icon: #343a40;
+  --c-player-controls-side-icon-hover: var(--color-accent);
+  --c-player-controls-disabled: #adb5bd;
+  --c-playbtn-hover-bg: #e9ecef;
+
+  --c-progress-track-bg: #e9ecef;
+  --c-progress-thumb-bg: var(--color-accent);
+  --c-progress-thumb-border: var(--vt-c-white);
+  --c-progress-thumb-disabled-bg: #ced4da;
+  --c-progress-thumb-disabled-border: #f8f9fa;
+
+  --c-volume-track-bg: #e9ecef;
+  --c-volume-thumb-bg: #495057;
+  --c-volume-thumb-border: var(--vt-c-white);
+  --c-volume-thumb-disabled-bg: #ced4da;
+
+  --c-cover-placeholder-bg: #e9ecef;
+  --c-cover-placeholder-border: #ced4da;
+
+  /* Player Queue Popup Variables (Light Theme) */
+  --c-popup-bg: #ffffff;
+  --c-popup-border: #dee2e6;
+  --c-popup-header-bg: #f8f9fa;
+  --c-popup-text: #212529;
+  --c-popup-text-light: #6c757d;
+  --c-popup-item-border: #e9ecef;
+  --c-popup-item-current-bg: #e9f5ff; /* Light blue for current item */
+  --c-popup-action-hover-border: #adb5bd;
+  --c-popup-button-bg: #e9ecef;
+  --c-popup-button-text: #495057;
+  --c-popup-button-border: #ced4da;
+  --c-popup-button-hover-bg: #dde2e7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background: var(--vt-c-black-soft);
+    --color-background-soft: var(--vt-c-black-mute);
+    --color-background-mute: var(--vt-c-black);
+
+    --color-border: var(--vt-c-divider-dark-1);
+    --color-border-hover: var(--vt-c-divider-dark-1); /* Adjust */
+
+    --color-heading: var(--vt-c-text-dark-1);
+    --color-text: var(--vt-c-text-dark-2);
+    --color-text-light: rgba(
+      235,
+      235,
+      235,
+      0.44
+    ); /* Lighter for dark mode secondary text */
+
+    /* === Audio Player Specific Variables (Dark Theme) === */
+    --c-player-bg: #1e1e1e; /* Darker background for player */
+    --c-player-border: #333333; /* Softer border for dark mode */
+    --c-player-text: #e0e0e0; /* Light text */
+    --c-player-title: #ffffff;
+    --c-player-artist: #b0b0b0;
+    --c-player-time: #b0b0b0;
+    --c-player-controls-main-icon: #cccccc;
+    --c-player-controls-main-icon-hover: var(
+      --color-accent
+    ); /* Accent can stay same or adapt */
+    --c-player-controls-side-icon: #cccccc;
+    --c-player-controls-side-icon-hover: var(--color-accent);
+    --c-player-controls-disabled: #555555;
+    --c-playbtn-hover-bg: #383838;
+
+    --c-progress-track-bg: #444444;
+    --c-progress-thumb-bg: var(--color-accent);
+    --c-progress-thumb-border: var(--vt-c-black-soft);
+    --c-progress-thumb-disabled-bg: #666666;
+    --c-progress-thumb-disabled-border: #444444;
+
+    --c-volume-track-bg: #444444;
+    --c-volume-thumb-bg: #cccccc;
+    --c-volume-thumb-border: var(--vt-c-black-soft);
+    --c-volume-thumb-disabled-bg: #666666;
+
+    --c-cover-placeholder-bg: #333333;
+    --c-cover-placeholder-border: #555555;
+
+    /* Player Queue Popup Variables (Dark Theme) */
+    --c-popup-bg: #2c2c2c;
+    --c-popup-border: #404040;
+    --c-popup-header-bg: #333333;
+    --c-popup-text: #e0e0e0;
+    --c-popup-text-light: #a0a0a0;
+    --c-popup-item-border: #3a3a3a;
+    --c-popup-item-current-bg: #303a52; /* Darker blueish for current item */
+    --c-popup-action-hover-border: #666666;
+    --c-popup-button-bg: #3a3a3a;
+    --c-popup-button-text: #cccccc;
+    --c-popup-button-border: #505050;
+    --c-popup-button-hover-bg: #444444;
+  }
+}
+
 body {
   width: 100%;
   min-width: 320px;
   min-height: 100vh;
-  font-family: var(--vt-font-family-base);
-  letter-spacing: .2px;
+  font-family: var(
+    --vt-font-family-base,
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    "Fira Sans",
+    "Droid Sans",
+    "Helvetica Neue",
+    sans-serif
+  );
+  letter-spacing: 0.2px;
   line-height: 24px;
   font-size: 16px;
   font-weight: 400;
-  color: var(--vt-c-text-1);
-  background-color: var(--vt-c-bg);
+  color: var(--color-text);
+  background-color: var(--color-background);
   direction: ltr;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  transition: color .5s, background-color .5s;
+  transition: color 0.5s, background-color 0.5s;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-wrap: break-word;
@@ -48,23 +211,9 @@ h5,
 h6 {
   font-size: inherit;
   font-weight: inherit;
+  color: var(--color-heading); /* Ensure headings use the heading color */
 }
 
-/**
- * Avoid 300ms click delay on touch devices that support the `touch-action`
- * CSS property.
- *
- * In particular, unlike most other browsers, IE11+Edge on Windows 10 on
- * touch devices and IE Mobile 10-11 DON'T remove the click delay when
- * `<meta name="viewport" content="width=device-width">` is present.
- * However, they DO support removing the click delay via
- * `touch-action: manipulation`.
- *
- * See:
- * - http://v4-alpha.getbootstrap.com/content/reboot/#click-delay-optimization-for-touch
- * - http://caniuse.com/#feat=css-touch-action
- * - http://patrickhlauke.github.io/touch/tests/results/#suppressing-300ms-delay
- */
 a,
 area,
 button,
@@ -78,8 +227,12 @@ textarea {
 }
 
 a {
-  color: inherit;
-  text-decoration: inherit;
+  color: var(--color-link); /* Use semantic link color */
+  text-decoration: none; /* Default no underline, can add on hover */
+}
+a:hover {
+  color: var(--color-link-hover);
+  text-decoration: underline;
 }
 
 ol,
@@ -93,7 +246,15 @@ pre,
 code,
 kbd,
 samp {
-  font-family: var(--vt-font-family-mono);
+  font-family: var(
+    --vt-font-family-mono,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
 }
 
 img,
@@ -119,26 +280,32 @@ input,
 optgroup,
 select,
 textarea {
-  border: 0;
-  padding: 0;
+  border: 1px solid var(--color-border); /* Default border for form elements */
+  padding: 0.5em 0.8em; /* Default padding */
   line-height: inherit;
   color: inherit;
+  background-color: var(--color-background-soft); /* Default background */
+  border-radius: 4px; /* Default border radius */
 }
 
 button {
-  padding: 0;
-  background-color: transparent;
-  background-image: none;
-}
-
-button,
-[role="button"] {
+  background-color: var(
+    --color-accent
+  ); /* Buttons use accent color by default */
+  color: var(--vt-c-white); /* Text on accent buttons often white */
+  border: 1px solid var(--color-accent);
   cursor: pointer;
+  padding: 0.6em 1.2em; /* Slightly larger padding for primary buttons */
+}
+button:hover {
+  background-color: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
 }
 
-button:focus, button:focus-visible {
-  outline: 1px dotted;
-  outline: 5px auto -webkit-focus-ring-color;
+button:focus,
+button:focus-visible {
+  outline: 2px solid var(--color-accent); /* Focus ring with accent color */
+  outline-offset: 2px;
 }
 button:focus:not(:focus-visible) {
   outline: none !important;
@@ -147,30 +314,27 @@ button:focus:not(:focus-visible) {
 input:focus,
 textarea:focus,
 select:focus {
-  outline: none;
+  outline: 1px solid var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 table {
   border-collapse: collapse;
 }
 
-input {
-  background-color: transparent;
-}
-
 input:-ms-input-placeholder,
 textarea:-ms-input-placeholder {
-  color: var(--vt-c-text-3);
+  color: var(--color-text-light);
 }
 
 input::-ms-input-placeholder,
 textarea::-ms-input-placeholder {
-  color: var(--vt-c-text-3);
+  color: var(--color-text-light);
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: var(--vt-c-text-3);
+  color: var(--color-text-light);
 }
 
 input::-webkit-outer-spin-button,
@@ -189,11 +353,13 @@ textarea {
 
 select {
   -webkit-appearance: none;
+  /* Add custom arrow or styling if needed */
 }
 
 fieldset {
   margin: 0;
   padding: 0;
+  border: none; /* Remove default fieldset border if not desired */
 }
 
 .visually-hidden {
