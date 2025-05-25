@@ -41,7 +41,8 @@ export const useAuthStore = defineStore("auth", () => {
     () => user.value?.profile?.artist_profile_data?.id || null
   );
 
-  async function fetchUser() {
+  async function fetchUser(router?: Router) {
+    // Pass router for potential logout on critical failure
     if (!accessToken.value) {
       user.value = null;
       return;
@@ -50,7 +51,7 @@ export const useAuthStore = defineStore("auth", () => {
     error.value = null;
     try {
       // Fetch basic user data
-      const userResponse = await axios.get<Omit<User, "profile">>("/users/me/"); // Omit profile as it's not in /users/me
+      const userResponse = await axios.get<Omit<User, "profile">>("/users/me/");
       let profileData: UserProfileForAuth | null = null;
 
       // Fetch profile data
@@ -64,8 +65,18 @@ export const useAuthStore = defineStore("auth", () => {
           "Auth Store: Could not fetch user profile details during fetchUser:",
           profileError
         );
-        // Decide if this is a critical failure. For now, user can exist without profile fully loaded.
-        // If profile is essential for basic app operation post-login, handle appropriately.
+        // If profile is essential and fetch fails with 401, it might indicate deeper token issues
+        if (
+          axios.isAxiosError(profileError) &&
+          profileError.response?.status === 401
+        ) {
+          console.warn(
+            "Auth Store: Profile fetch failed with 401. Logging out."
+          );
+          await logout(router); // Use passed router instance
+          // throw profileError; // Re-throw to stop further execution if critical
+        }
+        // Otherwise, user can exist with profileData as null
       }
 
       user.value = {
@@ -77,12 +88,12 @@ export const useAuthStore = defineStore("auth", () => {
     } catch (err: any) {
       console.error("Auth Store: Failed to fetch user base data:", err);
       error.value = "Could not fetch user details.";
-      user.value = null;
+      user.value = null; // Clear user on error
       if (axios.isAxiosError(err) && err.response?.status === 401) {
         console.warn(
-          "Auth Store: Access token invalid/expired during fetchUser. Logging out."
+          "Auth Store: Access token invalid/expired during fetchUser base. Logging out."
         );
-        await logout();
+        await logout(router); // Use passed router instance
       }
     } finally {
       isLoading.value = false;
@@ -103,9 +114,11 @@ export const useAuthStore = defineStore("auth", () => {
         accessToken.value = response.data.access;
         refreshToken.value = response.data.refresh;
         console.log("Auth Store: Login successful, tokens stored.");
-        await fetchUser(); // This will now also attempt to fetch profile
+        await fetchUser(router); // Pass router
         if (user.value && router) {
-          router.push({ name: "home" });
+          const redirectPath =
+            (router.currentRoute.value.query.redirect as string) || "/";
+          router.push(redirectPath);
         } else if (!user.value) {
           error.value =
             "Login succeeded but failed to fetch user details fully.";
@@ -121,11 +134,12 @@ export const useAuthStore = defineStore("auth", () => {
       refreshToken.value = null;
       user.value = null;
       if (axios.isAxiosError(err) && err.response) {
-        error.value = err.response.data.detail || "Login failed.";
+        error.value =
+          err.response.data.detail || "Login failed. Check username/password.";
       } else {
         error.value = "An unexpected network error occurred during login.";
       }
-      throw error;
+      throw err; // Re-throw for the component to catch
     } finally {
       isLoading.value = false;
     }
@@ -138,13 +152,18 @@ export const useAuthStore = defineStore("auth", () => {
     refreshToken.value = null;
     user.value = null;
     console.log("Auth Store: Logged Out");
-    // Clear default headers for axios if you've set them globally
-    // delete axios.defaults.headers.common["Authorization"];
     if (router) {
       try {
-        // Check if already on a public page to avoid redundant navigation or errors
-        if (router.currentRoute.value.meta.requiresAuth) {
+        if (
+          router.currentRoute.value.name !== "login" &&
+          router.currentRoute.value.meta.requiresAuth
+        ) {
           await router.push({ name: "login" });
+        } else if (
+          router.currentRoute.value.name !== "home" &&
+          !router.currentRoute.value.meta.requiresAuth
+        ) {
+          // If on a public page, no need to redirect unless it's a specific post-logout target
         }
       } catch (navError) {
         console.error("Auth Store: Failed to redirect after logout", navError);
@@ -177,46 +196,62 @@ export const useAuthStore = defineStore("auth", () => {
       } else {
         error.value = "An unexpected error occurred during registration.";
       }
-      throw error;
+      throw err; // Re-throw for the component to catch
     } finally {
       isLoading.value = false;
     }
   }
 
-  async function tryAutoLogin() {
-    console.log("Auth Store: Checking for existing token on load...");
+  async function tryAutoLogin(router?: Router) {
+    console.log("Auth Store: tryAutoLogin called.");
     if (accessToken.value) {
-      // Attempt to verify token with backend? (Optional, but good for robustness)
-      // Example:
-      // try {
-      //   await axios.post('/token/verify/', { token: accessToken.value });
-      //   console.log("Auth Store: Token verified.");
-      //   await fetchUser(); // Fetch user if token is valid
-      // } catch (verificationError) {
-      //   console.warn("Auth Store: Token verification failed or token expired.", verificationError);
-      //   await refreshTokenAction(); // Try to refresh if verification fails
-      // }
-      await fetchUser(); // Fetch user if token exists (includes profile fetch attempt)
+      isLoading.value = true; // Set loading true at the start of attempt
+      try {
+        console.log("Auth Store: Verifying existing token...");
+        await axios.post("/token/verify/", { token: accessToken.value });
+        console.log("Auth Store: Token verified successfully.");
+        await fetchUser(router); // Fetch user if token is valid
+      } catch (verificationError) {
+        console.warn(
+          "Auth Store: Token verification failed or token expired.",
+          verificationError
+        );
+        // If verification fails, try to refresh the token
+        const refreshed = await refreshTokenAction(router); // Pass router for logout on failure
+        if (!refreshed) {
+          console.warn(
+            "Auth Store: Token refresh also failed during auto-login. User remains logged out."
+          );
+          // logout(router) would have been called by refreshTokenAction on failure
+        } else {
+          console.log(
+            "Auth Store: Token refreshed successfully during auto-login. User data should be fetched."
+          );
+          // fetchUser would have been called by refreshTokenAction on success
+        }
+      } finally {
+        isLoading.value = false; // Set loading false at the end of attempt
+      }
     } else {
-      console.log("Auth Store: No token found.");
+      console.log("Auth Store: No token found for auto-login.");
+      user.value = null; // Ensure user is null if no token
     }
   }
 
   async function refreshTokenAction(router?: Router) {
-    // Pass router to handle logout on failure
     const currentRefreshToken = refreshToken.value;
     if (!currentRefreshToken) {
       console.error("Auth Store: No refresh token to attempt refresh.");
-      await logout(router);
+      await logout(router); // Ensure logout if no refresh token
       return false;
     }
-    isLoading.value = true;
     try {
+      console.log("Auth Store: Attempting token refresh...");
       const response = await axios.post("/token/refresh/", {
         refresh: currentRefreshToken,
       });
       const newAccess = response.data.access;
-      const newRefresh = response.data.refresh;
+      const newRefresh = response.data.refresh; // Backend might not always send new refresh
 
       localStorage.setItem("accessToken", newAccess);
       accessToken.value = newAccess;
@@ -225,21 +260,21 @@ export const useAuthStore = defineStore("auth", () => {
         refreshToken.value = newRefresh;
       }
       console.log("Auth Store: Token refresh successful.");
-      // If you set Authorization header on axios.defaults, update it here too
-      // axios.defaults.headers.common["Authorization"] = `Bearer ${newAccess}`;
 
-      // After successful refresh, re-fetch user data as roles/profile might have changed
-      // or to ensure consistency if the old token caused partial data load.
-      await fetchUser();
+      await fetchUser(router); // Re-fetch user data with new token
 
       return true;
     } catch (err) {
       console.error("Auth Store: Token refresh failed:", err);
-      await logout(router);
+      await logout(router); // Logout on refresh failure
       return false;
     } finally {
-      isLoading.value = false;
+      // isLoading.value = false;
     }
+  }
+
+  function clearError() {
+    error.value = null;
   }
 
   return {
@@ -248,7 +283,7 @@ export const useAuthStore = defineStore("auth", () => {
     user,
     isLoggedIn,
     authUser,
-    authLoading: isLoading,
+    authLoading: isLoading, // Renamed for clarity
     authError: error,
     hasArtistProfile,
     artistProfileId,
@@ -258,5 +293,6 @@ export const useAuthStore = defineStore("auth", () => {
     register,
     tryAutoLogin,
     refreshTokenAction,
+    clearError, // Expose clearError
   };
 });
