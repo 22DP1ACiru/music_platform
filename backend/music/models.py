@@ -4,11 +4,18 @@ from django.utils import timezone # For release_date checks
 from mutagen import File as MutagenFile # For audio file metadata
 from mutagen import MutagenError
 from django.core.exceptions import ValidationError # For GIF validation
-from PIL import Image, UnidentifiedImageError # For GIF validation
-import os # For file deletion
+# from PIL import Image, UnidentifiedImageError # No longer needed here, use utility
+import os # For file deletion (though utility handles it)
 from django.db.models.signals import pre_save, post_delete # For file deletion signals
 from django.dispatch import receiver # For file deletion signals
 import logging # Import Python's logging module
+
+# Import from the new utility module
+from vaultwave.utils import (
+    delete_file_if_changed,
+    delete_file_on_instance_delete,
+    validate_image_not_gif_utility
+)
 
 # Get an instance of a logger
 logger = logging.getLogger(__name__) # Use __name__ for module-specific logger
@@ -31,22 +38,7 @@ def track_audio_path(instance, filename):
     track_id_for_path = instance.id if instance.id else "new_track_temp_id"
     return f'tracks/{artist_id_for_path}/{release_id_for_path}/{track_id_for_path}/{filename}'
 
-def validate_image_not_gif(value):
-    try:
-        value.seek(0)
-        img = Image.open(value)
-        image_format = img.format
-        value.seek(0)
-        if image_format and image_format.upper() == 'GIF':
-            raise ValidationError(
-                "Animated GIFs are not allowed. Please use a static image format like JPG or PNG.",
-                code='gif_not_allowed'
-            )
-    except UnidentifiedImageError:
-        pass # Django's ImageField will catch this
-    except Exception:
-        pass # Let other validations proceed
-
+# Removed local validate_image_not_gif, will use validate_image_not_gif_utility directly in fields
 
 class Genre(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -65,7 +57,7 @@ class Artist(models.Model):
         upload_to=artist_pic_path,
         null=True,
         blank=True,
-        validators=[validate_image_not_gif]
+        validators=[validate_image_not_gif_utility] # Use utility validator
     )
     location = models.CharField(max_length=100, blank=True, null=True)
     website_url = models.URLField(max_length=200, blank=True, null=True)
@@ -86,7 +78,7 @@ class Release(models.Model):
         upload_to=cover_art_path, 
         null=True, 
         blank=True,
-        validators=[validate_image_not_gif]
+        validators=[validate_image_not_gif_utility] # Use utility validator
     )
     genres = models.ManyToManyField(Genre, blank=True, related_name='releases')
     is_published = models.BooleanField(default=True, help_text="If unchecked, release is a draft.")
@@ -209,7 +201,7 @@ class Track(models.Model):
         logger.info(f"Track.save() finished for track PK '{self.pk}'.")
 
     class Meta:
-         ordering = ['release', 'track_number']
+            ordering = ['release', 'track_number']
 
 class Comment(models.Model):
     track = models.ForeignKey(Track, on_delete=models.CASCADE, related_name='comments')
@@ -236,70 +228,29 @@ class Highlight(models.Model):
         ordering = ['-highlighted_at']
 
 # --- Signal Receivers for Deleting Old Files ---
-def _delete_file_if_changed(sender, instance, field_name):
-    if not instance.pk:
-        return
-    try:
-        old_instance = sender.objects.get(pk=instance.pk)
-    except sender.DoesNotExist:
-        return
-
-    old_file = getattr(old_instance, field_name)
-    new_file = getattr(instance, field_name)
-
-    if old_file and old_file != new_file: 
-        if hasattr(old_file, 'path') and os.path.isfile(old_file.path): # Local storage check
-            try:
-                os.remove(old_file.path)
-                logger.info(f"Signal: Deleted old file (local): {old_file.path}")
-            except Exception as e:
-                logger.error(f"Signal: Error deleting old file (local) {old_file.path}: {e}")
-        # Check for remote storage (hasattr 'name' and storage.exists)
-        elif hasattr(old_file, 'name') and old_file.name and hasattr(old_file, 'storage') and old_file.storage.exists(old_file.name):
-             try:
-                old_file.storage.delete(old_file.name)
-                logger.info(f"Signal: Deleted old file from storage: {old_file.name}")
-             except Exception as e:
-                logger.error(f"Signal: Error deleting old file {old_file.name} from storage: {e}")
-
+# Use the imported utility functions
 
 @receiver(pre_save, sender=Artist)
 def artist_pre_save_delete_old_picture(sender, instance, **kwargs):
-    _delete_file_if_changed(sender, instance, 'artist_picture')
+    delete_file_if_changed(sender, instance, 'artist_picture')
 
 @receiver(pre_save, sender=Release)
 def release_pre_save_delete_old_cover(sender, instance, **kwargs):
-    _delete_file_if_changed(sender, instance, 'cover_art')
+    delete_file_if_changed(sender, instance, 'cover_art')
 
 @receiver(pre_save, sender=Track)
 def track_pre_save_delete_old_audio(sender, instance, **kwargs):
-    _delete_file_if_changed(sender, instance, 'audio_file')
-
-def _delete_file_on_instance_delete(instance_file_field):
-    if instance_file_field:
-        if hasattr(instance_file_field, 'path') and os.path.isfile(instance_file_field.path): # Local
-            try:
-                os.remove(instance_file_field.path)
-                logger.info(f"Signal: Deleted file on instance delete (local): {instance_file_field.path}")
-            except Exception as e:
-                logger.error(f"Signal: Error deleting file {instance_file_field.path} on instance delete (local): {e}")
-        # Remote
-        elif hasattr(instance_file_field, 'name') and instance_file_field.name and hasattr(instance_file_field, 'storage') and instance_file_field.storage.exists(instance_file_field.name):
-            try:
-                instance_file_field.storage.delete(instance_file_field.name)
-                logger.info(f"Signal: Deleted file from storage on instance delete: {instance_file_field.name}")
-            except Exception as e:
-                logger.error(f"Signal: Error deleting file {instance_file_field.name} from storage on instance delete: {e}")
+    delete_file_if_changed(sender, instance, 'audio_file')
 
 
 @receiver(post_delete, sender=Artist)
 def artist_post_delete_cleanup_picture(sender, instance, **kwargs):
-    _delete_file_on_instance_delete(instance.artist_picture)
+    delete_file_on_instance_delete(instance.artist_picture)
 
 @receiver(post_delete, sender=Release)
 def release_post_delete_cleanup_cover(sender, instance, **kwargs):
-    _delete_file_on_instance_delete(instance.cover_art)
+    delete_file_on_instance_delete(instance.cover_art)
 
 @receiver(post_delete, sender=Track)
 def track_post_delete_cleanup_audio(sender, instance, **kwargs):
-    _delete_file_on_instance_delete(instance.audio_file)
+    delete_file_on_instance_delete(instance.audio_file)

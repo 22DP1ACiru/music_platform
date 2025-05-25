@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, watch, type PropType } from "vue";
+import { ref, watch, type PropType, onUnmounted } from "vue"; // Added onUnmounted
 import axios from "axios";
 
 // Interface for the data needed by the form
 interface ArtistFormData {
-  name: string; // Name might be editable too? Or maybe not? Decide.
+  name: string;
   bio: string | null;
   location: string | null;
   website_url: string | null;
@@ -18,7 +18,7 @@ const props = defineProps({
     required: true,
   },
   artistId: {
-    type: String,
+    type: String, // Artist ID is a number from backend, but route params are strings
     required: true,
   },
 });
@@ -26,10 +26,13 @@ const props = defineProps({
 const emit = defineEmits(["artistUpdated", "cancelEdit", "updateError"]);
 
 // Local state for form fields
-const formData = ref<Partial<ArtistFormData>>({ ...props.initialData }); // Use Partial if name isn't editable
+const formData = ref<Partial<ArtistFormData>>({ ...props.initialData });
 const artistPictureFile = ref<File | null>(null);
-const isLoading = ref(false);
+const artistPicturePreviewUrl = ref<string | null>(
+  props.initialData.artist_picture || null
+); // For preview
 const removePicture = ref(false); // Flag to signal picture removal
+const isLoading = ref(false);
 
 // Reset form if initial data changes
 watch(
@@ -37,6 +40,13 @@ watch(
   (newData) => {
     formData.value = { ...newData };
     artistPictureFile.value = null;
+    if (
+      artistPicturePreviewUrl.value &&
+      artistPicturePreviewUrl.value.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(artistPicturePreviewUrl.value);
+    }
+    artistPicturePreviewUrl.value = newData.artist_picture || null;
     removePicture.value = false;
   },
   { deep: true }
@@ -45,16 +55,54 @@ watch(
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement;
   if (target.files && target.files[0]) {
-    artistPictureFile.value = target.files[0];
-    removePicture.value = false; // Selecting a new file cancels removal intent
+    const file = target.files[0];
+    // GIF Validation (client-side)
+    if (file.type === "image/gif") {
+      alert("Animated GIFs are not allowed. Please use a JPG, PNG, or WEBP.");
+      target.value = ""; // Clear the input
+      artistPictureFile.value = null;
+      if (
+        artistPicturePreviewUrl.value &&
+        artistPicturePreviewUrl.value.startsWith("blob:")
+      ) {
+        URL.revokeObjectURL(artistPicturePreviewUrl.value);
+      }
+      artistPicturePreviewUrl.value = props.initialData.artist_picture || null;
+      return;
+    }
+
+    artistPictureFile.value = file;
+    removePicture.value = false;
+
+    if (
+      artistPicturePreviewUrl.value &&
+      artistPicturePreviewUrl.value.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(artistPicturePreviewUrl.value);
+    }
+    artistPicturePreviewUrl.value = URL.createObjectURL(file);
   } else {
     artistPictureFile.value = null;
+    if (
+      artistPicturePreviewUrl.value &&
+      artistPicturePreviewUrl.value.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(artistPicturePreviewUrl.value);
+    }
+    artistPicturePreviewUrl.value = props.initialData.artist_picture || null;
   }
 };
 
 const triggerRemovePicture = () => {
   removePicture.value = true;
-  artistPictureFile.value = null; // Clear any selected file if removing
+  artistPictureFile.value = null;
+  if (
+    artistPicturePreviewUrl.value &&
+    artistPicturePreviewUrl.value.startsWith("blob:")
+  ) {
+    URL.revokeObjectURL(artistPicturePreviewUrl.value);
+  }
+  artistPicturePreviewUrl.value = null;
 };
 
 const handleSubmit = async () => {
@@ -63,25 +111,20 @@ const handleSubmit = async () => {
 
   const submissionData = new FormData();
 
-  // Append fields that changed or are required
-  // Decide if 'name' is editable. If so, add it:
-  // submissionData.append('name', formData.value.name || props.initialData.name);
+  submissionData.append("name", formData.value.name || props.initialData.name); // Assuming name can be edited
   submissionData.append("bio", formData.value.bio || "");
   submissionData.append("location", formData.value.location || "");
   submissionData.append("website_url", formData.value.website_url || "");
 
-  // Handle file update/removal
   if (removePicture.value) {
-    submissionData.append("artist_picture", ""); // Send empty string to clear
+    submissionData.append("artist_picture", "");
   } else if (artistPictureFile.value) {
     submissionData.append("artist_picture", artistPictureFile.value);
   }
-  // If neither flag is set and no file selected, picture is omitted from PATCH
 
   try {
-    // Use PATCH to update the specific artist
     const response = await axios.patch(
-      `/artists/${props.artistId}/`,
+      `/artists/${props.artistId}/`, // Use artistId from props
       submissionData,
       {
         headers: { "Content-Type": "multipart/form-data" },
@@ -89,7 +132,7 @@ const handleSubmit = async () => {
     );
 
     console.log("Artist update successful:", response.data);
-    emit("artistUpdated", response.data); // Send updated data back
+    emit("artistUpdated", response.data);
   } catch (error: any) {
     console.error("Artist update failed:", error);
     let errorMessage = "Failed to update artist profile.";
@@ -109,11 +152,28 @@ const handleSubmit = async () => {
     isLoading.value = false;
   }
 };
+
+onUnmounted(() => {
+  if (
+    artistPicturePreviewUrl.value &&
+    artistPicturePreviewUrl.value.startsWith("blob:")
+  ) {
+    URL.revokeObjectURL(artistPicturePreviewUrl.value);
+  }
+});
 </script>
 
 <template>
   <form @submit.prevent="handleSubmit" class="artist-edit-form">
-    <!-- Add input for 'name' here if you want it editable -->
+    <div class="form-group">
+      <label for="artist-name-edit">Artist Name:</label>
+      <input
+        type="text"
+        id="artist-name-edit"
+        v-model="formData.name"
+        required
+      />
+    </div>
     <div class="form-group">
       <label for="artist-bio">Bio:</label>
       <textarea id="artist-bio" v-model="formData.bio" rows="5"></textarea>
@@ -133,30 +193,27 @@ const handleSubmit = async () => {
     </div>
     <div class="form-group">
       <label for="artist-picture">Artist Picture:</label>
-      <img
-        v-if="
-          initialData.artist_picture && !artistPictureFile && !removePicture
-        "
-        :src="initialData.artist_picture"
-        alt="Current artist picture"
-        class="current-pic"
-      />
-      <p
-        v-if="
-          !initialData.artist_picture && !artistPictureFile && !removePicture
-        "
-      >
-        (No current picture)
-      </p>
+      <!-- Preview Area -->
+      <div class="preview-area">
+        <img
+          v-if="artistPicturePreviewUrl"
+          :src="artistPicturePreviewUrl"
+          alt="Artist picture preview"
+          class="artist-pic-preview"
+        />
+        <div v-else class="artist-pic-placeholder-edit">
+          No Picture Selected
+        </div>
+      </div>
       <input
         type="file"
         id="artist-picture"
         @change="handleFileChange"
-        accept="image/*"
+        accept="image/jpeg,image/png,image/webp"
       />
       <button
         type="button"
-        v-if="initialData.artist_picture || artistPictureFile"
+        v-if="artistPicturePreviewUrl"
         @click="triggerRemovePicture"
         class="remove-button"
       >
@@ -205,16 +262,37 @@ const handleSubmit = async () => {
   resize: vertical;
 }
 .artist-edit-form input[type="file"] {
-  margin-top: 0.3rem;
+  margin-top: 0.5rem; /* Spacing after preview */
   font-size: 0.9em;
 }
-.current-pic {
-  max-width: 100px;
-  max-height: 100px;
+
+/* Styles for Preview Area */
+.preview-area {
+  margin-bottom: 0.75rem;
+  width: 120px;
+  height: 120px;
+  border: 1px dashed var(--color-border-hover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 50%;
-  display: block;
-  margin-bottom: 0.5rem;
+  overflow: hidden;
+  background-color: var(--color-background-mute);
 }
+.artist-pic-preview {
+  /* Changed class name slightly for clarity if needed */
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.artist-pic-placeholder-edit {
+  /* Changed class name slightly */
+  font-size: 0.8em;
+  color: var(--color-text);
+  text-align: center;
+}
+/* End Preview Area Styles */
+
 .file-info {
   font-size: 0.85em;
   font-style: italic;
@@ -230,6 +308,7 @@ const handleSubmit = async () => {
   border-radius: 4px;
   margin-left: 1em;
   cursor: pointer;
+  vertical-align: middle;
 }
 .remove-button:hover {
   border-color: red;
