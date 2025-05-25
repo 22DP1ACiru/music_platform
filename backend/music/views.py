@@ -10,6 +10,7 @@ from .serializers import (
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser
 from music.permissions import IsOwnerOrReadOnly
 from django_filters.rest_framework import DjangoFilterBackend 
+from rest_framework.exceptions import ValidationError, PermissionDenied
 
 class GenreViewSet(viewsets.ModelViewSet):
     queryset = Genre.objects.all().order_by('name')
@@ -60,6 +61,7 @@ class ReleaseViewSet(viewsets.ModelViewSet):
 
                 # Combine visible releases OR owned releases, removing duplicates
                 # Using Q objects for OR condition
+                from django.db.models import Q
                 queryset = (visible_releases | owned_releases).distinct()
 
             except Artist.DoesNotExist:
@@ -70,10 +72,12 @@ class ReleaseViewSet(viewsets.ModelViewSet):
             # Anonymous users only see publicly visible releases
             queryset = visible_releases
 
-        if user.is_staff:
-            return base_queryset.all()
+        if user.is_staff: # staff should see all
+            return base_queryset.all().order_by('-release_date')
 
-        return queryset
+
+        return queryset.order_by('-release_date')
+
 
     def perform_create(self, serializer):
         """
@@ -84,7 +88,6 @@ class ReleaseViewSet(viewsets.ModelViewSet):
             serializer.save(artist=artist)
         except Artist.DoesNotExist:
             # Handle error: User needs an Artist profile to create a release
-            from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("You must have an artist profile to create releases.")
 
 class TrackViewSet(viewsets.ModelViewSet):

@@ -27,7 +27,7 @@ services:
     volumes:
       - ./backend:/app # Mount backend code into container for live reload
     ports:
-      - "8000:8000" # Map host port 8000 to container port 8000
+      - "8102:8000" # Map host port 8002 to container port 8000
     environment:
       # Pass environment variables needed by Django
       - SECRET_KEY=${DJANGO_SECRET_KEY}
@@ -72,7 +72,7 @@ services:
     ports:
       - "5173:5173" # Default Vite port
     environment:
-      - VITE_API_URL=http://localhost:8000/api # Tell Vue where the backend API is
+      - VITE_API_URL=http://localhost:8102/api # Tell Vue where the backend API is
     depends_on:
       - backend # Doesn't strictly depend, but good practice
 

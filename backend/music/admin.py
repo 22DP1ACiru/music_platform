@@ -16,7 +16,8 @@ class ArtistAdmin(admin.ModelAdmin):
 class TrackInline(admin.TabularInline):
     model = Track
     extra = 1 # How many empty forms to show
-    fields = ('track_number', 'title', 'audio_file', 'genre', 'duration_in_seconds') 
+    fields = ('track_number', 'title', 'audio_file', 'genre', 'duration_in_seconds')
+    readonly_fields = ('duration_in_seconds',)
 
 @admin.register(Release)
 class ReleaseAdmin(admin.ModelAdmin):
@@ -30,6 +31,7 @@ class TrackAdmin(admin.ModelAdmin):
     list_display = ('title', 'release', 'track_number', 'genre', 'duration_in_seconds')
     list_filter = ('release__artist', 'genre')
     search_fields = ('title', 'release__title', 'release__artist__name')
+    readonly_fields = ('duration_in_seconds',)
 
 @admin.register(Comment)
 class CommentAdmin(admin.ModelAdmin):

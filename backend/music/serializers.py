@@ -8,10 +8,11 @@ class GenreSerializer(serializers.ModelSerializer):
 
 class ArtistSerializer(serializers.ModelSerializer):
     user = serializers.StringRelatedField()
+    user_id = serializers.ReadOnlyField(source='user.id')
 
     class Meta:
         model = Artist
-        fields = ['id', 'user', 'name', 'bio', 'artist_picture', 'location', 'website_url']
+        fields = ['id', 'user', 'user_id', 'name', 'bio', 'artist_picture', 'location', 'website_url']
 
 class TrackSerializer(serializers.ModelSerializer):
     release_title = serializers.CharField(source='release.title', read_only=True)
@@ -22,11 +23,12 @@ class TrackSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'track_number', 'audio_file',
             'duration_in_seconds',
-            'release', 'release_title', 'artist_name', # 'release' gives the ID
+            'release', # 'release' gives the ID
+            'release_title', 'artist_name',
             'genre', # Genre ID
             'created_at'
         ]
-        read_only_fields = ['release_title', 'artist_name'] # These are derived
+        read_only_fields = ['release_title', 'artist_name', 'duration_in_seconds'] # These are derived or auto-calculated
 
 class ReleaseSerializer(serializers.ModelSerializer):
     artist = ArtistSerializer(read_only=True) # Show nested artist info (read-only on list/retrieve)
@@ -38,15 +40,16 @@ class ReleaseSerializer(serializers.ModelSerializer):
         queryset=Genre.objects.all(), source='genre', write_only=True, allow_null=True
     ) # Allow setting genre by ID
     tracks = TrackSerializer(many=True, read_only=True) # Show nested tracks on retrieve
+    release_type_display = serializers.CharField(source='get_release_type_display', read_only=True)
 
     class Meta:
         model = Release
         fields = [
-            'id', 'title', 'artist', 'artist_id', 'release_type', 'release_date',
+            'id', 'title', 'artist', 'artist_id', 'release_type', 'release_type_display', 'release_date',
             'cover_art', 'genre', 'genre_id', 'is_published', 'is_visible',
             'tracks', 'created_at', 'updated_at'
          ]
-        read_only_fields = ['is_visible'] # Calculated field
+        read_only_fields = ['is_visible', 'release_type_display'] # Calculated field
 
 class CommentSerializer(serializers.ModelSerializer):
     user = serializers.StringRelatedField() # Show username

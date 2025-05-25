@@ -4,10 +4,11 @@ from .models import Playlist
 from .serializers import PlaylistSerializer
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from music.permissions import IsOwnerOrReadOnly
+from django.db.models import Q
 
 class PlaylistViewSet(viewsets.ModelViewSet):
     serializer_class = PlaylistSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly] # Must be logged in to create/edit
+    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
 
     # Ensure users only see their own playlists + public ones,
     # and can only edit their own.
@@ -16,7 +17,7 @@ class PlaylistViewSet(viewsets.ModelViewSet):
         if user.is_authenticated:
             # Show user's own playlists OR public ones
             return Playlist.objects.filter(
-                models.Q(owner=user) | models.Q(is_public=True)
+                Q(owner=user) | Q(is_public=True)
             ).select_related('owner').prefetch_related('tracks').distinct() # Optimization & avoid duplicates
         else:
             # Anonymous users only see public playlists
