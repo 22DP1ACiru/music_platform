@@ -13,10 +13,10 @@ interface Release {
   artist: ArtistInfo;
   cover_art: string | null;
   release_type: string;
+  release_type_display?: string; 
 }
 
 const releases = ref<Release[]>([]);
-const props = defineProps<{ id: string | string[] }>();
 const isLoading = ref(true);
 const error = ref<string | null>(null);
 
@@ -47,26 +47,33 @@ onMounted(fetchReleases);
     <div v-else-if="releases.length === 0">No releases found.</div>
 
     <div v-else class="releases-grid">
-      <RouterLink
+      <div
         v-for="release in releases"
         :key="release.id"
-        :to="{ name: 'release-detail', params: { id: release.id } }"
-        class="release-card"
+        class="release-card-wrapper" 
       >
-        <img
-          v-if="release.cover_art"
-          :src="release.cover_art"
-          :alt="`${release.title} cover art`"
-          class="cover-art"
-        />
-        <div v-else class="cover-art-placeholder">No Cover</div>
-        <h3>{{ release.title }}</h3>
-        <!-- Link to artist page (add later) -->
-        <!-- <RouterLink :to="{ name: 'artist-detail', params: { id: release.artist.id } }"> -->
-        <p>{{ release.artist.name }}</p>
-        <!-- </RouterLink> -->
-        <span class="release-type">{{ release.release_type }}</span>
-      </RouterLink>
+        <RouterLink
+          :to="{ name: 'release-detail', params: { id: release.id } }"
+          class="release-card-main-link"
+        >
+          <img
+            v-if="release.cover_art"
+            :src="release.cover_art"
+            :alt="`${release.title} cover art`"
+            class="cover-art"
+          />
+          <div v-else class="cover-art-placeholder">No Cover</div>
+          <h3>{{ release.title }}</h3>
+        </RouterLink>
+        <RouterLink
+          :to="{ name: 'artist-detail', params: { id: release.artist.id } }"
+          class="artist-link"
+        >
+          <p>{{ release.artist.name }}</p>
+        </RouterLink>
+        <span class="release-type">{{ release.release_type }}</span> 
+        <!-- Or use release.release_type_display if available from serializer -->
+      </div>
     </div>
   </div>
 </template>
@@ -78,61 +85,76 @@ onMounted(fetchReleases);
   gap: 1.5rem;
   margin-top: 1rem;
 }
-.release-card {
+/* .release-card-wrapper will act as the card now */
+.release-card-wrapper {
   border: 1px solid var(--color-border);
   padding: 1rem;
   border-radius: 8px;
   text-align: center;
   background-color: var(--color-background-soft);
   transition: transform 0.2s ease-in-out;
-  display: block;
-  color: inherit;
-  text-decoration: none;
+  display: flex; /* For better internal layout */
+  flex-direction: column; /* Stack items vertically */
 }
-.release-card:hover {
+.release-card-wrapper:hover {
   transform: translateY(-5px);
 }
-.release-card a {
-  /* Style links if wrapping card */
+
+.release-card-main-link {
   text-decoration: none;
   color: inherit;
+  display: block; /* Make the link occupy space */
+  margin-bottom: 0.5rem; /* Space before artist link */
 }
-.cover-art {
+
+.cover-art,
+.cover-art-placeholder {
   width: 100%;
   aspect-ratio: 1 / 1; /* Make cover art square */
   object-fit: cover;
   margin-bottom: 0.8rem;
   background-color: var(--color-background-mute); /* BG for images that fail */
+  border-radius: 4px; /* Rounded corners for image/placeholder */
 }
 .cover-art-placeholder {
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  margin-bottom: 0.8rem;
-  background-color: var(--color-background-mute);
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--color-text);
   font-size: 0.9em;
 }
-.release-card h3 {
+
+.release-card-wrapper h3 {
   font-size: 1.1em;
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.3rem; /* Adjust spacing */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--color-heading); /* Ensure heading color */
 }
-.release-card p {
+
+.artist-link {
+  text-decoration: none;
+}
+.artist-link p {
   font-size: 0.95em;
   margin-bottom: 0.5rem;
-  color: var(--color-text);
+  color: var(--color-text-light); /* Slightly lighter color for artist */
+  text-decoration: none;
 }
+.artist-link:hover p {
+  color: var(--color-link-hover); /* Hover effect for artist name */
+  text-decoration: underline;
+}
+
 .release-type {
   font-size: 0.8em;
   color: var(--color-text);
   background-color: var(--color-background-mute);
   padding: 0.1em 0.4em;
   border-radius: 4px;
+  align-self: center; /* Center the type badge if card is flex */
+  margin-top: auto; /* Pushes to bottom if card is flex column */
 }
 .error-message {
   color: red;

@@ -13,6 +13,8 @@ interface ArtistDetail {
   artist_picture: string | null; // URL
   location: string | null;
   website_url: string | null;
+  user: string; // Username (from StringRelatedField)
+  user_id: number; // User ID (from ReadOnlyField)
 }
 interface ReleaseSummary {
   id: number;
@@ -37,13 +39,11 @@ const isEditing = ref(false);
 const editError = ref<string | null>(null);
 
 const isOwner = computed(() => {
-  // Check if user is logged in, auth user data exists, artist data exists,
-  // and the username from the artist data matches the logged-in user's username.
   return (
     authStore.isLoggedIn &&
     authStore.authUser &&
     artist.value &&
-    artist.value.user === authStore.authUser.username
+    artist.value.user_id === authStore.authUser.id // Compare user IDs
   );
 });
 
@@ -179,7 +179,7 @@ watch(
       <!-- === Use the ArtistEditForm component === -->
       <ArtistEditForm
         :artist-id="props.id"
-        :initial-data="artist"
+        :initial-data="artist" 
         @artist-updated="onArtistUpdate"
         @cancel-edit="
           isEditing = false;

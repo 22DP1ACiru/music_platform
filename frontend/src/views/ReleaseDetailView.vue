@@ -8,6 +8,7 @@ import { usePlayerStore } from "@/stores/player";
 interface ArtistInfo {
   id: number;
   name: string;
+  user_id: number; // Assuming ArtistSerializer now includes user_id
 }
 interface TrackInfo {
   id: number;
@@ -16,16 +17,17 @@ interface TrackInfo {
   duration_in_seconds: number | null;
   audio_file: string; // URL to the audio
 }
-interface ReleaseDetail extends Release {
-  artist: ArtistInfo;
-  tracks: TrackInfo[];
-  description?: string;
-  genre?: { id: number; name: string };
-}
-interface Release {
-  // Base interface from list view (can be put in shared types file)
+interface ReleaseDetail {
   id: number;
   title: string;
+  artist: ArtistInfo;
+  tracks: TrackInfo[];
+  cover_art: string | null; // Added for consistency with header
+  release_type: string; // Raw type
+  release_type_display: string; // Display type from serializer
+  release_date: string; // ISO date string
+  description?: string;
+  genre?: { id: number; name: string };
 }
 
 const playerStore = usePlayerStore();
@@ -132,7 +134,6 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
           <h1>{{ release.title }}</h1>
           <h2>
             by
-            <!-- Link to artist detail page later -->
             <RouterLink
               :to="{ name: 'artist-detail', params: { id: release.artist.id } }"
             >
@@ -140,14 +141,13 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
             </RouterLink>
           </h2>
           <p class="release-meta">
-            {{ release.get_release_type_display || release.release_type }}
+            {{ release.release_type_display }} <!-- Use the display name -->
             <span v-if="release.genre"> • {{ release.genre.name }}</span>
             <span v-if="release.release_date">
               • Released:
               {{ new Date(release.release_date).toLocaleDateString() }}</span
             >
           </p>
-          <!-- Add description if available -->
           <p v-if="release.description" class="description">
             {{ release.description }}
           </p>
@@ -167,7 +167,6 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
             <span class="track-duration">{{
               formatDuration(track.duration_in_seconds)
             }}</span>
-            <
             <button @click="handlePlayTrack(track)" class="play-button">
               Play
             </button>
@@ -176,13 +175,11 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
         <p v-else>No tracks found for this release.</p>
       </div>
 
-      <!-- Add Comment section later -->
     </div>
     <div v-else>
       <p>Could not load release data.</p>
     </div>
     <button @click="router.back()">Go Back</button>
-    <!-- Simple back button -->
   </div>
 </template>
 
@@ -270,6 +267,12 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 .track-duration {
   color: var(--color-text);
   font-size: 0.9em;
+}
+.play-button {
+  /* Add styling for your play button */
+  padding: 0.3em 0.8em;
+  font-size: 0.9em;
+  margin-left: auto; /* Pushes button to the right */
 }
 .error-message {
   color: red;

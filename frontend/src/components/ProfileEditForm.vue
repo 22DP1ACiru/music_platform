@@ -24,6 +24,7 @@ const emit = defineEmits(["profileUpdated", "cancelEdit", "updateError"]);
 // Local reactive state for form fields, initialized from props
 const formData = ref<ProfileFormData>({ ...props.initialData });
 const profilePictureFile = ref<File | null>(null); // To hold the selected file object
+const removeExistingPicture = ref(false); // Flag to indicate picture removal
 const isLoading = ref(false);
 
 // Reset form if initial data changes (e.g., if parent re-fetches)
@@ -32,6 +33,7 @@ watch(
   (newData) => {
     formData.value = { ...newData };
     profilePictureFile.value = null; // Clear selected file on reset
+    removeExistingPicture.value = false; // Reset removal flag
   },
   { deep: true }
 );
@@ -41,10 +43,16 @@ const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement;
   if (target.files && target.files[0]) {
     profilePictureFile.value = target.files[0];
+    removeExistingPicture.value = false; // Selecting a new file cancels removal intent
     console.log("File selected:", profilePictureFile.value);
   } else {
     profilePictureFile.value = null;
   }
+};
+
+const triggerRemovePicture = () => {
+  removeExistingPicture.value = true;
+  profilePictureFile.value = null; // Clear any selected file if removing
 };
 
 // Handle form submission
@@ -52,40 +60,26 @@ const handleSubmit = async () => {
   isLoading.value = true;
   emit("updateError", null); // Clear previous errors in parent
 
-  // --- Use FormData for multipart/form-data encoding ---
-  // This is necessary when uploading files
   const submissionData = new FormData();
 
-  // Append text fields - handle nulls by sending empty strings or omitting
   submissionData.append("bio", formData.value.bio || "");
   submissionData.append("location", formData.value.location || "");
   submissionData.append("website_url", formData.value.website_url || "");
 
-  // Append file ONLY if a new one was selected
-  if (profilePictureFile.value) {
+  if (removeExistingPicture.value) {
+    submissionData.append("profile_picture", ""); // Send empty string to clear (backend must handle this)
+  } else if (profilePictureFile.value) {
     submissionData.append("profile_picture", profilePictureFile.value);
-  } else if (
-    formData.value.bio === null &&
-    formData.value.location === null &&
-    formData.value.website_url === null
-  ) {
-    // Optional: If you want to allow clearing the picture by sending nothing
-    // Check backend serializer allows null / handles empty string '' for clearing ImageField
-    // submissionData.append('profile_picture', ''); // Send empty string to potentially clear
   }
-  // If no new file is selected and other fields changed, the existing picture remains untouched on backend.
+  // If no new file and not removing, picture is omitted from PATCH, backend keeps existing.
 
   try {
-    // Use PATCH for partial updates
     const response = await axios.patch("/profiles/me/", submissionData, {
-      headers: {
-        // Axios usually sets Content-Type correctly for FormData
-        // 'Content-Type': 'multipart/form-data',
-      },
+      // headers: { 'Content-Type': 'multipart/form-data' } // Axios usually handles this for FormData
     });
 
     console.log("Profile update successful:", response.data);
-    emit("profileUpdated", response.data); // Send updated data back to parent
+    emit("profileUpdated", response.data);
   } catch (error: any) {
     console.error("Profile update failed:", error);
     let errorMessage = "Failed to update profile.";
@@ -100,7 +94,7 @@ const handleSubmit = async () => {
           .join(" | ");
       }
     }
-    emit("updateError", errorMessage); // Send error message back to parent
+    emit("updateError", errorMessage);
   } finally {
     isLoading.value = false;
   }
@@ -128,14 +122,23 @@ const handleSubmit = async () => {
     </div>
     <div class="form-group">
       <label for="profile-picture">Profile Picture:</label>
-      <!-- Display current picture -->
       <img
-        v-if="initialData.profile_picture && !profilePictureFile"
+        v-if="
+          initialData.profile_picture &&
+          !profilePictureFile &&
+          !removeExistingPicture
+        "
         :src="initialData.profile_picture"
         alt="Current profile picture"
         class="current-profile-pic"
       />
-      <p v-if="!initialData.profile_picture && !profilePictureFile">
+      <p
+        v-if="
+          !initialData.profile_picture &&
+          !profilePictureFile &&
+          !removeExistingPicture
+        "
+      >
         (No current picture)
       </p>
       <input
@@ -144,10 +147,21 @@ const handleSubmit = async () => {
         @change="handleFileChange"
         accept="image/*"
       />
+      <button
+        type="button"
+        v-if="initialData.profile_picture || profilePictureFile"
+        @click="triggerRemovePicture"
+        class="remove-button"
+        :disabled="isLoading"
+      >
+        {{ removeExistingPicture ? "Keeping removal" : "Remove Picture" }}
+      </button>
       <p v-if="profilePictureFile" class="file-info">
-        Selected: {{ profilePictureFile.name }}
+        New: {{ profilePictureFile.name }}
       </p>
-      <!-- Add option to clear picture maybe? -->
+      <p v-if="removeExistingPicture && !profilePictureFile" class="file-info">
+        Current picture will be removed on save.
+      </p>
     </div>
 
     <div class="form-actions">
@@ -200,8 +214,22 @@ const handleSubmit = async () => {
   font-size: 0.85em;
   font-style: italic;
   color: var(--color-text);
+  margin-top: 0.2rem;
 }
-
+.remove-button {
+  font-size: 0.8em;
+  padding: 0.2em 0.5em;
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: 4px;
+  margin-left: 1em;
+  cursor: pointer;
+}
+.remove-button:hover {
+  border-color: red;
+  color: red;
+}
 .form-actions {
   margin-top: 2rem;
   display: flex;
