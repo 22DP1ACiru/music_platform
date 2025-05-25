@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import axios from "axios";
 import type { Router } from "vue-router";
+import { usePlayerStore } from "./player"; // Import the player store
 
 // --- Interfaces to match backend serializers ---
 interface ArtistProfileForAuth {
@@ -28,12 +29,14 @@ interface User {
 export const useAuthStore = defineStore("auth", () => {
   const accessToken = ref<string | null>(localStorage.getItem("accessToken"));
   const refreshToken = ref<string | null>(localStorage.getItem("refreshToken"));
-  const user = ref<User | null>(null); // User state will now include profile
+  const user = ref<User | null>(null);
   const isLoading = ref(false);
   const error = ref<string | null>(null);
 
+  const playerStore = usePlayerStore(); // Initialize player store
+
   const isLoggedIn = computed(() => !!accessToken.value);
-  const authUser = computed(() => user.value); // This will now have user.value.profile
+  const authUser = computed(() => user.value);
   const hasArtistProfile = computed(
     () => !!user.value?.profile?.artist_profile_data
   );
@@ -42,7 +45,6 @@ export const useAuthStore = defineStore("auth", () => {
   );
 
   async function fetchUser(router?: Router) {
-    // Pass router for potential logout on critical failure
     if (!accessToken.value) {
       user.value = null;
       return;
@@ -50,11 +52,8 @@ export const useAuthStore = defineStore("auth", () => {
     isLoading.value = true;
     error.value = null;
     try {
-      // Fetch basic user data
       const userResponse = await axios.get<Omit<User, "profile">>("/users/me/");
       let profileData: UserProfileForAuth | null = null;
-
-      // Fetch profile data
       try {
         const profileApiResponse = await axios.get<UserProfileForAuth>(
           "/profiles/me/"
@@ -65,7 +64,6 @@ export const useAuthStore = defineStore("auth", () => {
           "Auth Store: Could not fetch user profile details during fetchUser:",
           profileError
         );
-        // If profile is essential and fetch fails with 401, it might indicate deeper token issues
         if (
           axios.isAxiosError(profileError) &&
           profileError.response?.status === 401
@@ -73,27 +71,23 @@ export const useAuthStore = defineStore("auth", () => {
           console.warn(
             "Auth Store: Profile fetch failed with 401. Logging out."
           );
-          await logout(router); // Use passed router instance
-          // throw profileError; // Re-throw to stop further execution if critical
+          await logout(router);
         }
-        // Otherwise, user can exist with profileData as null
       }
-
       user.value = {
         ...userResponse.data,
-        profile: profileData, // Attach fetched profile data
+        profile: profileData,
       };
-
       console.log("Auth Store: Fetched user and profile data:", user.value);
     } catch (err: any) {
       console.error("Auth Store: Failed to fetch user base data:", err);
       error.value = "Could not fetch user details.";
-      user.value = null; // Clear user on error
+      user.value = null;
       if (axios.isAxiosError(err) && err.response?.status === 401) {
         console.warn(
           "Auth Store: Access token invalid/expired during fetchUser base. Logging out."
         );
-        await logout(router); // Use passed router instance
+        await logout(router);
       }
     } finally {
       isLoading.value = false;
@@ -114,7 +108,7 @@ export const useAuthStore = defineStore("auth", () => {
         accessToken.value = response.data.access;
         refreshToken.value = response.data.refresh;
         console.log("Auth Store: Login successful, tokens stored.");
-        await fetchUser(router); // Pass router
+        await fetchUser(router);
         if (user.value && router) {
           const redirectPath =
             (router.currentRoute.value.query.redirect as string) || "/";
@@ -139,7 +133,7 @@ export const useAuthStore = defineStore("auth", () => {
       } else {
         error.value = "An unexpected network error occurred during login.";
       }
-      throw err; // Re-throw for the component to catch
+      throw err;
     } finally {
       isLoading.value = false;
     }
@@ -151,7 +145,10 @@ export const useAuthStore = defineStore("auth", () => {
     accessToken.value = null;
     refreshToken.value = null;
     user.value = null;
-    console.log("Auth Store: Logged Out");
+
+    playerStore.resetPlayerState(); // Reset player state on logout
+
+    console.log("Auth Store: Logged Out, player state reset.");
     if (router) {
       try {
         if (
@@ -163,7 +160,7 @@ export const useAuthStore = defineStore("auth", () => {
           router.currentRoute.value.name !== "home" &&
           !router.currentRoute.value.meta.requiresAuth
         ) {
-          // If on a public page, no need to redirect unless it's a specific post-logout target
+          // No specific redirect needed if on a public page already
         }
       } catch (navError) {
         console.error("Auth Store: Failed to redirect after logout", navError);
@@ -196,7 +193,7 @@ export const useAuthStore = defineStore("auth", () => {
       } else {
         error.value = "An unexpected error occurred during registration.";
       }
-      throw err; // Re-throw for the component to catch
+      throw err;
     } finally {
       isLoading.value = false;
     }
@@ -205,36 +202,34 @@ export const useAuthStore = defineStore("auth", () => {
   async function tryAutoLogin(router?: Router) {
     console.log("Auth Store: tryAutoLogin called.");
     if (accessToken.value) {
-      isLoading.value = true; // Set loading true at the start of attempt
+      isLoading.value = true;
       try {
         console.log("Auth Store: Verifying existing token...");
         await axios.post("/token/verify/", { token: accessToken.value });
         console.log("Auth Store: Token verified successfully.");
-        await fetchUser(router); // Fetch user if token is valid
+        await fetchUser(router);
+        // Player state is loaded by playerStore itself
       } catch (verificationError) {
         console.warn(
           "Auth Store: Token verification failed or token expired.",
           verificationError
         );
-        // If verification fails, try to refresh the token
-        const refreshed = await refreshTokenAction(router); // Pass router for logout on failure
+        const refreshed = await refreshTokenAction(router);
         if (!refreshed) {
           console.warn(
             "Auth Store: Token refresh also failed during auto-login. User remains logged out."
           );
-          // logout(router) would have been called by refreshTokenAction on failure
         } else {
           console.log(
             "Auth Store: Token refreshed successfully during auto-login. User data should be fetched."
           );
-          // fetchUser would have been called by refreshTokenAction on success
         }
       } finally {
-        isLoading.value = false; // Set loading false at the end of attempt
+        isLoading.value = false;
       }
     } else {
       console.log("Auth Store: No token found for auto-login.");
-      user.value = null; // Ensure user is null if no token
+      user.value = null;
     }
   }
 
@@ -242,7 +237,7 @@ export const useAuthStore = defineStore("auth", () => {
     const currentRefreshToken = refreshToken.value;
     if (!currentRefreshToken) {
       console.error("Auth Store: No refresh token to attempt refresh.");
-      await logout(router); // Ensure logout if no refresh token
+      await logout(router);
       return false;
     }
     try {
@@ -251,7 +246,7 @@ export const useAuthStore = defineStore("auth", () => {
         refresh: currentRefreshToken,
       });
       const newAccess = response.data.access;
-      const newRefresh = response.data.refresh; // Backend might not always send new refresh
+      const newRefresh = response.data.refresh;
 
       localStorage.setItem("accessToken", newAccess);
       accessToken.value = newAccess;
@@ -260,16 +255,12 @@ export const useAuthStore = defineStore("auth", () => {
         refreshToken.value = newRefresh;
       }
       console.log("Auth Store: Token refresh successful.");
-
-      await fetchUser(router); // Re-fetch user data with new token
-
+      await fetchUser(router);
       return true;
     } catch (err) {
       console.error("Auth Store: Token refresh failed:", err);
-      await logout(router); // Logout on refresh failure
+      await logout(router);
       return false;
-    } finally {
-      // isLoading.value = false;
     }
   }
 
@@ -283,7 +274,7 @@ export const useAuthStore = defineStore("auth", () => {
     user,
     isLoggedIn,
     authUser,
-    authLoading: isLoading, // Renamed for clarity
+    authLoading: isLoading,
     authError: error,
     hasArtistProfile,
     artistProfileId,
@@ -293,6 +284,6 @@ export const useAuthStore = defineStore("auth", () => {
     register,
     tryAutoLogin,
     refreshTokenAction,
-    clearError, // Expose clearError
+    clearError,
   };
 });

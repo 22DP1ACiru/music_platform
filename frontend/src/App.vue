@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { RouterView } from "vue-router";
+import { RouterView, useRoute } from "vue-router";
 import Navbar from "./components/Navbar.vue";
 import AudioPlayer from "./components/AudioPlayer.vue";
+import { computed } from "vue";
+
+const route = useRoute();
+
+const routesWithoutPlayer = ["login", "register"];
+
+const showAudioPlayer = computed(() => {
+  return !routesWithoutPlayer.includes(route.name as string);
+});
 </script>
 
 <template>
@@ -13,7 +22,7 @@ import AudioPlayer from "./components/AudioPlayer.vue";
     <RouterView />
   </main>
 
-  <AudioPlayer />
+  <AudioPlayer v-if="showAudioPlayer" />
 
   <footer>
     <p>© {{ new Date().getFullYear() }} Vaultwave</p>

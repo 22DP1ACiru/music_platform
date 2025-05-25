@@ -10,7 +10,7 @@ const userHasInteracted = ref(false);
 const showQueuePopup = ref(false);
 
 const titleContainerRef = ref<HTMLElement | null>(null);
-const titleTextContentRef = ref<HTMLElement | null>(null); // Refers to the span with actual text
+const titleTextContentRef = ref<HTMLElement | null>(null);
 const artistContainerRef = ref<HTMLElement | null>(null);
 const artistTextContentRef = ref<HTMLElement | null>(null);
 
@@ -25,6 +25,8 @@ const formattedCurrentTime = computed(() =>
 );
 const formattedDuration = computed(() => formatTime(playerStore.duration));
 
+const hasActiveTrack = computed(() => !!playerStore.currentTrack);
+
 function formatTime(secs: number): string {
   if (isNaN(secs) || !isFinite(secs) || secs < 0) return "0:00";
   const minutes = Math.floor(secs / 60);
@@ -33,41 +35,35 @@ function formatTime(secs: number): string {
 }
 
 const checkTextOverflow = () => {
-  // Reset overflow flags first
   isTitleOverflowing.value = false;
   isArtistOverflowing.value = false;
+  if (!hasActiveTrack.value) return; // Don't check if no track
 
   nextTick(() => {
-    // Wait for DOM to update with new text
     if (titleContainerRef.value && titleTextContentRef.value) {
       const containerWidth = titleContainerRef.value.clientWidth;
       const textWidth = titleTextContentRef.value.scrollWidth;
-
       if (textWidth > containerWidth) {
         isTitleOverflowing.value = true;
-        const scrollDistance = textWidth - containerWidth; // How much to move left to show the end
-        const scrollSpeed = 40; // pixels per second, adjust as needed
-        const scrollPhaseDuration = Math.max(2, scrollDistance / scrollSpeed); // Min 2s for scroll phase
-        const pausePhaseDuration = 2; // 2s pause at start and end
-
+        const scrollDistance = textWidth - containerWidth;
+        const scrollSpeed = 40;
+        const scrollPhaseDuration = Math.max(2, scrollDistance / scrollSpeed);
+        const pausePhaseDuration = 2;
         titleAnimationProps.value.duration = `${
           pausePhaseDuration * 2 + scrollPhaseDuration * 2
         }s`;
         titleAnimationProps.value.scrollAmountToEnd = `-${scrollDistance}px`;
       }
     }
-
     if (artistContainerRef.value && artistTextContentRef.value) {
       const containerWidth = artistContainerRef.value.clientWidth;
       const textWidth = artistTextContentRef.value.scrollWidth;
-
       if (textWidth > containerWidth) {
         isArtistOverflowing.value = true;
         const scrollDistance = textWidth - containerWidth;
         const scrollSpeed = 35;
         const scrollPhaseDuration = Math.max(1.5, scrollDistance / scrollSpeed);
         const pausePhaseDuration = 2;
-
         artistAnimationProps.value.duration = `${
           pausePhaseDuration * 2 + scrollPhaseDuration * 2
         }s`;
@@ -77,11 +73,36 @@ const checkTextOverflow = () => {
   });
 };
 
+const syncAudioElementState = () => {
+  if (audioPlayer.value) {
+    if (audioPlayer.value.volume !== playerStore.volume) {
+      audioPlayer.value.volume = playerStore.volume;
+    }
+    if (audioPlayer.value.muted !== playerStore.isMuted) {
+      audioPlayer.value.muted = playerStore.isMuted;
+    }
+  }
+};
+
 const tryToPlayAudio = () => {
-  if (!audioPlayer.value || !audioPlayer.value.src) return;
+  if (!audioPlayer.value || !audioPlayer.value.src || !hasActiveTrack.value) {
+    // Added !hasActiveTrack check
+    if (playerStore.isPlaying) playerStore.pauseTrack(); // Ensure store reflects inability to play
+    return;
+  }
+  syncAudioElementState();
+
   if (playerStore.isPlaying && audioPlayer.value.paused) {
     if (audioPlayer.value.readyState >= 3) {
-      audioPlayer.value.play().catch((e) => console.warn("Play failed:", e));
+      audioPlayer.value.play().catch((e) => {
+        console.warn(
+          "Play failed, possibly due to user interaction policy:",
+          e
+        );
+        if (e.name === "NotAllowedError") {
+          playerStore.pauseTrack();
+        }
+      });
     }
   } else if (!playerStore.isPlaying && !audioPlayer.value.paused) {
     audioPlayer.value.pause();
@@ -89,16 +110,59 @@ const tryToPlayAudio = () => {
 };
 
 const onLoadedMetadata = () => {
-  if (audioPlayer.value) playerStore.setDuration(audioPlayer.value.duration);
-  checkTextOverflow();
+  if (audioPlayer.value && hasActiveTrack.value) {
+    // Check hasActiveTrack
+    const currentAudioDuration = audioPlayer.value.duration;
+    playerStore.setDuration(currentAudioDuration);
+    syncAudioElementState();
+
+    const persistedTimeFromStore = playerStore.currentTime;
+
+    if (
+      playerStore.currentTrackUrl === audioPlayer.value.src &&
+      !isSeeking.value
+    ) {
+      if (
+        persistedTimeFromStore >= 0 &&
+        persistedTimeFromStore < currentAudioDuration
+      ) {
+        if (
+          Math.abs(audioPlayer.value.currentTime - persistedTimeFromStore) >
+            0.5 ||
+          (audioPlayer.value.currentTime === 0 && persistedTimeFromStore > 0)
+        ) {
+          audioPlayer.value.currentTime = persistedTimeFromStore;
+        }
+      } else if (
+        persistedTimeFromStore >= currentAudioDuration &&
+        currentAudioDuration > 0
+      ) {
+        audioPlayer.value.currentTime =
+          currentAudioDuration > 0.1 ? currentAudioDuration - 0.1 : 0;
+        playerStore.setCurrentTime(audioPlayer.value.currentTime);
+      }
+    }
+    checkTextOverflow();
+  } else if (audioPlayer.value && !hasActiveTrack.value) {
+    // No active track, ensure duration is 0
+    playerStore.setDuration(0);
+  }
 };
+
 const onCanPlay = () => {
-  if (audioPlayer.value) tryToPlayAudio();
+  if (audioPlayer.value && hasActiveTrack.value) {
+    // Check hasActiveTrack
+    syncAudioElementState();
+    tryToPlayAudio();
+  }
 };
+
 const onTimeUpdate = () => {
-  if (audioPlayer.value && !isSeeking.value)
+  if (audioPlayer.value && !isSeeking.value && hasActiveTrack.value)
+    // Check hasActiveTrack
     playerStore.setCurrentTime(audioPlayer.value.currentTime);
 };
+
 const onVolumeChange = () => {
   if (audioPlayer.value) {
     if (playerStore.volume !== audioPlayer.value.volume)
@@ -107,47 +171,70 @@ const onVolumeChange = () => {
       playerStore.setMuted(audioPlayer.value.muted);
   }
 };
-const onEnded = () => playerStore.handleTrackEnd();
+const onEnded = () => {
+  if (hasActiveTrack.value) playerStore.handleTrackEnd(); // Check hasActiveTrack
+};
 
 watch(
   () => playerStore.currentTrackUrl,
-  (newUrl) => {
-    // Reset overflow flags immediately when track URL changes, before new text is measured
+  (newUrl, oldUrl) => {
     isTitleOverflowing.value = false;
     isArtistOverflowing.value = false;
 
-    if (audioPlayer.value && newUrl) {
-      if (newUrl !== audioPlayer.value.src) {
-        audioPlayer.value.src = newUrl;
-        playerStore.resetTimes();
-        audioPlayer.value.load();
-      } else if (playerStore.isPlaying && audioPlayer.value.paused) {
-        tryToPlayAudio();
+    if (audioPlayer.value) {
+      if (newUrl) {
+        // If there's a new URL (meaning a track is selected)
+        if (newUrl !== audioPlayer.value.src) {
+          audioPlayer.value.src = newUrl;
+          syncAudioElementState();
+          audioPlayer.value.load();
+        } else if (playerStore.isPlaying && audioPlayer.value.paused) {
+          tryToPlayAudio();
+        }
+      } else {
+        // No new URL (no track selected)
+        audioPlayer.value.pause();
+        audioPlayer.value.src = "";
+        playerStore.setDuration(0); // Explicitly set duration to 0
+        playerStore.setCurrentTime(0); // And current time
       }
-    } else if (audioPlayer.value && !newUrl) {
-      audioPlayer.value.pause();
-      audioPlayer.value.src = "";
-      playerStore.resetTimes();
     }
-    // `checkTextOverflow` will be called by currentTrackDisplayInfo watcher or onLoadedMetadata
+    // Check text overflow needs to happen after potential DOM updates due to track info change
+    nextTick(checkTextOverflow);
   },
   { flush: "post" }
 );
 
 watch(
   () => playerStore.isPlaying,
-  () => {
+  (playing) => {
     if (!audioPlayer.value) return;
-    nextTick(tryToPlayAudio);
+    // Only attempt to play/pause if there is an active track
+    if (hasActiveTrack.value || !playing) {
+      // Allow pause even if no track (defensive)
+      nextTick(tryToPlayAudio);
+    } else if (playing && !hasActiveTrack.value) {
+      // If store says play but no track, force store to pause
+      playerStore.pauseTrack();
+    }
   }
 );
 
 watch(
   () => playerStore.currentTime,
   (newStoreTime) => {
-    if (audioPlayer.value && !isSeeking.value) {
+    if (
+      audioPlayer.value &&
+      !isSeeking.value &&
+      playerStore.duration > 0 &&
+      hasActiveTrack.value
+    ) {
       const delta = Math.abs(audioPlayer.value.currentTime - newStoreTime);
-      if (delta > 0.5) audioPlayer.value.currentTime = newStoreTime;
+      if (delta > 0.8) {
+        if (newStoreTime >= 0 && newStoreTime <= playerStore.duration) {
+          audioPlayer.value.currentTime = newStoreTime;
+        }
+      }
     }
   }
 );
@@ -155,30 +242,40 @@ watch(
 watch(
   () => playerStore.volume,
   (newVolume) => {
-    if (audioPlayer.value && audioPlayer.value.volume !== newVolume)
+    if (audioPlayer.value && audioPlayer.value.volume !== newVolume) {
       audioPlayer.value.volume = newVolume;
+    }
   }
 );
 watch(
   () => playerStore.isMuted,
   (newMuteState) => {
-    if (audioPlayer.value && audioPlayer.value.muted !== newMuteState)
+    if (audioPlayer.value && audioPlayer.value.muted !== newMuteState) {
       audioPlayer.value.muted = newMuteState;
+    }
   }
 );
 
 watch(
-  () => playerStore.currentTrackDisplayInfo,
-  () => {
-    // When display info changes (new track), explicitly call checkTextOverflow
-    // This ensures it runs *after* Vue has updated the DOM with the new text
+  hasActiveTrack,
+  (newHasActiveTrack) => {
+    if (!newHasActiveTrack) {
+      // If track becomes inactive, ensure internal player state is clean
+      if (audioPlayer.value) {
+        audioPlayer.value.pause();
+        // audioPlayer.value.src = ""; // This is handled by currentTrackUrl watcher
+      }
+      playerStore.setDuration(0);
+      playerStore.setCurrentTime(0);
+    }
+    // Ensure text overflow is re-checked when track status changes
     checkTextOverflow();
   },
-  { deep: true, immediate: true } // immediate true to check on initial load
+  { immediate: true }
 );
 
 const handleProgressSeek = (event: Event) => {
-  if (audioPlayer.value && playerStore.duration > 0) {
+  if (audioPlayer.value && playerStore.duration > 0 && hasActiveTrack.value) {
     const newTime = parseFloat((event.target as HTMLInputElement).value);
     audioPlayer.value.currentTime = newTime;
     playerStore.setCurrentTime(newTime);
@@ -186,47 +283,42 @@ const handleProgressSeek = (event: Event) => {
 };
 const onSeekMouseDown = () => {
   if (!userHasInteracted.value) userHasInteracted.value = true;
-  isSeeking.value = true;
+  if (hasActiveTrack.value) isSeeking.value = true;
 };
 const onSeekMouseUp = () => {
   isSeeking.value = false;
-  if (playerStore.isPlaying && audioPlayer.value?.paused) tryToPlayAudio();
+  if (audioPlayer.value && hasActiveTrack.value) tryToPlayAudio();
 };
 const handleTogglePlayPauseClick = () => {
   if (!userHasInteracted.value) userHasInteracted.value = true;
-  playerStore.togglePlayPause();
+  if (hasActiveTrack.value) playerStore.togglePlayPause();
 };
 const handleVolumeSeek = (event: Event) => {
-  if (audioPlayer.value) {
-    if (!userHasInteracted.value) userHasInteracted.value = true;
-    const newVolume = parseFloat((event.target as HTMLInputElement).value);
-    playerStore.setVolume(newVolume);
-    if (newVolume > 0 && playerStore.isMuted) playerStore.setMuted(false);
-  }
+  // Volume can be adjusted even if no track is playing
+  if (!userHasInteracted.value) userHasInteracted.value = true;
+  const newVolume = parseFloat((event.target as HTMLInputElement).value);
+  playerStore.setVolume(newVolume);
+  if (newVolume > 0 && playerStore.isMuted) playerStore.setMuted(false);
 };
 const toggleQueuePopup = () => (showQueuePopup.value = !showQueuePopup.value);
 
 let resizeObserver: ResizeObserver | null = null;
 onMounted(() => {
   if (audioPlayer.value) {
-    audioPlayer.value.volume = playerStore.volume;
-    audioPlayer.value.muted = playerStore.isMuted;
+    syncAudioElementState();
     if (playerStore.currentTrackUrl) {
-      const currentAudioSrc = audioPlayer.value.src.endsWith(
-        playerStore.currentTrackUrl
-      )
-        ? playerStore.currentTrackUrl
-        : audioPlayer.value.src;
-      if (currentAudioSrc !== playerStore.currentTrackUrl) {
+      // implies hasActiveTrack is true or will soon be
+      if (audioPlayer.value.src !== playerStore.currentTrackUrl) {
         audioPlayer.value.src = playerStore.currentTrackUrl;
-        if (!currentAudioSrc) audioPlayer.value.load();
+      } else {
+        if (audioPlayer.value.readyState >= 1) {
+          onLoadedMetadata();
+        }
       }
-      if (
-        playerStore.currentTime > 0 &&
-        playerStore.currentTime < playerStore.duration
-      ) {
-        audioPlayer.value.currentTime = playerStore.currentTime;
-      }
+    } else {
+      // No track URL on mount
+      playerStore.setDuration(0);
+      playerStore.setCurrentTime(0);
     }
   }
 
@@ -237,7 +329,9 @@ onMounted(() => {
     if (artistContainerRef.value)
       resizeObserver.observe(artistContainerRef.value);
   }
+  checkTextOverflow();
 });
+
 onUnmounted(() => {
   if (resizeObserver) {
     if (titleContainerRef.value)
@@ -259,10 +353,7 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
 </script>
 
 <template>
-  <div
-    class="audio-player-bar"
-    v-if="playerStore.currentTrack || playerStore.queue.length > 0"
-  >
+  <div class="audio-player-bar">
     <audio
       ref="audioPlayer"
       @loadedmetadata="onLoadedMetadata"
@@ -281,51 +372,59 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
     <div class="player-content">
       <div class="track-art-info">
         <img
-          v-if="playerStore.currentTrackCoverArtUrl"
+          v-if="playerStore.currentTrackCoverArtUrl && hasActiveTrack"
           :src="playerStore.currentTrackCoverArtUrl"
           alt="Cover Art"
           class="cover-art-small"
         />
         <div v-else class="cover-art-small placeholder"></div>
+
         <div class="track-details">
-          <div class="title-container" ref="titleContainerRef">
-            <span
-              class="text-animate-wrapper"
-              :class="{ 'marquee-spotify-refined': isTitleOverflowing }"
-              :style="{
-                '--animation-duration': titleAnimationProps.duration,
-                '--text-scroll-amount-to-end':
-                  titleAnimationProps.scrollAmountToEnd,
-              }"
-            >
+          <template v-if="hasActiveTrack">
+            <div class="title-container" ref="titleContainerRef">
               <span
-                class="text-content"
-                ref="titleTextContentRef"
-                :key="playerStore.currentTrackDisplayInfo.title + '-title'"
+                class="text-animate-wrapper"
+                :class="{ 'marquee-spotify-refined': isTitleOverflowing }"
+                :style="{
+                  '--animation-duration': titleAnimationProps.duration,
+                  '--text-scroll-amount-to-end':
+                    titleAnimationProps.scrollAmountToEnd,
+                }"
               >
-                {{ playerStore.currentTrackDisplayInfo.title }}
+                <span
+                  class="text-content"
+                  ref="titleTextContentRef"
+                  :key="playerStore.currentTrackDisplayInfo.title + '-title'"
+                >
+                  {{ playerStore.currentTrackDisplayInfo.title }}
+                </span>
               </span>
-            </span>
-          </div>
-          <div class="artist-container" ref="artistContainerRef">
-            <span
-              class="text-animate-wrapper"
-              :class="{ 'marquee-spotify-refined': isArtistOverflowing }"
-              :style="{
-                '--animation-duration': artistAnimationProps.duration,
-                '--text-scroll-amount-to-end':
-                  artistAnimationProps.scrollAmountToEnd,
-              }"
-            >
+            </div>
+            <div class="artist-container" ref="artistContainerRef">
               <span
-                class="text-content"
-                ref="artistTextContentRef"
-                :key="playerStore.currentTrackDisplayInfo.artist + '-artist'"
+                class="text-animate-wrapper"
+                :class="{ 'marquee-spotify-refined': isArtistOverflowing }"
+                :style="{
+                  '--animation-duration': artistAnimationProps.duration,
+                  '--text-scroll-amount-to-end':
+                    artistAnimationProps.scrollAmountToEnd,
+                }"
               >
-                {{ playerStore.currentTrackDisplayInfo.artist }}
+                <span
+                  class="text-content"
+                  ref="artistTextContentRef"
+                  :key="playerStore.currentTrackDisplayInfo.artist + '-artist'"
+                >
+                  {{ playerStore.currentTrackDisplayInfo.artist }}
+                </span>
               </span>
-            </span>
-          </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="title-container no-track-info">
+              <span>No track selected</span>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -333,9 +432,7 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
         <button
           @click="playerStore.playPreviousInQueue()"
           title="Previous"
-          :disabled="
-            playerStore.queue.length === 0 && !playerStore.currentTrack
-          "
+          :disabled="!hasActiveTrack"
         >
           ⏮
         </button>
@@ -343,16 +440,14 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
           @click="handleTogglePlayPauseClick"
           class="play-pause-btn"
           :title="playerStore.isPlaying ? 'Pause' : 'Play'"
-          :disabled="!playerStore.currentTrack"
+          :disabled="!hasActiveTrack"
         >
-          {{ playerStore.isPlaying ? "❚❚" : "►" }}
+          {{ playerStore.isPlaying && hasActiveTrack ? "❚❚" : "►" }}
         </button>
         <button
           @click="playerStore.playNextInQueue()"
           title="Next"
-          :disabled="
-            playerStore.queue.length === 0 && !playerStore.currentTrack
-          "
+          :disabled="!hasActiveTrack"
         >
           ⏭
         </button>
@@ -365,16 +460,18 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
         <input
           type="range"
           class="progress-bar"
-          :value="playerStore.currentTime"
-          :max="playerStore.duration || 0"
+          :value="hasActiveTrack ? playerStore.currentTime : 0"
+          :max="hasActiveTrack ? playerStore.duration || 0 : 0"
           step="0.1"
           @input="handleProgressSeek"
           @change="handleProgressSeek"
           @mousedown="onSeekMouseDown"
           @mouseup="onSeekMouseUp"
-          :disabled="!playerStore.duration || playerStore.duration === 0"
+          :disabled="!hasActiveTrack || !playerStore.duration"
         />
-        <span class="time-display total-time">{{ formattedDuration }}</span>
+        <span class="time-display total-time">{{
+          hasActiveTrack ? formattedDuration : "0:00"
+        }}</span>
       </div>
 
       <div class="player-controls-side">
@@ -390,14 +487,14 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
           min="0"
           max="1"
           step="0.01"
-          :value="playerStore.volume"
+          :value="playerStore.isMuted ? 0 : playerStore.volume"
           @input="handleVolumeSeek"
-          :disabled="playerStore.isMuted"
         />
         <button
           @click="playerStore.cycleRepeatMode()"
           :title="`Repeat: ${playerStore.repeatMode}`"
           class="repeat-button"
+          :disabled="!hasActiveTrack"
         >
           {{ repeatModeIcon }}
         </button>
@@ -411,9 +508,6 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
         </button>
       </div>
     </div>
-  </div>
-  <div v-else class="audio-player-bar audio-player-bar-placeholder">
-    <span>No track selected.</span>
   </div>
 </template>
 
@@ -434,10 +528,7 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   color: var(--c-player-text, #333);
 }
 
-.audio-player-bar-placeholder {
-  justify-content: center;
-  font-style: italic;
-}
+/* No longer need .audio-player-bar-placeholder as bar is always shown */
 
 .player-content {
   display: flex;
@@ -465,6 +556,10 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
 }
 .cover-art-small.placeholder {
   border: 1px dashed var(--c-cover-placeholder-border, #aaa);
+  display: flex; /* Ensure placeholder icon/text can be centered */
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8em; /* Example for text inside placeholder */
 }
 
 .track-details {
@@ -480,20 +575,29 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   width: 100%;
   overflow: hidden;
   white-space: nowrap;
+  height: 1.3em; /* Ensure consistent height */
+}
+
+.title-container.no-track-info span {
+  font-style: italic;
+  color: var(
+    --c-player-artist
+  ); /* Use a slightly dimmer color for placeholder */
+}
+.artist-container.no-track-info {
+  height: 1.1em; /* Consistent height for artist line */
 }
 
 .text-animate-wrapper {
-  /* This wrapper will be animated */
-  display: inline-block; /* So its width is the text width, allowing transform to work as expected */
+  display: inline-block;
   white-space: nowrap;
-  /* transform: translateZ(0); /* Potential Chrome fix: promote to its own layer */
 }
 
 .text-animate-wrapper.marquee-spotify-refined {
   animation-name: spotify-scroll-refined;
-  animation-timing-function: linear; /* Linear for smooth scroll phases */
+  animation-timing-function: linear;
   animation-iteration-count: infinite;
-  animation-duration: var(--animation-duration, 10s); /* Controlled by JS */
+  animation-duration: var(--animation-duration, 10s);
   will-change: transform;
 }
 
@@ -502,8 +606,7 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
 }
 
 .text-content {
-  /* The actual text lives here */
-  display: inline-block; /* Helps with width calculation */
+  display: inline-block;
 }
 
 .title-container .text-content {
@@ -515,27 +618,22 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   color: var(--c-player-artist, #555);
 }
 
-/* Keyframes for Spotify-like scroll: Pause -> Scroll Left -> Pause -> Scroll Right */
 @keyframes spotify-scroll-refined {
   0% {
     transform: translateX(0);
-  } /* Initial position, start of first pause */
+  }
   20% {
     transform: translateX(0);
-  } /* End of first pause (20% of duration) */
-
-  /* Start scrolling left until the end of the text is visible */
-  /* The translateX value is --text-scroll-amount-to-end (negative) */
+  }
   70% {
     transform: translateX(var(--text-scroll-amount-to-end));
-  } /* End of scroll left, start of second pause (50% duration for scroll) */
+  }
   90% {
     transform: translateX(var(--text-scroll-amount-to-end));
-  } /* End of second pause (20% duration for pause) */
-
+  }
   100% {
     transform: translateX(0);
-  } /* Scroll back to start (10% duration for scroll back) */
+  }
 }
 
 .player-controls-main {
@@ -590,18 +688,16 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   cursor: pointer;
   outline: none;
 }
+.progress-bar:disabled {
+  cursor: not-allowed;
+  background: var(
+    --c-progress-thumb-disabled-border,
+    #ccc
+  ); /* More subtle disabled track */
+}
 .progress-bar::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 16px;
-  height: 16px;
-  background: var(--c-progress-thumb-bg, #007bff);
-  border-radius: 50%;
-  cursor: pointer;
-  border: 2px solid var(--c-progress-thumb-border, #fff);
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.2);
-}
-.progress-bar::-moz-range-thumb {
   width: 16px;
   height: 16px;
   background: var(--c-progress-thumb-bg, #007bff);
@@ -614,14 +710,24 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   background: var(--c-progress-thumb-disabled-bg, #999);
   border-color: var(--c-progress-thumb-disabled-border, #ccc);
   cursor: not-allowed;
+  width: 12px; /* Smaller thumb when disabled */
+  height: 12px;
+}
+.progress-bar::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--c-progress-thumb-bg, #007bff);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid var(--c-progress-thumb-border, #fff);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.2);
 }
 .progress-bar:disabled::-moz-range-thumb {
   background: var(--c-progress-thumb-disabled-bg, #999);
   border-color: var(--c-progress-thumb-disabled-border, #ccc);
   cursor: not-allowed;
-}
-.progress-bar:disabled {
-  cursor: not-allowed;
+  width: 12px;
+  height: 12px;
 }
 
 .time-display {
@@ -646,9 +752,14 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   min-width: 28px;
   text-align: center;
 }
-.player-controls-side button:hover {
+.player-controls-side button:hover:not(:disabled) {
   color: var(--c-player-controls-side-icon-hover, #007bff);
 }
+.player-controls-side button:disabled {
+  color: var(--c-player-controls-disabled, #aaa);
+  cursor: not-allowed;
+}
+
 .repeat-button,
 .queue-toggle-button {
   min-width: 2em;

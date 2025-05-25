@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 
 // Interface for track info needed by the player
 export interface PlayerTrackInfo {
@@ -12,31 +12,63 @@ export interface PlayerTrackInfo {
   duration?: number | null; // Duration in seconds
 }
 
+// Interface for the complete persisted player state
+interface PersistedPlayerState {
+  persistedTrack: PlayerTrackInfo | null;
+  persistedQueue: PlayerTrackInfo[];
+  persistedQueueIndex: number;
+  persistedCurrentTime: number;
+  persistedVolume: number;
+  persistedIsMuted: boolean;
+  persistedRepeatMode: "none" | "one" | "all";
+}
+
+const PLAYER_STORAGE_KEY = "vaultwavePlayerState";
+
 export const usePlayerStore = defineStore("player", () => {
-  // --- State ---
-  const currentTrack = ref<PlayerTrackInfo | null>(null);
-  const queue = ref<PlayerTrackInfo[]>([]);
-  const currentQueueIndex = ref(-1); // Index of the currentTrack within the queue
+  const loadInitialState = (): Partial<PersistedPlayerState> => {
+    const storedStateRaw = localStorage.getItem(PLAYER_STORAGE_KEY);
+    if (storedStateRaw) {
+      try {
+        return JSON.parse(storedStateRaw) as PersistedPlayerState;
+      } catch (e) {
+        console.error("Player Store: Failed to parse persisted state", e);
+        localStorage.removeItem(PLAYER_STORAGE_KEY);
+      }
+    }
+    return {
+      persistedTrack: null,
+      persistedQueue: [],
+      persistedQueueIndex: -1,
+      persistedCurrentTime: 0,
+      persistedVolume: 0.75,
+      persistedIsMuted: false,
+      persistedRepeatMode: "none",
+    };
+  };
+
+  const initialState = loadInitialState();
+
+  const currentTrack = ref<PlayerTrackInfo | null>(
+    initialState.persistedTrack || null
+  );
+  const queue = ref<PlayerTrackInfo[]>(initialState.persistedQueue || []);
+  const currentQueueIndex = ref<number>(initialState.persistedQueueIndex ?? -1);
 
   const isPlaying = ref(false);
-  const currentTime = ref(0);
+  const currentTime = ref<number>(
+    currentTrack.value && initialState.persistedCurrentTime
+      ? initialState.persistedCurrentTime
+      : 0
+  );
   const duration = ref(0);
 
-  const initialVolume = parseFloat(
-    localStorage.getItem("playerVolume") || "0.75"
+  const volume = ref<number>(initialState.persistedVolume ?? 0.75);
+  const isMuted = ref<boolean>(initialState.persistedIsMuted ?? false);
+  const repeatMode = ref<"none" | "one" | "all">(
+    initialState.persistedRepeatMode ?? "none"
   );
-  const volume = ref(initialVolume);
 
-  const initialMuted = JSON.parse(
-    localStorage.getItem("playerMuted") || "false"
-  );
-  const isMuted = ref(initialMuted);
-
-  const initialRepeatMode = (localStorage.getItem("playerRepeatMode") ||
-    "none") as "none" | "one" | "all";
-  const repeatMode = ref<"none" | "one" | "all">(initialRepeatMode);
-
-  // --- Getters ---
   const currentTrackUrl = computed(
     () => currentTrack.value?.audio_file || null
   );
@@ -53,154 +85,199 @@ export const usePlayerStore = defineStore("player", () => {
     };
   });
 
-  // --- Internal Helper to Start Playback ---
-  function _startPlayback(track: PlayerTrackInfo) {
-    currentTrack.value = track;
-    duration.value = track.duration || 0;
-    currentTime.value = 0;
-    isPlaying.value = true;
-    console.log(
-      "Player Store: Starting playback for",
-      track.title,
-      "at index",
-      currentQueueIndex.value
-    );
-  }
+  function savePlayerStateToLocalStorage(
+    options: { preservePersistedTime?: boolean } = {}
+  ) {
+    const { preservePersistedTime = false } = options;
+    let timeToPersist = currentTime.value;
 
-  // --- Actions ---
+    if (preservePersistedTime) {
+      const storedStateRaw = localStorage.getItem(PLAYER_STORAGE_KEY);
+      if (storedStateRaw) {
+        try {
+          const existingState = JSON.parse(
+            storedStateRaw
+          ) as PersistedPlayerState;
+          timeToPersist = existingState.persistedCurrentTime;
+        } catch (e) {
+          /* Use currentTime.value as fallback */
+        }
+      } else {
+        timeToPersist = 0;
+      }
+    }
 
-  function setQueueAndPlay(tracks: PlayerTrackInfo[], startIndex: number = 0) {
-    console.log(
-      "Player Store: Setting new queue and playing. Tracks count:",
-      tracks.length,
-      "Start index:",
-      startIndex
-    );
-    if (!tracks || tracks.length === 0) {
-      console.warn(
-        "Player Store: setQueueAndPlay called with empty tracks array."
-      );
-      queue.value = [];
-      currentTrack.value = null;
-      isPlaying.value = false;
-      currentQueueIndex.value = -1;
-      resetTimes();
+    if (!currentTrack.value) {
+      timeToPersist = 0;
+    }
+
+    const stateToPersist: PersistedPlayerState = {
+      persistedTrack: currentTrack.value,
+      persistedQueue: queue.value,
+      persistedQueueIndex: currentQueueIndex.value,
+      persistedCurrentTime: timeToPersist,
+      persistedVolume: volume.value,
+      persistedIsMuted: isMuted.value,
+      persistedRepeatMode: repeatMode.value,
+    };
+
+    if (
+      stateToPersist.persistedTrack === null &&
+      stateToPersist.persistedQueue.length === 0
+    ) {
+      localStorage.removeItem(PLAYER_STORAGE_KEY);
       return;
     }
-    if (startIndex < 0 || startIndex >= tracks.length) {
-      console.warn(
-        "Player Store: setQueueAndPlay called with invalid startIndex. Defaulting to 0."
-      );
-      startIndex = 0;
-    }
+    localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(stateToPersist));
+  }
 
+  let currentTimeSaveTimeout: number | undefined;
+  watch(currentTime, (newTime) => {
+    clearTimeout(currentTimeSaveTimeout);
+    if (currentTrack.value) {
+      currentTimeSaveTimeout = window.setTimeout(() => {
+        savePlayerStateToLocalStorage({ preservePersistedTime: false });
+      }, 1000);
+    }
+  });
+
+  watch(
+    currentTrack,
+    (newTrack, oldTrack) => {
+      savePlayerStateToLocalStorage({ preservePersistedTime: !newTrack });
+    },
+    { deep: true }
+  );
+
+  watch(isPlaying, (playing) => {
+    if (!playing && currentTrack.value) {
+      clearTimeout(currentTimeSaveTimeout);
+      savePlayerStateToLocalStorage({ preservePersistedTime: false });
+    } else {
+      savePlayerStateToLocalStorage({ preservePersistedTime: true });
+    }
+  });
+
+  watch(
+    [queue, currentQueueIndex],
+    () => {
+      savePlayerStateToLocalStorage({ preservePersistedTime: true });
+    },
+    { deep: true }
+  );
+
+  watch([volume, isMuted, repeatMode], () => {
+    savePlayerStateToLocalStorage({ preservePersistedTime: true });
+  });
+
+  function _startPlayback(track: PlayerTrackInfo) {
+    currentTrack.value = track;
+    if (
+      currentQueueIndex.value !== -1 &&
+      queue.value[currentQueueIndex.value]?.id === track.id
+    ) {
+      // Persisted time is handled by AudioPlayer.vue on loadedmetadata
+    } else {
+      currentTime.value = 0;
+    }
+    isPlaying.value = true;
+  }
+
+  function setQueueAndPlay(tracks: PlayerTrackInfo[], startIndex: number = 0) {
+    if (!tracks || tracks.length === 0) {
+      resetPlayerState(false);
+      return;
+    }
+    if (startIndex < 0 || startIndex >= tracks.length) startIndex = 0;
     queue.value = [...tracks];
     currentQueueIndex.value = startIndex;
+    currentTime.value = 0;
     _startPlayback(queue.value[startIndex]);
   }
 
   function playTrack(track: PlayerTrackInfo) {
-    console.log("Player Store: Play single track requested", track.title);
+    currentTime.value = 0;
     setQueueAndPlay([track], 0);
   }
 
   function pauseTrack() {
-    console.log("Player Store: Pause requested");
     isPlaying.value = false;
   }
 
   function resumeTrack() {
-    console.log("Player Store: Resume requested");
-    if (currentTrack.value) {
-      isPlaying.value = true;
-    }
+    if (currentTrack.value) isPlaying.value = true;
   }
 
   function togglePlayPause() {
-    if (
-      !currentTrack.value &&
-      queue.value.length > 0 &&
-      currentQueueIndex.value !== -1 &&
-      currentQueueIndex.value < queue.value.length
-    ) {
-      _startPlayback(queue.value[currentQueueIndex.value]);
-    } else if (!currentTrack.value && queue.value.length > 0) {
-      setQueueAndPlay(queue.value, 0);
+    if (!currentTrack.value && queue.value.length > 0) {
+      const indexToPlay =
+        currentQueueIndex.value !== -1 &&
+        currentQueueIndex.value < queue.value.length
+          ? currentQueueIndex.value
+          : 0;
+      if (indexToPlay < queue.value.length) {
+        currentQueueIndex.value = indexToPlay;
+        currentTime.value = 0;
+        _startPlayback(queue.value[indexToPlay]);
+      }
     } else if (currentTrack.value) {
+      // If trying to play a track that has ended (and repeat is not 'one')
+      if (
+        !isPlaying.value &&
+        duration.value > 0 &&
+        currentTime.value >= duration.value &&
+        repeatMode.value !== "one"
+      ) {
+        currentTime.value = 0; // Restart it
+      }
       isPlaying.value = !isPlaying.value;
     }
   }
 
   function playNextInQueue() {
-    console.log(
-      "Player Store: playNextInQueue called. Current index:",
-      currentQueueIndex.value,
-      "Queue length:",
-      queue.value.length,
-      "Repeat mode:",
-      repeatMode.value
-    );
     if (queue.value.length === 0) {
-      console.log("Player Store: Queue empty, cannot play next.");
       currentTrack.value = null;
       isPlaying.value = false;
       currentQueueIndex.value = -1;
       resetTimes();
       return;
     }
-
     let nextIndex = currentQueueIndex.value + 1;
-
     if (nextIndex >= queue.value.length) {
       if (repeatMode.value === "all") {
-        console.log("Player Store: End of queue, repeating all.");
         nextIndex = 0;
       } else {
-        console.log(
-          "Player Store: End of queue, repeat mode is not 'all'. Stopping."
-        );
+        // Repeat mode is 'none' or 'one' (handled by 'ended')
         isPlaying.value = false;
-        // Optional: Reset currentTime to 0 or keep it at duration for the last track
-        currentTime.value = duration.value; // Show as finished
-        // currentQueueIndex.value = -1; // Or keep it at last index
-        // currentTrack.value = null; // Or keep last track visible
+        if (duration.value > 0) currentTime.value = duration.value; // Mark as ended
+        // Do not change currentQueueIndex or currentTrack here for 'repeat none'
         return;
       }
     }
-
     currentQueueIndex.value = nextIndex;
+    currentTime.value = 0;
     _startPlayback(queue.value[nextIndex]);
   }
 
   function playPreviousInQueue() {
-    console.log(
-      "Player Store: playPreviousInQueue called. Current index:",
-      currentQueueIndex.value
-    );
-    if (queue.value.length === 0) {
-      console.log("Player Store: Queue empty, cannot play previous.");
-      return;
-    }
-
-    if (currentTime.value > 3 && currentTrack.value) {
-      console.log("Player Store: Replaying current track from beginning.");
+    if (queue.value.length === 0) return;
+    // If track is more than 3 seconds in, or if it's already at the start, replay current track
+    if (
+      (currentTime.value > 3 && currentTrack.value) ||
+      (currentTime.value <= 3 &&
+        currentQueueIndex.value === 0 &&
+        repeatMode.value !== "all")
+    ) {
       currentTime.value = 0;
-      isPlaying.value = true;
+      if (currentTrack.value) isPlaying.value = true; // Ensure playback if there's a track
       return;
     }
-
     let prevIndex = currentQueueIndex.value - 1;
-
     if (prevIndex < 0) {
       if (repeatMode.value === "all") {
-        console.log(
-          "Player Store: Start of queue, repeating all (to last track)."
-        );
-        prevIndex = queue.value.length - 1;
+        prevIndex = queue.value.length - 1; // Wrap around to the end
       } else {
-        console.log(
-          "Player Store: Start of queue, repeat mode is not 'all'. Replaying current or doing nothing."
-        );
+        // Start of queue and not repeating all, replay current if possible
         if (currentTrack.value) {
           currentTime.value = 0;
           isPlaying.value = true;
@@ -209,20 +286,16 @@ export const usePlayerStore = defineStore("player", () => {
       }
     }
     currentQueueIndex.value = prevIndex;
+    currentTime.value = 0;
     _startPlayback(queue.value[prevIndex]);
   }
 
   function handleTrackEnd() {
-    console.log("Player Store: Track ended. Repeat mode:", repeatMode.value);
     if (repeatMode.value === "one" && currentTrack.value) {
-      console.log("Player Store: Repeating one track.");
       currentTime.value = 0;
       isPlaying.value = true;
     } else {
-      console.log(
-        "Player Store: Track ended, calling playNextInQueue for mode:",
-        repeatMode.value
-      );
+      // For 'all' or 'none'
       playNextInQueue();
     }
   }
@@ -230,35 +303,25 @@ export const usePlayerStore = defineStore("player", () => {
   function setCurrentTime(time: number) {
     currentTime.value = time;
   }
-
   function setDuration(time: number) {
     duration.value = time;
   }
-
   function setVolume(vol: number) {
     volume.value = Math.max(0, Math.min(1, vol));
-    localStorage.setItem("playerVolume", volume.value.toString());
   }
-
   function setMuted(muted: boolean) {
     isMuted.value = muted;
-    localStorage.setItem("playerMuted", JSON.stringify(muted));
   }
-
   function toggleMute() {
     setMuted(!isMuted.value);
   }
-
   function setRepeatMode(mode: "none" | "one" | "all") {
     repeatMode.value = mode;
-    localStorage.setItem("playerRepeatMode", mode);
   }
-
   function cycleRepeatMode() {
     if (repeatMode.value === "none") setRepeatMode("all");
     else if (repeatMode.value === "all") setRepeatMode("one");
     else setRepeatMode("none");
-    console.log("Player Store: Cycled repeat mode to:", repeatMode.value);
   }
 
   function resetTimes() {
@@ -267,113 +330,85 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   function clearQueue() {
-    console.log("Player Store: Clearing queue.");
-    queue.value = [];
-    currentTrack.value = null; // Clear current track when queue is cleared
-    isPlaying.value = false;
-    currentQueueIndex.value = -1;
-    resetTimes();
+    resetPlayerState(false);
   }
 
   function addTrackToQueue(track: PlayerTrackInfo) {
-    console.log("Player Store: Adding track to queue", track.title);
     const existingTrackIndex = queue.value.findIndex((t) => t.id === track.id);
-    if (existingTrackIndex === -1) {
-      // Add only if not already in queue
-      queue.value.push(track);
-    }
-    if (!currentTrack.value && queue.value.length > 0) {
-      // If nothing is playing, and queue was empty or just got first item
-      currentQueueIndex.value = queue.value.findIndex((t) => t.id === track.id); // find it in case it was already there
-      if (currentQueueIndex.value === -1 && queue.value.length === 1)
-        currentQueueIndex.value = 0; // if truly new and only one
+    if (existingTrackIndex === -1) queue.value.push(track);
 
-      if (currentQueueIndex.value !== -1 && !isPlaying.value) {
-        _startPlayback(queue.value[currentQueueIndex.value]);
-      } else if (queue.value.length === 1) {
-        // If it's the very first track in an empty player
-        _startPlayback(queue.value[0]);
-      }
+    if (!currentTrack.value && queue.value.length > 0) {
+      const playIndex = queue.value.findIndex((t) => t.id === track.id);
+      currentQueueIndex.value = playIndex !== -1 ? playIndex : 0;
+      _startPlayback(queue.value[currentQueueIndex.value]);
     }
   }
 
   function playTrackFromQueueByIndex(index: number) {
     if (index >= 0 && index < queue.value.length) {
       currentQueueIndex.value = index;
+      currentTime.value = 0;
       _startPlayback(queue.value[index]);
-    } else {
-      console.warn(
-        "Player Store: Invalid index for playTrackFromQueueByIndex",
-        index
-      );
     }
   }
 
   function removeTrackFromQueue(indexToRemove: number) {
-    if (indexToRemove < 0 || indexToRemove >= queue.value.length) {
-      console.warn(
-        "Player Store: Invalid index for removeFromQueue",
-        indexToRemove
-      );
-      return;
-    }
-
+    if (indexToRemove < 0 || indexToRemove >= queue.value.length) return;
     const isRemovingCurrentTrack = currentQueueIndex.value === indexToRemove;
     const wasPlaying = isPlaying.value;
-
     queue.value.splice(indexToRemove, 1);
-    console.log(
-      "Player Store: Removed track at index",
-      indexToRemove,
-      "New queue length:",
-      queue.value.length
-    );
 
     if (queue.value.length === 0) {
-      currentTrack.value = null;
-      isPlaying.value = false;
-      currentQueueIndex.value = -1;
-      resetTimes();
-      console.log("Player Store: Queue empty after removal. Playback stopped.");
+      resetPlayerState(false);
       return;
     }
-
     if (isRemovingCurrentTrack) {
-      // If the current track was removed, play the next available track, or the new first track if it was the last.
-      // Or stop if that was the only track.
       let newIndexToPlay = indexToRemove;
-      if (newIndexToPlay >= queue.value.length) {
-        // If last track was removed
-        newIndexToPlay = 0; // Go to first track, or could be queue.value.length -1 for previous
-      }
-      currentQueueIndex.value = newIndexToPlay; // Update current index regardless
-      if (wasPlaying) {
-        // Only auto-play if it was playing before
-        _startPlayback(queue.value[newIndexToPlay]);
-      } else {
-        // If it was paused, update currentTrack but don't auto-play
+      if (newIndexToPlay >= queue.value.length) newIndexToPlay = 0;
+      currentQueueIndex.value = newIndexToPlay;
+      currentTime.value = 0;
+      if (wasPlaying) _startPlayback(queue.value[newIndexToPlay]);
+      else {
         currentTrack.value = queue.value[newIndexToPlay];
-        // duration.value and currentTime.value should ideally be reset or reflect the new track
         duration.value = currentTrack.value.duration || 0;
-        currentTime.value = 0;
       }
-      console.log(
-        "Player Store: Removed current track. New current track at index",
-        newIndexToPlay
-      );
     } else if (indexToRemove < currentQueueIndex.value) {
-      // If a track before the current one was removed, adjust current index
       currentQueueIndex.value--;
-      console.log(
-        "Player Store: Removed track before current. Adjusted currentQueueIndex to",
-        currentQueueIndex.value
-      );
     }
-    // If a track after the current one was removed, currentQueueIndex and currentTrack are still valid.
   }
 
+  function resetPlayerState(fullReset = true) {
+    currentTrack.value = null;
+    queue.value = [];
+    currentQueueIndex.value = -1;
+    isPlaying.value = false;
+    currentTime.value = 0;
+    duration.value = 0;
+
+    if (fullReset) {
+      volume.value = 0.75;
+      isMuted.value = false;
+      repeatMode.value = "none";
+    }
+    localStorage.removeItem(PLAYER_STORAGE_KEY);
+    if (fullReset) {
+      localStorage.removeItem("playerVolume");
+      localStorage.removeItem("playerMuted");
+      localStorage.removeItem("playerRepeatMode");
+    }
+    console.log("Player Store: State reset. Full reset:", fullReset);
+  }
+
+  window.addEventListener("beforeunload", () => {
+    if (currentTrack.value && isPlaying.value) {
+      clearTimeout(currentTimeSaveTimeout);
+      savePlayerStateToLocalStorage({ preservePersistedTime: false });
+    } else if (currentTrack.value && !isPlaying.value) {
+      savePlayerStateToLocalStorage({ preservePersistedTime: false });
+    }
+  });
+
   return {
-    // State
     currentTrack,
     isPlaying,
     currentTime,
@@ -383,13 +418,9 @@ export const usePlayerStore = defineStore("player", () => {
     repeatMode,
     queue,
     currentQueueIndex,
-
-    // Getters
     currentTrackUrl,
     currentTrackCoverArtUrl,
     currentTrackDisplayInfo,
-
-    // Actions
     playTrack,
     setQueueAndPlay,
     addTrackToQueue,
@@ -408,7 +439,8 @@ export const usePlayerStore = defineStore("player", () => {
     playNextInQueue,
     playPreviousInQueue,
     resetTimes,
-    playTrackFromQueueByIndex, // New
-    removeTrackFromQueue, // New
+    playTrackFromQueueByIndex,
+    removeTrackFromQueue,
+    resetPlayerState,
   };
 });
