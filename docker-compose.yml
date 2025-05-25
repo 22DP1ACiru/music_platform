@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   db:
@@ -26,8 +26,9 @@ services:
     command: python manage.py runserver 0.0.0.0:8000 # Command to run inside container
     volumes:
       - ./backend:/app # Mount backend code into container for live reload
+      - media_volume:/app/mediafiles # Mount media volume for persistent file uploads
     ports:
-      - "8102:8000" # Map host port 8002 to container port 8000
+      - "8102:8000" # Map host port 8102 to container port 8000
     environment:
       # Pass environment variables needed by Django
       - SECRET_KEY=${DJANGO_SECRET_KEY}
@@ -78,4 +79,4 @@ services:
 
 volumes: # Define named volumes for persistent data
   postgres_data:
-  media_volume: # Will be used later for uploads
+  media_volume: # Will be used for uploads by backend and potentially celery
