@@ -1,34 +1,46 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import axios from "axios";
-import type { Router } from "vue-router"; // Import Router type for type hinting
+import type { Router } from "vue-router";
+
+// --- Interfaces to match backend serializers ---
+interface ArtistProfileForAuth {
+  id: number;
+  name: string;
+}
+
+interface UserProfileForAuth {
+  id: number;
+  bio: string | null;
+  profile_picture: string | null;
+  location: string | null;
+  website_url: string | null;
+  artist_profile_data: ArtistProfileForAuth | null;
+}
 
 interface User {
   id: number;
   username: string;
   email: string;
+  profile: UserProfileForAuth | null;
 }
 
 export const useAuthStore = defineStore("auth", () => {
-  // --- State ---
-  // Initialize state from localStorage
   const accessToken = ref<string | null>(localStorage.getItem("accessToken"));
   const refreshToken = ref<string | null>(localStorage.getItem("refreshToken"));
-  const user = ref<User | null>(null);
-  const isLoading = ref(false); // Loading state specific to auth actions
-  const error = ref<string | null>(null); // Error state specific to auth actions
+  const user = ref<User | null>(null); // User state will now include profile
+  const isLoading = ref(false);
+  const error = ref<string | null>(null);
 
-  // --- Getters ---
-  // Computed properties become getters
   const isLoggedIn = computed(() => !!accessToken.value);
-  const authUser = computed(() => user.value);
-  const authLoading = computed(() => isLoading.value);
-  const authError = computed(() => error.value);
+  const authUser = computed(() => user.value); // This will now have user.value.profile
+  const hasArtistProfile = computed(
+    () => !!user.value?.profile?.artist_profile_data
+  );
+  const artistProfileId = computed(
+    () => user.value?.profile?.artist_profile_data?.id || null
+  );
 
-  // --- Actions ---
-  // Functions that modify state become actions
-
-  // Action to fetch user details
   async function fetchUser() {
     if (!accessToken.value) {
       user.value = null;
@@ -37,32 +49,49 @@ export const useAuthStore = defineStore("auth", () => {
     isLoading.value = true;
     error.value = null;
     try {
-      // Axios interceptor will add token
-      const response = await axios.get<User>("/users/me/");
-      user.value = response.data;
-      console.log("Auth Store: Fetched user data:", user.value);
+      // Fetch basic user data
+      const userResponse = await axios.get<Omit<User, "profile">>("/users/me/"); // Omit profile as it's not in /users/me
+      let profileData: UserProfileForAuth | null = null;
+
+      // Fetch profile data
+      try {
+        const profileApiResponse = await axios.get<UserProfileForAuth>(
+          "/profiles/me/"
+        );
+        profileData = profileApiResponse.data;
+      } catch (profileError) {
+        console.warn(
+          "Auth Store: Could not fetch user profile details during fetchUser:",
+          profileError
+        );
+        // Decide if this is a critical failure. For now, user can exist without profile fully loaded.
+        // If profile is essential for basic app operation post-login, handle appropriately.
+      }
+
+      user.value = {
+        ...userResponse.data,
+        profile: profileData, // Attach fetched profile data
+      };
+
+      console.log("Auth Store: Fetched user and profile data:", user.value);
     } catch (err: any) {
-      console.error("Auth Store: Failed to fetch user data:", err);
+      console.error("Auth Store: Failed to fetch user base data:", err);
       error.value = "Could not fetch user details.";
       user.value = null;
-      // Check if the error is 401 Unauthorized (token invalid/expired)
       if (axios.isAxiosError(err) && err.response?.status === 401) {
-        // Token is bad, trigger logout or refresh logic
-        // For now, just logout
         console.warn(
           "Auth Store: Access token invalid/expired during fetchUser. Logging out."
         );
-        await logout(); // Call the logout action (needs router instance if redirecting)
+        await logout();
       }
     } finally {
       isLoading.value = false;
     }
   }
 
-  // Action for login
   async function login(
     payload: { username?: string; password?: string },
-    router: Router
+    router?: Router
   ) {
     isLoading.value = true;
     error.value = null;
@@ -74,75 +103,62 @@ export const useAuthStore = defineStore("auth", () => {
         accessToken.value = response.data.access;
         refreshToken.value = response.data.refresh;
         console.log("Auth Store: Login successful, tokens stored.");
-        // Fetch user details after storing tokens
-        await fetchUser();
-        // Redirect after successful login and user fetch
-        if (user.value) {
-          // Only redirect if user fetch was successful
+        await fetchUser(); // This will now also attempt to fetch profile
+        if (user.value && router) {
           router.push({ name: "home" });
-        } else {
-          // Handle case where user fetch failed even after successful token retrieval
-          error.value = "Login succeeded but failed to fetch user details.";
+        } else if (!user.value) {
+          error.value =
+            "Login succeeded but failed to fetch user details fully.";
         }
       } else {
         throw new Error("Token data missing in login response");
       }
     } catch (err: any) {
       console.error("Auth Store: Login failed:", err);
-      localStorage.removeItem("accessToken"); // Ensure tokens are cleared on failed login
+      localStorage.removeItem("accessToken");
       localStorage.removeItem("refreshToken");
       accessToken.value = null;
       refreshToken.value = null;
       user.value = null;
-
       if (axios.isAxiosError(err) && err.response) {
-        if (err.response.status === 401) {
-          error.value = "Login failed: Invalid username or password.";
-        } else {
-          const responseData = err.response.data;
-          error.value =
-            responseData?.detail ||
-            `Login failed (Status: ${err.response.status}).`;
-        }
+        error.value = err.response.data.detail || "Login failed.";
       } else {
         error.value = "An unexpected network error occurred during login.";
       }
-      // Re-throw the error if the component needs to know login failed
       throw error;
     } finally {
       isLoading.value = false;
     }
   }
 
-  // Action for logout
   async function logout(router?: Router) {
-    // Make router optional here
     localStorage.removeItem("accessToken");
     localStorage.removeItem("refreshToken");
     accessToken.value = null;
     refreshToken.value = null;
     user.value = null;
     console.log("Auth Store: Logged Out");
-    // Perform redirect IF router instance is provided
+    // Clear default headers for axios if you've set them globally
+    // delete axios.defaults.headers.common["Authorization"];
     if (router) {
       try {
-        await router.push({ name: "login" }); // Redirect to login
+        // Check if already on a public page to avoid redundant navigation or errors
+        if (router.currentRoute.value.meta.requiresAuth) {
+          await router.push({ name: "login" });
+        }
       } catch (navError) {
         console.error("Auth Store: Failed to redirect after logout", navError);
-        // Fallback or just log if navigation fails
       }
     }
   }
 
-  // Action for registration (calls API, doesn't change auth state directly)
   async function register(payload: any, router: Router) {
     isLoading.value = true;
     error.value = null;
     try {
       const response = await axios.post("/register/", payload);
       console.log("Auth Store: Registration successful:", response.data);
-      // Redirect to login after successful registration
-      alert("Registration successful! Please log in."); // Keep simple feedback
+      alert("Registration successful! Please log in.");
       router.push({ name: "login" });
     } catch (err: any) {
       console.error("Auth Store: Registration failed:", err);
@@ -161,76 +177,81 @@ export const useAuthStore = defineStore("auth", () => {
       } else {
         error.value = "An unexpected error occurred during registration.";
       }
-      // Re-throw error so component knows registration failed
       throw error;
     } finally {
       isLoading.value = false;
     }
   }
 
-  // --- Action to try auto-login on app load ---
   async function tryAutoLogin() {
     console.log("Auth Store: Checking for existing token on load...");
     if (accessToken.value) {
-      // Add token verification step here later using /api/token/verify/
-      console.log("Auth Store: Token found, attempting to fetch user...");
-      await fetchUser();
+      // Attempt to verify token with backend? (Optional, but good for robustness)
+      // Example:
+      // try {
+      //   await axios.post('/token/verify/', { token: accessToken.value });
+      //   console.log("Auth Store: Token verified.");
+      //   await fetchUser(); // Fetch user if token is valid
+      // } catch (verificationError) {
+      //   console.warn("Auth Store: Token verification failed or token expired.", verificationError);
+      //   await refreshTokenAction(); // Try to refresh if verification fails
+      // }
+      await fetchUser(); // Fetch user if token exists (includes profile fetch attempt)
     } else {
       console.log("Auth Store: No token found.");
     }
   }
 
-  async function refreshTokenAction() {
-    const currentRefreshToken = refreshToken.value; // Get from state
+  async function refreshTokenAction(router?: Router) {
+    // Pass router to handle logout on failure
+    const currentRefreshToken = refreshToken.value;
     if (!currentRefreshToken) {
       console.error("Auth Store: No refresh token to attempt refresh.");
-      await logout(); // Trigger full logout if no refresh token
-      return false; // Indicate refresh failed
+      await logout(router);
+      return false;
     }
-    isLoading.value = true; // Optional: Set loading state
+    isLoading.value = true;
     try {
-      // Make refresh request WITHOUT the interceptor adding the expired access token
-      // You might need a separate axios instance or configure the main one carefully
       const response = await axios.post("/token/refresh/", {
         refresh: currentRefreshToken,
       });
-
       const newAccess = response.data.access;
-      const newRefresh = response.data.refresh; // May not exist if rotation is off
+      const newRefresh = response.data.refresh;
 
       localStorage.setItem("accessToken", newAccess);
-      accessToken.value = newAccess; // Update state
+      accessToken.value = newAccess;
       if (newRefresh) {
         localStorage.setItem("refreshToken", newRefresh);
-        refreshToken.value = newRefresh; // Update state
+        refreshToken.value = newRefresh;
       }
       console.log("Auth Store: Token refresh successful.");
-      // Update default headers for subsequent requests if needed
-      axios.defaults.headers.common["Authorization"] = `Bearer ${newAccess}`;
-      return true; // Indicate refresh succeeded
+      // If you set Authorization header on axios.defaults, update it here too
+      // axios.defaults.headers.common["Authorization"] = `Bearer ${newAccess}`;
+
+      // After successful refresh, re-fetch user data as roles/profile might have changed
+      // or to ensure consistency if the old token caused partial data load.
+      await fetchUser();
+
+      return true;
     } catch (err) {
       console.error("Auth Store: Token refresh failed:", err);
-      await logout(); // Trigger full logout on refresh failure
-      return false; // Indicate refresh failed
+      await logout(router);
+      return false;
     } finally {
       isLoading.value = false;
     }
   }
 
-  // Return state, getters, and actions
   return {
-    // State (refs)
     accessToken,
     refreshToken,
     user,
-
-    // Getters (computed)
     isLoggedIn,
     authUser,
-    authLoading,
-    authError,
-
-    // Actions (functions)
+    authLoading: isLoading,
+    authError: error,
+    hasArtistProfile,
+    artistProfileId,
     login,
     logout,
     fetchUser,

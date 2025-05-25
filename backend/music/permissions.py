@@ -10,17 +10,34 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
 
-        # Check for common ownership patterns
-        if hasattr(obj, 'user'): # For Artist, Comment, UserProfile
-            return obj.user == request.user
-        if hasattr(obj, 'owner'): # For Playlist
-            return obj.owner == request.user
-        if hasattr(obj, 'artist') and hasattr(obj.artist, 'user'): # For Release, Track
-            # For Track, we check the release's artist
-            if hasattr(obj, 'release') and hasattr(obj.release, 'artist'):
-                 return obj.release.artist.user == request.user
-            # For Release directly
-            return obj.artist.user == request.user
+        # Ensure request.user is authenticated for write methods
+        if not request.user or not request.user.is_authenticated:
+            return False
 
-        # Deny if no ownership attribute found
+        # Check for common ownership patterns
+        # For Release
+        if hasattr(obj, 'artist') and hasattr(obj.artist, 'user'): 
+            return obj.artist.user.id == request.user.id # Compare IDs
+
+        # For Track
+        # Check if obj is a Track, then check its release's artist's user
+        # Need to be careful with the order of these checks if models share attribute names
+        from .models import Track # Local import to avoid circular dependency if permissions is imported elsewhere early
+        if isinstance(obj, Track):
+            if hasattr(obj, 'release') and obj.release and \
+               hasattr(obj.release, 'artist') and obj.release.artist and \
+               hasattr(obj.release.artist, 'user') and obj.release.artist.user:
+                return obj.release.artist.user.id == request.user.id # Compare IDs
+            return False # Track doesn't have the expected ownership chain
+
+        # For Artist, Comment, UserProfile (assuming UserProfile has a 'user' field)
+        if hasattr(obj, 'user'): 
+            return obj.user.id == request.user.id # Compare IDs
+        
+        # For Playlist (assuming Playlist has an 'owner' field which is a User)
+        if hasattr(obj, 'owner'): 
+            return obj.owner.id == request.user.id # Compare IDs
+
+
+        # Deny if no ownership attribute found or specific check failed
         return False

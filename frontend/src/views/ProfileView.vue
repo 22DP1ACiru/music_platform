@@ -1,71 +1,41 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
-import axios from "axios";
-import { useAuthStore } from "@/stores/auth"; // Use Pinia store
+import { ref, onMounted, computed, watch } from "vue";
+import { useAuthStore } from "@/stores/auth";
 import { useRouter, RouterLink } from "vue-router";
 import ProfileEditForm from "@/components/ProfileEditForm.vue";
 
-// Define interface for the profile data fetched from API
-// Should match UserProfileSerializer + nested artist data
-interface ArtistProfileData {
-  id: number;
-  name: string;
-  // Add other fields from ArtistSerializer if needed
-}
-interface UserProfileData {
-  id: number;
-  user: string; // Username from StringRelatedField
-  bio: string | null;
-  profile_picture: string | null; // URL
-  location: string | null;
-  website_url: string | null;
-  artist_profile_data: ArtistProfileData | null; // Nested artist info or null
-}
-
 const authStore = useAuthStore();
-const profileData = ref<UserProfileData | null>(null);
-const isLoading = ref(true);
-const error = ref<string | null>(null);
-const isEditing = ref(false); // State to control edit mode
-const editError = ref<string | null>(null);
-
 const router = useRouter();
 
-// Get base user info from the store (username, email)
-const currentUser = computed(() => authStore.authUser);
+const isEditing = ref(false);
+const editError = ref<string | null>(null);
+
+// Computed properties to get data from the store
+const isLoadingProfile = computed(() => authStore.authLoading); // Use store's loading state
+const profileData = computed(() => authStore.authUser?.profile); // Get profile from store
+const currentUser = computed(() => authStore.authUser); // Basic user info
+const errorLoadingProfile = computed(() => authStore.authError); // Use store's error state
 
 const goToCreateArtist = () => {
   router.push({ name: "artist-create" });
 };
 
-const fetchProfile = async () => {
-  isLoading.value = true;
-  error.value = null;
-  try {
-    // Interceptor adds token
-    const response = await axios.get<UserProfileData>("/profiles/me/");
-    profileData.value = response.data;
-    console.log("Fetched profile data:", profileData.value);
-  } catch (err) {
-    console.error("Failed to fetch profile:", err);
-    error.value = "Could not load your profile.";
-    // Handle specific errors like 404 if profile wasn't auto-created
-    if (axios.isAxiosError(err) && err.response?.status === 404) {
-      error.value =
-        "Profile not found. Please contact support or try creating one."; // Or potentially auto-create here?
-    }
-  } finally {
-    isLoading.value = false;
+const goToCreateRelease = () => {
+  if (authStore.hasArtistProfile) {
+    router.push({ name: "release-create" });
+  } else {
+    // This case should ideally be prevented by the button's v-if
+    alert("Error: Artist profile required.");
   }
 };
 
-// Function to call after successful edit (to refresh displayed data)
-const onProfileUpdate = (updatedProfileData: any) => {
-  if (updatedProfileData) {
-    profileData.value = updatedProfileData; // If API returns full profile
-  }
-  isEditing.value = false; // Exit edit mode
-  editError.value = null; // Clear edit errors
+// Called when ProfileEditForm emits 'profileUpdated'
+const onProfileUpdate = async (updatedProfileDataFromForm: any) => {
+  // After a successful PATCH, the backend returns the updated profile.
+  // We need to tell the authStore to re-fetch the user/profile data to update its state.
+  await authStore.fetchUser(); // Re-fetch to ensure store is up-to-date
+  isEditing.value = false;
+  editError.value = null;
   alert("Profile updated successfully!");
 };
 
@@ -73,19 +43,40 @@ const handleUpdateError = (errorMessage: string | null) => {
   editError.value = errorMessage;
 };
 
-// Fetch profile when component mounts
-onMounted(fetchProfile);
+// Ensure user/profile data is fetched if not already present when component mounts
+onMounted(async () => {
+  if (!authStore.authUser || !authStore.authUser.profile) {
+    // If profile data is missing in the store, trigger a fetch
+    // This handles cases like direct navigation to /profile after login
+    // but before fetchUser fully completed or if profile part failed initially.
+    await authStore.fetchUser();
+  }
+});
+
+// Watch for authUser changes if profile might be loaded asynchronously
+watch(
+  () => authStore.authUser,
+  (newUser) => {
+    if (newUser && !newUser.profile && !authStore.authLoading) {
+      // If user is loaded but profile is missing and not currently loading, try fetching again.
+      // This is a fallback, ideally fetchUser in authStore is robust.
+      // authStore.fetchUser();
+    }
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
   <div class="profile-page">
     <h2>Your Profile</h2>
 
-    <div v-if="isLoading">Loading profile...</div>
-    <div v-else-if="error" class="error-message">{{ error }}</div>
+    <div v-if="isLoadingProfile">Loading profile...</div>
+    <div v-else-if="errorLoadingProfile" class="error-message">
+      {{ errorLoadingProfile }}
+    </div>
 
-    <!-- Display Mode -->
-    <div v-else-if="profileData && !isEditing">
+    <div v-else-if="currentUser && profileData && !isEditing">
       <div class="profile-details">
         <img
           v-if="profileData.profile_picture"
@@ -95,56 +86,70 @@ onMounted(fetchProfile);
         />
         <div v-else class="profile-pic-placeholder">No Pic</div>
 
-        <p><strong>Username:</strong> {{ currentUser?.username }}</p>
+        <p><strong>Username:</strong> {{ currentUser.username }}</p>
         <p v-if="profileData.location">
           <strong>Location:</strong> {{ profileData.location }}
         </p>
         <p v-if="profileData.website_url">
           <strong>Website:</strong>
           <a
-            v-if="profileData.website_url"
             :href="profileData.website_url"
             target="_blank"
             rel="noopener noreferrer"
           >
             {{ profileData.website_url }}
           </a>
-          <span v-else>Not set</span>
         </p>
         <p v-if="profileData.bio"><strong>Bio:</strong></p>
-        <p class="bio-text">{{ profileData.bio }}</p>
+        <p class="bio-text" v-if="profileData.bio">{{ profileData.bio }}</p>
+        <p class="bio-text" v-else>(No bio set)</p>
 
-        <!-- Artist Profile Link -->
-        <div v-if="profileData.artist_profile_data" class="artist-link">
-          <p>
-            <strong>Artist Profile:</strong>
-            <RouterLink
-              :to="{
-                name: 'artist-detail',
-                params: { id: profileData.artist_profile_data.id },
-              }"
-            >
-              {{ profileData.artist_profile_data.name }}
-            </RouterLink>
-          </p>
+        <div
+          v-if="authStore.hasArtistProfile && profileData.artist_profile_data"
+          class="artist-section"
+        >
+          <div class="artist-link">
+            <p>
+              <strong>Artist Profile:</strong>
+              <RouterLink
+                :to="{
+                  name: 'artist-detail',
+                  params: { id: profileData.artist_profile_data.id },
+                }"
+              >
+                {{ profileData.artist_profile_data.name }}
+              </RouterLink>
+            </p>
+          </div>
+          <button @click="goToCreateRelease" class="action-button">
+            Upload New Release
+          </button>
         </div>
-        <div v-else class="artist-create-section">
+        <div
+          v-else-if="!authStore.hasArtistProfile"
+          class="artist-create-section"
+        >
           <p>Ready to share your music?</p>
-          <button @click="goToCreateArtist">Become an Artist</button>
+          <button @click="goToCreateArtist" class="action-button">
+            Become an Artist
+          </button>
         </div>
       </div>
-      <button @click="isEditing = true" class="edit-button">
+      <button @click="isEditing = true" class="edit-button action-button">
         Edit Profile
       </button>
     </div>
 
-    <!-- Edit Mode (Placeholder for now) -->
     <div v-else-if="profileData && isEditing">
-      <h3>Edit Profile</h3>
-      <!-- Display edit errors -->
+      <h3>Edit Profile Details</h3>
       <p v-if="editError" class="error-message">{{ editError }}</p>
       <ProfileEditForm
-        :initial-data="profileData"
+        :initial-data="{
+          bio: profileData.bio,
+          location: profileData.location,
+          website_url: profileData.website_url,
+          profile_picture: profileData.profile_picture,
+        }"
         @profile-updated="onProfileUpdate"
         @cancel-edit="
           isEditing = false;
@@ -155,7 +160,7 @@ onMounted(fetchProfile);
     </div>
 
     <div v-else>
-      <p>Could not load profile data.</p>
+      <p>Could not load profile data, or you are not logged in.</p>
     </div>
   </div>
 </template>
@@ -187,19 +192,30 @@ onMounted(fetchProfile);
   margin-bottom: 0.8rem;
 }
 .bio-text {
-  white-space: pre-wrap; /* Respect line breaks in bio */
+  white-space: pre-wrap;
   background-color: var(--color-background-soft);
   padding: 0.8rem;
   border-radius: 4px;
   border: 1px solid var(--color-border);
+  min-height: 40px;
 }
-.artist-link {
+
+.artist-section,
+.artist-create-section {
   margin-top: 1.5rem;
   padding-top: 1rem;
   border-top: 1px solid var(--color-border);
 }
-.edit-button,
-.profile-page button {
+.artist-link p {
+  margin-bottom: 1rem;
+}
+
+.action-button {
+  margin-top: 1rem;
+  margin-right: 0.5rem;
+  padding: 0.6em 1.2em;
+}
+.edit-button {
   margin-top: 1.5rem;
 }
 .error-message {
