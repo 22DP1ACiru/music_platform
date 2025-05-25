@@ -81,6 +81,9 @@ const handlePlayTrack = (track: TrackInfo) => {
     title: track.title,
     audio_file: track.audio_file,
     artistName: release.value?.artist?.name,
+    releaseTitle: release.value?.title,
+    coverArtUrl: release.value?.cover_art,
+    duration: track.duration_in_seconds,
   });
 };
 
