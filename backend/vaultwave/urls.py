@@ -6,7 +6,8 @@ from rest_framework.routers import DefaultRouter
 from users.views import UserViewSet, UserProfileViewSet, RegisterView
 from music.views import (
     GenreViewSet, ArtistViewSet, ReleaseViewSet,
-    TrackViewSet, CommentViewSet, HighlightViewSet
+    TrackViewSet, CommentViewSet, HighlightViewSet,
+    stream_track_audio # <-- IMPORT THE NEW STREAM VIEW
 )
 from playlists.views import PlaylistViewSet
 
@@ -24,7 +25,7 @@ router.register(r'profiles', UserProfileViewSet, basename='userprofile')
 router.register(r'genres', GenreViewSet)
 router.register(r'artists', ArtistViewSet)
 router.register(r'releases', ReleaseViewSet, basename='release')
-router.register(r'tracks', TrackViewSet)
+router.register(r'tracks', TrackViewSet) # This handles /api/tracks/ and /api/tracks/{id}/ for CRUD
 router.register(r'comments', CommentViewSet)
 router.register(r'highlights', HighlightViewSet)
 
@@ -37,6 +38,10 @@ urlpatterns = [
     # --- Router-generated API Endpoints ---
     path('api/', include(router.urls)),
 
+    # --- Custom API Endpoints for music app ---
+    # Add the track streaming URL directly here, prefixed with 'api/'
+    path('api/tracks/<int:track_id>/stream/', stream_track_audio, name='track-stream'), # <-- ADDED HERE
+
     # --- Browsable API ---
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
 
@@ -46,7 +51,6 @@ urlpatterns = [
     path('api/token/verify/', TokenVerifyView.as_view(), name='token_verify'),
 
     # --- User Registration ---
-    # Add the registration endpoint under /api/
     path('api/register/', RegisterView.as_view(), name='register'),
 ]
 

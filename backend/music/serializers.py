@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import Genre, Artist, Release, Track, Comment, Highlight
+from rest_framework.reverse import reverse # Import reverse
 
 class GenreSerializer(serializers.ModelSerializer):
     class Meta:
@@ -25,11 +26,14 @@ class TrackSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False 
     )
+    stream_url = serializers.SerializerMethodField() # New field for streaming URL
 
     class Meta:
         model = Track
         fields = [
-            'id', 'title', 'track_number', 'audio_file',
+            'id', 'title', 'track_number', 
+            'audio_file', # This is the direct media URL, keep for admin/management
+            'stream_url', # This will be used by the player
             'duration_in_seconds',
             'release', 
             'release_title', 'artist_name',
@@ -37,8 +41,22 @@ class TrackSerializer(serializers.ModelSerializer):
             'genre_names', 
             'created_at'
         ]
-        read_only_fields = ['release_title', 'artist_name', 'duration_in_seconds', 'genres_data']
+        read_only_fields = [
+            'release_title', 'artist_name', 'duration_in_seconds', 
+            'genres_data', 'stream_url', 'audio_file' # Make audio_file read_only in general API output
+        ]
         # track_number is intentionally not read_only here to allow it to be set on create/update
+
+    def get_stream_url(self, obj: Track) -> str | None:
+        request = self.context.get('request')
+        if request is None or obj.pk is None: # Check obj.pk as well
+            return None
+        # 'track-stream' is the name given to the URL pattern in music/urls.py
+        try:
+            return reverse('track-stream', kwargs={'track_id': obj.pk}, request=request)
+        except Exception: # Broad exception if URL reversing fails for any reason
+            return None
+
 
     def create(self, validated_data):
         genre_names = validated_data.pop('genre_names', [])

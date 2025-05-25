@@ -8,17 +8,20 @@ import { useAuthStore } from "@/stores/auth";
 interface ArtistInfo {
   id: number;
   name: string;
-  user_id: number;
+  user_id: number; // Added to check ownership
 }
+
+// Updated TrackInfoFromApi to include stream_url and ensure audio_file is the original
 interface TrackInfoFromApi {
-  // Renamed to avoid conflict with PlayerTrackInfo
   id: number;
   title: string;
   track_number: number | null;
   duration_in_seconds: number | null;
-  audio_file: string;
+  audio_file: string; // Original direct media URL (e.g., for download link if needed)
+  stream_url: string; // URL for the streaming endpoint
   genres_data?: { id: number; name: string }[];
 }
+
 interface ReleaseDetail {
   id: number;
   title: string;
@@ -45,7 +48,11 @@ const isOwner = computed(() => {
   if (!authStore.isLoggedIn || !release.value || !authStore.authUser) {
     return false;
   }
-  return release.value.artist.user_id === authStore.authUser.id;
+  // Ensure artist and user_id exist before comparison
+  return (
+    release.value.artist &&
+    release.value.artist.user_id === authStore.authUser.id
+  );
 });
 
 const fetchReleaseDetail = async (id: string | string[]) => {
@@ -57,7 +64,7 @@ const fetchReleaseDetail = async (id: string | string[]) => {
   }
   isLoading.value = true;
   error.value = null;
-  release.value = null;
+  release.value = null; // Clear previous release data
   try {
     const response = await axios.get<ReleaseDetail>(`/releases/${releaseId}/`);
     release.value = response.data;
@@ -81,7 +88,7 @@ function mapToPlayerTrackInfo(
   return {
     id: apiTrack.id,
     title: apiTrack.title,
-    audio_file: apiTrack.audio_file,
+    audio_file: apiTrack.stream_url, // IMPORTANT: Use stream_url for playback
     artistName: releaseData.artist?.name,
     releaseTitle: releaseData.title,
     coverArtUrl: releaseData.cover_art,
@@ -104,7 +111,6 @@ const handlePlayTrack = (clickedTrack: TrackInfoFromApi) => {
     playerStore.setQueueAndPlay(allReleasePlayerTracks, clickedTrackIndex);
   } else {
     console.error("Clicked track not found in mapped release tracks.");
-    // Fallback: play just the clicked track if mapping fails to find it (should not happen)
     playerStore.playTrack(mapToPlayerTrackInfo(clickedTrack, release.value!));
   }
 };
@@ -120,13 +126,12 @@ const handlePlayAllFromRelease = () => {
   const allReleasePlayerTracks: PlayerTrackInfo[] = release.value.tracks.map(
     (apiTrack) => mapToPlayerTrackInfo(apiTrack, release.value!)
   );
-  playerStore.setQueueAndPlay(allReleasePlayerTracks, 0); // Start from the first track
+  playerStore.setQueueAndPlay(allReleasePlayerTracks, 0);
 };
 
 const handleAddTrackToQueue = (trackToAdd: TrackInfoFromApi) => {
   if (!release.value) return;
   playerStore.addTrackToQueue(mapToPlayerTrackInfo(trackToAdd, release.value));
-  // Optionally provide feedback e.g. "Track added to queue"
 };
 
 const goToEditRelease = () => {
@@ -149,11 +154,16 @@ watch(
 );
 
 const formatDuration = (totalSeconds: number | null | undefined): string => {
-  if (totalSeconds === null || totalSeconds === undefined || totalSeconds < 0) {
+  if (
+    totalSeconds === null ||
+    totalSeconds === undefined ||
+    totalSeconds < 0 ||
+    !isFinite(totalSeconds)
+  ) {
     return "--:--";
   }
   const minutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.floor(totalSeconds % 60); // Ensure seconds is an integer
+  const seconds = Math.floor(totalSeconds % 60);
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 };
 </script>
@@ -229,7 +239,8 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
                 playerStore.isPlaying,
               'is-paused':
                 playerStore.currentTrack?.id === track.id &&
-                !playerStore.isPlaying,
+                !playerStore.isPlaying &&
+                playerStore.currentTrack?.id === track.id, // Condition for paused but current
             }"
           >
             <button
@@ -384,7 +395,11 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 .track-item.is-playing,
 .track-item.is-paused {
   background-color: var(--color-background-mute);
-  font-weight: bold;
+}
+.track-item.is-playing .track-title,
+.track-item.is-paused .track-title {
+  color: var(--color-accent); /* Highlight title of current track */
+  font-weight: 600;
 }
 
 .play-icon-button {
