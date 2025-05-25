@@ -7,18 +7,14 @@ from mutagen import MutagenError
 # Define upload path functions
 def artist_pic_path(instance, filename):
     # file will be uploaded to MEDIA_ROOT/artist_pics/<artist_id>/<filename>
-    # Ensure instance.id exists. This might require saving the instance first in some cases,
-    # but Django handles it during file upload.
-    return f'artist_pics/{instance.id}/{filename}'
+    return f'artist_pics/{instance.user.id}/{filename}' # Assuming artist is saved first, or user.id is used if artist.id not yet available
 
 def cover_art_path(instance, filename):
-    # MEDIA_ROOT/cover_art/<artist_name_slug>/<album_title_slug>/<filename>
-    # Requires slugifying names - simplify path for now
-    # TODO - use slugify for artist and album names
-    return f'cover_art/{instance.artist.id}/{instance.id}/{filename}' # Simpler path using IDs
+    # MEDIA_ROOT/cover_art/<artist_id>/<release_id>/<filename>
+    return f'cover_art/{instance.artist.id}/{instance.id}/{filename}'
 
 def track_audio_path(instance, filename):
-    # MEDIA_ROOT/tracks/<artist_id>/<album_id>/<track_id>/<filename>
+    # MEDIA_ROOT/tracks/<artist_id>/<release_id>/<track_id>/<filename>
     return f'tracks/{instance.release.artist.id}/{instance.release.id}/{instance.id}/{filename}'
 
 class Genre(models.Model):
@@ -29,10 +25,9 @@ class Genre(models.Model):
         return self.name
 
 class Artist(models.Model):
-    # Link to the User who controls this Artist profile
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE, 
+        on_delete=models.CASCADE,
         related_name='artist_profile'
     )
     name = models.CharField(max_length=200, unique=True, help_text="Artist or band name")
@@ -53,7 +48,6 @@ class Artist(models.Model):
         null=True
     )
 
-
     def __str__(self):
         return self.name
 
@@ -66,83 +60,73 @@ class Release(models.Model):
     title = models.CharField(max_length=255)
     artist = models.ForeignKey(Artist, on_delete=models.CASCADE, related_name='releases')
     release_type = models.CharField(max_length=10, choices=ReleaseType.choices, default=ReleaseType.ALBUM)
-    
-    # Release date determines visibility if in future
     release_date = models.DateTimeField(default=timezone.now)
     cover_art = models.ImageField(upload_to=cover_art_path, null=True, blank=True)
-    genre = models.ForeignKey(Genre, on_delete=models.SET_NULL, null=True, blank=True, related_name='releases')
     
-    # Explicit published flag might be useful beyond just date check
+    # Changed from ForeignKey to ManyToManyField
+    genres = models.ManyToManyField(Genre, blank=True, related_name='releases')
+    
     is_published = models.BooleanField(default=True, help_text="If unchecked, release is a draft.")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def is_visible(self):
-        """Checks if the release should be visible to regular users."""
         return self.is_published and self.release_date <= timezone.now()
 
     def __str__(self):
         return f"{self.title} ({self.get_release_type_display()}) by {self.artist.name}"
 
     class Meta:
-        ordering = ['-release_date'] # Default order: newest first
+        ordering = ['-release_date']
 
 class Track(models.Model):
     release = models.ForeignKey(Release, on_delete=models.CASCADE, related_name='tracks')
     title = models.CharField(max_length=255)
     audio_file = models.FileField(upload_to=track_audio_path)
     track_number = models.PositiveIntegerField(null=True, blank=True, help_text="Order within the release")
-    genre = models.ForeignKey(Genre, on_delete=models.SET_NULL, null=True, blank=True, related_name='tracks')
+    
+    # Changed from ForeignKey to ManyToManyField
+    genres = models.ManyToManyField(Genre, blank=True, related_name='tracks')
+    
     duration_in_seconds = models.PositiveIntegerField(null=True, blank=True, help_text="Duration in seconds (auto-populated)")
     created_at = models.DateTimeField(auto_now_add=True)
 
-    def __str__(self):  
-        return f"{self.title} from {self.release.title} by {self.release.artist.name})"
+    def __str__(self):
+        return f"{self.title} (from {self.release.title} by {self.release.artist.name})"
 
     def save(self, *args, **kwargs):
-        """Override save to calculate duration if audio file exists and duration is not set."""
         get_duration = False
-        if self.pk: # Check if instance already exists (for updates)
+        if self.pk:
             try:
                 old_instance = Track.objects.get(pk=self.pk)
-                # Check if file changed or duration is missing
                 if old_instance.audio_file != self.audio_file or self.duration_in_seconds is None:
                     get_duration = True
             except Track.DoesNotExist:
-                get_duration = True # Should not happen if self.pk exists, but safe check
-        elif self.audio_file: # New instance with a file
+                get_duration = True
+        elif self.audio_file:
              get_duration = True
 
-        # Only calculate if needed and file exists
         if get_duration and self.audio_file:
             try:
-                # Ensure the file pointer is at the beginning if it was read before
                 self.audio_file.seek(0)
-                # Use MutagenFile which auto-detects type
                 audio = MutagenFile(self.audio_file)
                 if audio and audio.info:
-                    # Get duration in seconds and round it
                     self.duration_in_seconds = round(audio.info.length)
                     print(f"Calculated duration for {self.title}: {self.duration_in_seconds}s")
                 else:
-                     # File might be corrupted or unsupported by mutagen directly
                      self.duration_in_seconds = None
                      print(f"Could not get audio info for {self.title}")
-                # Reset pointer again after reading
                 self.audio_file.seek(0)
             except MutagenError as e:
-                # Handle cases where mutagen fails to read the file
                 print(f"Mutagen error reading {self.title}: {e}")
                 self.duration_in_seconds = None
             except Exception as e:
-                # Catch other potential file reading errors
                 print(f"Error reading audio file {self.title}: {e}")
                 self.duration_in_seconds = None
 
         super().save(*args, **kwargs)
 
     class Meta:
-         # Order by release, then track number
          ordering = ['release', 'track_number']
 
 class Comment(models.Model):
@@ -158,12 +142,11 @@ class Comment(models.Model):
         return f"Comment by {self.user.username} on {self.track.title}{ts}"
 
     class Meta:
-        ordering = ['created_at'] # Show oldest comments first
+        ordering = ['created_at']
 
 class Highlight(models.Model):
     release = models.ForeignKey(Release, on_delete=models.CASCADE, related_name='highlights')
-    # Limit choices in admin forms to staff users
-    highlighted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='+') # '+' prevents reverse relation
+    highlighted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='+')
     highlighted_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
     order = models.PositiveIntegerField(default=0, help_text="Optional ordering for highlights display")
@@ -172,4 +155,4 @@ class Highlight(models.Model):
         return f"Highlight for {self.release.title}"
 
     class Meta:
-        ordering = ['-highlighted_at'] # Show newest highlights first by default
+        ordering = ['-highlighted_at']

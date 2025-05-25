@@ -26,14 +26,14 @@ class ArtistViewSet(viewsets.ModelViewSet):
         """Link the new artist to the requesting user and prevent duplicates."""
         if Artist.objects.filter(user=self.request.user).exists():
              raise ValidationError("You already have an associated artist profile.")
-        # Save the instance, automatically linking the user from the request context
         serializer.save(user=self.request.user)
 
 class ReleaseViewSet(viewsets.ModelViewSet):
     serializer_class = ReleaseSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['artist', 'genre', 'release_type'] 
+    # Updated filterset_fields, 'genre' will now filter based on the ManyToMany 'genres' field
+    filterset_fields = ['artist', 'genres', 'release_type'] 
 
     def get_queryset(self):
         """
@@ -43,9 +43,9 @@ class ReleaseViewSet(viewsets.ModelViewSet):
         - All releases to admins.
         """
         user = self.request.user
-        base_queryset = Release.objects.select_related('artist', 'genre').prefetch_related('tracks')
+        # Updated to prefetch_related for 'genres' M2M field
+        base_queryset = Release.objects.select_related('artist').prefetch_related('tracks', 'genres')
 
-        # Publicly visible releases
         visible_releases = base_queryset.filter(
             is_published=True,
             release_date__lte=timezone.now()
@@ -53,67 +53,47 @@ class ReleaseViewSet(viewsets.ModelViewSet):
 
         if user.is_authenticated:
             try:
-                # Get the Artist profile associated with the requesting user
                 user_artist = Artist.objects.get(user=user)
-
-                # Releases owned by the user (published or not, future or past)
                 owned_releases = base_queryset.filter(artist=user_artist)
-
-                # Combine visible releases OR owned releases, removing duplicates
-                # Using Q objects for OR condition
                 from django.db.models import Q
                 queryset = (visible_releases | owned_releases).distinct()
-
             except Artist.DoesNotExist:
-                # User is logged in but doesn't have an associated Artist profile
-                # They only see the publicly visible releases
                 queryset = visible_releases
         else:
-            # Anonymous users only see publicly visible releases
             queryset = visible_releases
 
-        if user.is_staff: # staff should see all
+        if user.is_staff:
             return base_queryset.all().order_by('-release_date')
-
 
         return queryset.order_by('-release_date')
 
-
     def perform_create(self, serializer):
-        """
-        Ensure the release is associated with the user's Artist profile.
-        """
         try:
             artist = Artist.objects.get(user=self.request.user)
-            serializer.save(artist=artist)
+            serializer.save(artist=artist) # genre_names is handled in serializer.create
         except Artist.DoesNotExist:
-            # Handle error: User needs an Artist profile to create a release
             raise PermissionDenied("You must have an artist profile to create releases.")
 
 class TrackViewSet(viewsets.ModelViewSet):
-    queryset = Track.objects.select_related('release__artist', 'genre') # Optimization
+    # Updated to prefetch_related for 'genres' M2M field
+    queryset = Track.objects.select_related('release__artist').prefetch_related('genres')
     serializer_class = TrackSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     # Add filtering by release later (e.g., /api/releases/1/tracks/)
+    # If you want to filter tracks by genres directly on this ViewSet:
+    filterset_fields = ['release', 'genres'] # Added genres for filtering
 
 class CommentViewSet(viewsets.ModelViewSet):
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
 
-    # Override perform_create to automatically set the user
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
-    # Consider adding filtering by track later
-
-class HighlightViewSet(viewsets.ReadOnlyModelViewSet): # Read-only for regular users
-    # Only show active highlights, ordered appropriately
+class HighlightViewSet(viewsets.ReadOnlyModelViewSet): 
     queryset = Highlight.objects.filter(is_active=True).select_related(
-        'release__artist' # Optimization
-    ).order_by('order', '-highlighted_at')
+        'release__artist' 
+    ).prefetch_related('release__genres').order_by('order', '-highlighted_at') # Also prefetch genres for highlighted releases
     serializer_class = HighlightSerializer
-    # Anyone can view highlights
     permission_classes = [permissions.AllowAny]
-    # Admins would need a separate ViewSet or different permissions
-    # on ModelViewSet if they need to create/edit highlights via API.
