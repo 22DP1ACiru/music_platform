@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, computed, nextTick } from "vue";
+import { ref, watch, onMounted, computed, nextTick, onUnmounted } from "vue";
 import { usePlayerStore } from "@/stores/player";
+import PlayerQueue from "./PlayerQueue.vue";
 
 const playerStore = usePlayerStore();
 const audioPlayer = ref<HTMLAudioElement | null>(null);
-const isSeeking = ref(false);
-const userHasInteracted = ref(false); // To track if user has interacted for autoplay policies
+const isSeeking = ref(false); // True when user is dragging the progress bar
+const userHasInteracted = ref(false);
+const showQueuePopup = ref(false);
+
+const titleContainerRef = ref<HTMLElement | null>(null);
+const titleTextRef = ref<HTMLElement | null>(null);
+const artistContainerRef = ref<HTMLElement | null>(null);
+const artistTextRef = ref<HTMLElement | null>(null);
+
+const isTitleOverflowing = ref(false);
+const isArtistOverflowing = ref(false);
 
 const formattedCurrentTime = computed(() =>
   formatTime(playerStore.currentTime)
@@ -19,6 +29,23 @@ function formatTime(secs: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+const checkTextOverflow = () => {
+  nextTick(() => {
+    if (titleContainerRef.value && titleTextRef.value) {
+      isTitleOverflowing.value =
+        titleTextRef.value.scrollWidth > titleContainerRef.value.clientWidth;
+    } else {
+      isTitleOverflowing.value = false;
+    }
+    if (artistContainerRef.value && artistTextRef.value) {
+      isArtistOverflowing.value =
+        artistTextRef.value.scrollWidth > artistContainerRef.value.clientWidth;
+    } else {
+      isArtistOverflowing.value = false;
+    }
+  });
+};
+
 const tryToPlayAudio = () => {
   if (!audioPlayer.value || !audioPlayer.value.src) {
     console.log(
@@ -28,9 +55,8 @@ const tryToPlayAudio = () => {
   }
 
   if (playerStore.isPlaying && audioPlayer.value.paused) {
-    // readyState 3 (HAVE_FUTURE_DATA) or 4 (HAVE_ENOUGH_DATA) is generally good.
-    // Some recommend waiting for HAVE_ENOUGH_DATA (4) for robust play.
     if (audioPlayer.value.readyState >= 3) {
+      // HAVE_FUTURE_DATA or more
       console.log(
         `AudioPlayer: tryToPlayAudio - Player ready (state ${audioPlayer.value.readyState}). Attempting play().`
       );
@@ -38,36 +64,27 @@ const tryToPlayAudio = () => {
       if (playPromise !== undefined) {
         playPromise.catch((error) => {
           console.warn("AudioPlayer: tryToPlayAudio - Playback failed:", error);
-          // If play is rejected, we might need to update store state to paused
-          // if (playerStore.isPlaying) playerStore.pauseTrack();
         });
       }
     } else {
       console.log(
-        `AudioPlayer: tryToPlayAudio - Player not ready enough (state ${audioPlayer.value.readyState}). Play will be attempted on 'canplay'.`
+        `AudioPlayer: tryToPlayAudio - Player not ready enough (state ${audioPlayer.value.readyState}). Play will be attempted on 'canplay' or other readiness events.`
       );
-      // If not ready, 'canplay' event should eventually trigger this function again.
-      // If src just changed, audioPlayer.value.load() was called, which leads to 'canplay'.
+      // It might be beneficial to call audioPlayer.value.load() here if src is set but not ready,
+      // though the src watcher usually handles load().
     }
   } else if (!playerStore.isPlaying && !audioPlayer.value.paused) {
     console.log(
       "AudioPlayer: tryToPlayAudio - Store wants pause, player is playing. Pausing."
     );
     audioPlayer.value.pause();
-  } else {
-    // console.log(`AudioPlayer: tryToPlayAudio - Conditions not met. isPlaying: ${playerStore.isPlaying}, paused: ${audioPlayer.value.paused}, readyState: ${audioPlayer.value.readyState}`);
   }
 };
 
 const onLoadedMetadata = () => {
   if (audioPlayer.value) {
-    console.log(
-      "AudioPlayer: LoadedMetadata event. Duration:",
-      audioPlayer.value.duration,
-      "ReadyState:",
-      audioPlayer.value.readyState
-    );
     playerStore.setDuration(audioPlayer.value.duration);
+    checkTextOverflow(); // Check overflow after metadata, track info is now definite
   }
 };
 
@@ -77,13 +94,13 @@ const onCanPlay = () => {
       "AudioPlayer: CanPlay event. ReadyState:",
       audioPlayer.value.readyState
     );
-    // This is a key moment to try playing if the store expects it.
-    tryToPlayAudio();
+    tryToPlayAudio(); // Attempt to play if store says it should be playing
   }
 };
 
 const onTimeUpdate = () => {
   if (audioPlayer.value && !isSeeking.value) {
+    // Only update store if user is not actively dragging the progress bar
     playerStore.setCurrentTime(audioPlayer.value.currentTime);
   }
 };
@@ -100,62 +117,78 @@ const onVolumeChange = () => {
 };
 
 const onEnded = () => {
-  console.log("AudioPlayer: Ended event");
   playerStore.handleTrackEnd();
 };
 
-// Watchers
+// --- Watchers ---
+
 watch(
   () => playerStore.currentTrackUrl,
   (newUrl, oldUrl) => {
     if (audioPlayer.value && newUrl) {
-      console.log(
-        `AudioPlayer: currentTrackUrl watcher. New: ${newUrl}, Old: ${oldUrl}, Player src: ${audioPlayer.value.src}`
-      );
-      // If the new URL is genuinely different from the player's current source
+      // Only change src and load if the URL is actually different
       if (newUrl !== audioPlayer.value.src) {
-        audioPlayer.value.src = newUrl;
-        playerStore.resetTimes();
         console.log(
-          "AudioPlayer: currentTrackUrl watcher - Calling load() for new track URL."
+          `AudioPlayer: currentTrackUrl changed. New: ${newUrl}. Loading.`
         );
-        audioPlayer.value.load(); // This will trigger 'canplay' where tryToPlayAudio is called
-      }
-      // This handles "repeat one" or if store state changes to play for the *same* track
-      // and it's currently paused.
-      else if (
+        audioPlayer.value.src = newUrl;
+        playerStore.resetTimes(); // Reset store times for the new track
+        audioPlayer.value.load(); // Important to load the new source
+      } else if (
         playerStore.isPlaying &&
         audioPlayer.value.paused &&
         newUrl === oldUrl
       ) {
+        // This handles "repeat one" or if store state changes to play for the *same* track
         console.log(
-          "AudioPlayer: currentTrackUrl watcher - URL same, but store wants play (e.g., repeat one)."
+          "AudioPlayer: currentTrackUrl same, but store wants play (e.g., repeat one)."
         );
         tryToPlayAudio();
       }
     } else if (audioPlayer.value && !newUrl) {
-      console.log("AudioPlayer: currentTrackUrl watcher - URL cleared.");
+      console.log(
+        "AudioPlayer: currentTrackUrl cleared. Pausing and resetting src."
+      );
       audioPlayer.value.pause();
       audioPlayer.value.src = "";
       playerStore.resetTimes();
     }
+    checkTextOverflow(); // Check overflow when track potentially changes
   },
-  { flush: "post" } // flush: 'post' to ensure DOM updates (like audio src) are processed before watcher logic if needed.
+  { flush: "post" } // Ensure DOM updates before watcher logic if needed for src
 );
 
 watch(
   () => playerStore.isPlaying,
-  (shouldPlay, wasPlaying) => {
+  (shouldPlay) => {
+    // `shouldPlay` is the new value of playerStore.isPlaying
     if (!audioPlayer.value) return;
     console.log(
-      `AudioPlayer: isPlaying watcher. Store wants play: ${shouldPlay}. Player currently paused: ${audioPlayer.value.paused}. WasPlaying: ${wasPlaying}`
+      `AudioPlayer: isPlaying watcher. Store wants play: ${shouldPlay}. Player currently paused: ${audioPlayer.value.paused}.`
     );
-
-    // Call tryToPlayAudio which centralizes play/pause logic based on readiness and store state.
-    // Using nextTick to ensure other state changes (like src) have a chance to settle.
+    // Using nextTick to allow other state changes (like src or currentTime from another watcher) to settle
     nextTick(() => {
       tryToPlayAudio();
     });
+  }
+);
+
+// Watch for programmatic changes to currentTime from the store (e.g., replay, seek via store)
+watch(
+  () => playerStore.currentTime,
+  (newStoreTime) => {
+    if (audioPlayer.value && !isSeeking.value) {
+      // If the audio element's time is significantly different from the store's time, update it.
+      // This handles cases where the store dictates a new time (e.g., replay from 0).
+      // A small threshold (e.g., 0.5s) prevents fighting over minor discrepancies from timeupdate events.
+      const delta = Math.abs(audioPlayer.value.currentTime - newStoreTime);
+      if (delta > 0.5) {
+        console.log(
+          `AudioPlayer: Store currentTime changed to ${newStoreTime}. Audio element currentTime is ${audioPlayer.value.currentTime}. Seeking audio element.`
+        );
+        audioPlayer.value.currentTime = newStoreTime;
+      }
+    }
   }
 );
 
@@ -177,12 +210,22 @@ watch(
   }
 );
 
+watch(
+  () => playerStore.currentTrackDisplayInfo,
+  () => {
+    checkTextOverflow();
+  },
+  { deep: true, immediate: true } // immediate true to check on initial load
+);
+
 const handleProgressSeek = (event: Event) => {
   if (audioPlayer.value && playerStore.duration > 0) {
     const target = event.target as HTMLInputElement;
     const newTime = parseFloat(target.value);
+    // Set the audio element's time directly first for responsiveness
     audioPlayer.value.currentTime = newTime;
-    // For immediate visual feedback of the time display during drag:
+    // Then update the store. The store watcher for currentTime won't fight back
+    // because `isSeeking` will be true (or delta won't be large enough if mousedown/up is quick).
     playerStore.setCurrentTime(newTime);
   }
 };
@@ -193,6 +236,7 @@ const onSeekMouseDown = () => {
 const onSeekMouseUp = () => {
   isSeeking.value = false;
   // After user finishes seeking, if the store indicates it should be playing, ensure it is.
+  // This is because a mousedown might pause playback if browser policies are strict.
   if (playerStore.isPlaying && audioPlayer.value?.paused) {
     tryToPlayAudio();
   }
@@ -201,7 +245,6 @@ const onSeekMouseUp = () => {
 const handleTogglePlayPauseClick = () => {
   if (!userHasInteracted.value) userHasInteracted.value = true;
   playerStore.togglePlayPause();
-  // The isPlaying watcher will call tryToPlayAudio
 };
 
 const handleVolumeSeek = (event: Event) => {
@@ -209,47 +252,73 @@ const handleVolumeSeek = (event: Event) => {
     if (!userHasInteracted.value) userHasInteracted.value = true;
     const target = event.target as HTMLInputElement;
     const newVolume = parseFloat(target.value);
-    playerStore.setVolume(newVolume);
+    playerStore.setVolume(newVolume); // This will trigger the volume watcher
     if (newVolume > 0 && playerStore.isMuted) {
-      playerStore.setMuted(false);
+      playerStore.setMuted(false); // Unmute if volume is turned up
     }
   }
 };
+
+const toggleQueuePopup = () => {
+  showQueuePopup.value = !showQueuePopup.value;
+};
+
+let resizeObserver: ResizeObserver | null = null;
 
 onMounted(() => {
   if (audioPlayer.value) {
     audioPlayer.value.volume = playerStore.volume;
     audioPlayer.value.muted = playerStore.isMuted;
 
+    // If store has a track on mount, set it up.
     if (playerStore.currentTrackUrl) {
-      console.log(
-        "AudioPlayer: onMounted - Store has currentTrackUrl:",
-        playerStore.currentTrackUrl,
-        "Player src is:",
-        audioPlayer.value.src
-      );
-      // If the player's src isn't already what the store thinks it should be, set it.
-      // The `currentTrackUrl` watcher will handle calling `load()`.
-      if (audioPlayer.value.src !== playerStore.currentTrackUrl) {
+      const currentAudioSrc = audioPlayer.value.src.endsWith(
+        playerStore.currentTrackUrl
+      )
+        ? playerStore.currentTrackUrl
+        : audioPlayer.value.src; // Handle full URL vs relative
+
+      if (currentAudioSrc !== playerStore.currentTrackUrl) {
+        console.log(
+          "AudioPlayer: onMounted - Setting initial src from store:",
+          playerStore.currentTrackUrl
+        );
         audioPlayer.value.src = playerStore.currentTrackUrl;
-        // Explicitly load if src was empty, otherwise watcher will handle it.
-        // This is mainly for the case where component mounts and store already has a track.
-        if (!audioPlayer.value.src || oldSrc === "") {
-          // oldSrc would be empty string initially
-          console.log(
-            "AudioPlayer: onMounted - Player src was empty or different, explicitly loading."
-          );
+        // If src was set, and store indicates it should be playing, tryToPlayAudio will be called by isPlaying watcher
+        // or by canplay event. For robustness, explicit load if src was empty:
+        if (!currentAudioSrc) {
+          // if audioPlayer.value.src was initially ""
           audioPlayer.value.load();
         }
       }
-      // tryToPlayAudio() will be called from `onCanPlay` or `isPlaying` watcher.
+      // If store has a specific currentTime (e.g. persisted session), set it
+      if (
+        playerStore.currentTime > 0 &&
+        playerStore.currentTime < playerStore.duration
+      ) {
+        audioPlayer.value.currentTime = playerStore.currentTime;
+      }
     }
-    console.log(
-      "AudioPlayer.vue mounted. Initial volume:",
-      audioPlayer.value.volume,
-      "Muted:",
-      audioPlayer.value.muted
-    );
+  }
+  checkTextOverflow();
+
+  // Setup ResizeObserver for marquee effect
+  if (titleContainerRef.value && artistContainerRef.value) {
+    resizeObserver = new ResizeObserver(checkTextOverflow);
+    if (titleContainerRef.value)
+      resizeObserver.observe(titleContainerRef.value);
+    if (artistContainerRef.value)
+      resizeObserver.observe(artistContainerRef.value);
+  }
+});
+
+onUnmounted(() => {
+  if (resizeObserver) {
+    if (titleContainerRef.value)
+      resizeObserver.unobserve(titleContainerRef.value);
+    if (artistContainerRef.value)
+      resizeObserver.unobserve(artistContainerRef.value);
+    resizeObserver.disconnect();
   }
 });
 
@@ -263,10 +332,17 @@ const repeatModeIcon = computed(() => {
       return "➡️";
   }
 });
+
+const queueButtonIcon = computed(() => {
+  return showQueuePopup.value ? "✕" : "☰";
+});
 </script>
 
 <template>
-  <div class="audio-player-bar" v-if="playerStore.currentTrack">
+  <div
+    class="audio-player-bar"
+    v-if="playerStore.currentTrack || playerStore.queue.length > 0"
+  >
     <audio
       ref="audioPlayer"
       @loadedmetadata="onLoadedMetadata"
@@ -275,10 +351,14 @@ const repeatModeIcon = computed(() => {
       @volumechange="onVolumeChange"
       @ended="onEnded"
       @error="(e) => console.error('Audio Element Error:', (e.target as HTMLAudioElement).error?.code, (e.target as HTMLAudioElement).error?.message)"
-      preload="auto"
+      preload="metadata"
     >
       Your browser does not support the audio element.
     </audio>
+    <!-- Comment moved outside or removed if not needed for clarity during dev -->
+    <!-- preload="metadata" helps get duration faster. -->
+
+    <PlayerQueue v-if="showQueuePopup" @close="showQueuePopup = false" />
 
     <div class="player-content">
       <div class="track-art-info">
@@ -290,27 +370,54 @@ const repeatModeIcon = computed(() => {
         />
         <div v-else class="cover-art-small placeholder"></div>
         <div class="track-details">
-          <span class="title">{{
-            playerStore.currentTrackDisplayInfo.title
-          }}</span>
-          <span class="artist">{{
-            playerStore.currentTrackDisplayInfo.artist
-          }}</span>
+          <div
+            class="title-container"
+            ref="titleContainerRef"
+            :class="{ marquee: isTitleOverflowing }"
+          >
+            <span class="title-text" ref="titleTextRef">{{
+              playerStore.currentTrackDisplayInfo.title
+            }}</span>
+          </div>
+          <div
+            class="artist-container"
+            ref="artistContainerRef"
+            :class="{ marquee: isArtistOverflowing }"
+          >
+            <span class="artist-text" ref="artistTextRef">{{
+              playerStore.currentTrackDisplayInfo.artist
+            }}</span>
+          </div>
         </div>
       </div>
 
       <div class="player-controls-main">
-        <button @click="playerStore.playPreviousInQueue()" title="Previous">
+        <button
+          @click="playerStore.playPreviousInQueue()"
+          title="Previous"
+          :disabled="
+            playerStore.queue.length === 0 && !playerStore.currentTrack
+          "
+        >
           ⏮
         </button>
         <button
           @click="handleTogglePlayPauseClick"
           class="play-pause-btn"
           :title="playerStore.isPlaying ? 'Pause' : 'Play'"
+          :disabled="!playerStore.currentTrack"
         >
           {{ playerStore.isPlaying ? "❚❚" : "►" }}
         </button>
-        <button @click="playerStore.playNextInQueue()" title="Next">⏭</button>
+        <button
+          @click="playerStore.playNextInQueue()"
+          title="Next"
+          :disabled="
+            playerStore.queue.length === 0 && !playerStore.currentTrack
+          "
+        >
+          ⏭
+        </button>
       </div>
 
       <div class="progress-section">
@@ -327,7 +434,7 @@ const repeatModeIcon = computed(() => {
           @change="handleProgressSeek"
           @mousedown="onSeekMouseDown"
           @mouseup="onSeekMouseUp"
-          :disabled="!playerStore.duration"
+          :disabled="!playerStore.duration || playerStore.duration === 0"
         />
         <span class="time-display total-time">{{ formattedDuration }}</span>
       </div>
@@ -355,6 +462,14 @@ const repeatModeIcon = computed(() => {
           class="repeat-button"
         >
           {{ repeatModeIcon }}
+        </button>
+        <button
+          @click="toggleQueuePopup"
+          :title="showQueuePopup ? 'Hide Queue' : 'Show Queue'"
+          class="queue-toggle-button"
+          :class="{ active: showQueuePopup }"
+        >
+          {{ queueButtonIcon }}
         </button>
       </div>
     </div>
@@ -397,9 +512,9 @@ const repeatModeIcon = computed(() => {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  width: 220px;
   min-width: 180px;
-  max-width: 30%;
-  flex-shrink: 1;
+  flex-shrink: 0;
 }
 
 .cover-art-small {
@@ -419,21 +534,49 @@ const repeatModeIcon = computed(() => {
   flex-direction: column;
   line-height: 1.3;
   overflow: hidden;
-  white-space: nowrap;
+  width: 100%;
 }
-.track-details .title,
-.track-details .artist {
-  white-space: nowrap;
+
+.title-container,
+.artist-container {
+  width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.track-details .title {
+
+.title-text,
+.artist-text {
+  display: inline-block;
+  white-space: nowrap;
+}
+.track-details .title-text {
   font-weight: 500;
   color: var(--c-player-title, #000);
 }
-.track-details .artist {
+.track-details .artist-text {
   font-size: 0.85em;
   color: var(--c-player-artist, #555);
+}
+
+.marquee .title-text,
+.marquee .artist-text {
+  animation: marquee-scroll 10s linear infinite;
+  padding-left: 100%;
+  will-change: transform;
+}
+
+@keyframes marquee-scroll {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+.marquee:hover .title-text,
+.marquee:hover .artist-text {
+  animation-play-state: paused;
 }
 
 .player-controls-main {
@@ -449,9 +592,14 @@ const repeatModeIcon = computed(() => {
   cursor: pointer;
   padding: 0.3em;
 }
-.player-controls-main button:hover {
+.player-controls-main button:hover:not(:disabled) {
   color: var(--c-player-controls-main-icon-hover, #007bff);
 }
+.player-controls-main button:disabled {
+  color: var(--c-player-controls-disabled, #aaa);
+  cursor: not-allowed;
+}
+
 .play-pause-btn {
   font-size: 1.8rem !important;
   width: 40px;
@@ -461,7 +609,7 @@ const repeatModeIcon = computed(() => {
   justify-content: center;
   border-radius: 50%;
 }
-.play-pause-btn:hover {
+.play-pause-btn:hover:not(:disabled) {
   background-color: var(--c-playbtn-hover-bg, #e9e9e9);
 }
 
@@ -506,10 +654,15 @@ const repeatModeIcon = computed(() => {
 .progress-bar:disabled::-webkit-slider-thumb {
   background: var(--c-progress-thumb-disabled-bg, #999);
   border-color: var(--c-progress-thumb-disabled-border, #ccc);
+  cursor: not-allowed;
 }
 .progress-bar:disabled::-moz-range-thumb {
   background: var(--c-progress-thumb-disabled-bg, #999);
   border-color: var(--c-progress-thumb-disabled-border, #ccc);
+  cursor: not-allowed;
+}
+.progress-bar:disabled {
+  cursor: not-allowed;
 }
 
 .time-display {
@@ -531,13 +684,19 @@ const repeatModeIcon = computed(() => {
   font-size: 1.1rem;
   cursor: pointer;
   padding: 0.3em;
+  min-width: 28px;
+  text-align: center;
 }
 .player-controls-side button:hover {
   color: var(--c-player-controls-side-icon-hover, #007bff);
 }
-.repeat-button {
+.repeat-button,
+.queue-toggle-button {
   min-width: 2em;
   text-align: center;
+}
+.queue-toggle-button.active {
+  color: var(--c-player-controls-side-icon-hover, #007bff);
 }
 
 .volume-slider {
@@ -568,25 +727,13 @@ const repeatModeIcon = computed(() => {
 }
 .volume-slider:disabled::-webkit-slider-thumb {
   background: var(--c-volume-thumb-disabled-bg, #999);
+  cursor: not-allowed;
 }
 .volume-slider:disabled::-moz-range-thumb {
   background: var(--c-volume-thumb-disabled-bg, #999);
+  cursor: not-allowed;
 }
-
-/*
-CSS Custom Properties for Theming (define these in your global styles, e.g., base.css or main.css)
-(Make sure these are defined in your actual global CSS for the player to look correct)
-:root { 
-  --c-player-bg: #f8f9fa; 
-  --c-player-border: #dee2e6;
-  ... (rest of the variables) ...
+.volume-slider:disabled {
+  cursor: not-allowed;
 }
-@media (prefers-color-scheme: dark) {
-  :root { 
-    --c-player-bg: #212529;
-    --c-player-border: #343a40;
-    ... (rest of the variables) ...
-  }
-}
-*/
 </style>
