@@ -1,3 +1,4 @@
+// frontend/src/components/Navbar.vue
 <script setup lang="ts">
 import { RouterLink, useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
@@ -20,7 +21,10 @@ const handleLogout = async () => {
       <RouterLink v-if="authStore.isLoggedIn" to="/library"
         >My Library</RouterLink
       >
-      <!-- New Link -->
+      <RouterLink v-if="authStore.isLoggedIn" to="/orders"
+        >My Orders</RouterLink
+      >
+      <!-- ADDED THIS LINK -->
       <!-- <RouterLink to="/about">About</RouterLink> -->
 
       <template v-if="!authStore.isLoggedIn">

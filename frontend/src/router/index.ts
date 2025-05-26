@@ -1,3 +1,4 @@
+// frontend/src/router/index.ts
 import { createRouter, createWebHistory } from "vue-router";
 import HomeView from "../views/HomeView.vue";
 import { useAuthStore } from "@/stores/auth";
@@ -71,6 +72,12 @@ const router = createRouter({
       path: "/library",
       name: "library",
       component: () => import("../views/LibraryView.vue"),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/orders",
+      name: "order-history",
+      component: () => import("../views/OrderHistoryView.vue"),
       meta: { requiresAuth: true },
     },
   ],
