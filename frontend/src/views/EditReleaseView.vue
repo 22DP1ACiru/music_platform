@@ -1,37 +1,42 @@
+// frontend/src/views/EditReleaseView.vue
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import axios from "axios";
 import ReleaseForm, {
   type ReleaseFormData as FormComponentState,
-  type TrackFormData as FormTrackData,
 } from "@/components/ReleaseForm.vue";
 
-// Interface for API response when fetching existing release
 interface ApiReleaseTrack {
   id: number;
   title: string;
   track_number: number | null;
-  audio_file: string; // URL
+  audio_file: string;
   genres_data?: { id: number; name: string }[];
 }
 interface ApiReleaseData {
   id: number;
   title: string;
   release_type: "ALBUM" | "EP" | "SINGLE";
-  release_date: string; // ISO string
+  release_date: string;
   cover_art: string | null;
   genres_data: { id: number; name: string }[];
   is_published: boolean;
   tracks: ApiReleaseTrack[];
+  // New fields from backend
+  download_file: string | null; // URL of existing download file
+  pricing_model: "FREE" | "PAID" | "NYP";
+  price: string | null; // Backend sends Decimal as string
+  currency: string | null;
+  minimum_price_nyp: string | null; // Backend sends Decimal as string
 }
 
 const router = useRouter();
 const route = useRoute();
 
 const initialReleaseData = ref<FormComponentState | null>(null);
-const isLoadingData = ref(true); // For fetching initial data
-const isSubmittingForm = ref(false); // For form submission loading state
+const isLoadingData = ref(true);
+const isSubmittingForm = ref(false);
 const error = ref<string | null>(null);
 
 const fetchReleaseForEdit = async (releaseId: string) => {
@@ -56,11 +61,11 @@ const fetchReleaseForEdit = async (releaseId: string) => {
         .toString()
         .padStart(2, "0")}`,
       cover_art_url: apiData.cover_art,
-      new_cover_art_file: undefined, // No new file initially
+      new_cover_art_file: undefined,
       genre_names: apiData.genres_data.map((g) => g.name),
       is_published: apiData.is_published,
       tracks: apiData.tracks.map((apiTrack) => ({
-        id: apiTrack.id, // DB ID
+        id: apiTrack.id,
         _originalId: apiTrack.id,
         title: apiTrack.title,
         track_number: apiTrack.track_number,
@@ -72,6 +77,16 @@ const fetchReleaseForEdit = async (releaseId: string) => {
         _isNew: false,
         _isRemoved: false,
       })),
+      // Populate new shop fields
+      download_file_url: apiData.download_file,
+      new_download_file_object: undefined,
+      pricing_model: apiData.pricing_model,
+      price: apiData.price !== null ? parseFloat(apiData.price) : null, // Convert string to number
+      currency: apiData.currency,
+      minimum_price_nyp:
+        apiData.minimum_price_nyp !== null
+          ? parseFloat(apiData.minimum_price_nyp)
+          : null, // Convert
     };
   } catch (err: any) {
     console.error("EditReleaseView: Failed to fetch release data:", err);
@@ -115,19 +130,64 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
       "cover_art",
       submittedFormData.new_cover_art_file
     );
-  }
-  // To clear cover art, backend must support empty string or specific flag.
-  // If new_cover_art_file is undefined AND cover_art_url is null (after user interaction), it implies removal.
-  else if (
+  } else if (
     !submittedFormData.new_cover_art_file &&
     !submittedFormData.cover_art_url
   ) {
-    releaseUpdatePayload.append("cover_art", ""); // Signal to clear
+    releaseUpdatePayload.append("cover_art", "");
   }
 
   submittedFormData.genre_names.forEach((name) =>
     releaseUpdatePayload.append("genre_names", name)
   );
+
+  // Add/update shop fields
+  if (submittedFormData.new_download_file_object) {
+    releaseUpdatePayload.append(
+      "download_file",
+      submittedFormData.new_download_file_object
+    );
+  } else if (
+    !submittedFormData.new_download_file_object &&
+    !submittedFormData.download_file_url // If new is not set AND existing URL is cleared
+  ) {
+    releaseUpdatePayload.append("download_file", ""); // Signal to clear
+  }
+
+  releaseUpdatePayload.append("pricing_model", submittedFormData.pricing_model);
+
+  if (submittedFormData.pricing_model === "PAID") {
+    if (
+      submittedFormData.price !== null &&
+      submittedFormData.price !== undefined
+    ) {
+      releaseUpdatePayload.append("price", submittedFormData.price.toString());
+    }
+    if (submittedFormData.currency) {
+      releaseUpdatePayload.append("currency", submittedFormData.currency);
+    }
+  } else {
+    // For FREE or NYP, explicitly send null for price if it was previously set for PAID
+    releaseUpdatePayload.append("price", "");
+  }
+
+  if (submittedFormData.pricing_model === "NYP") {
+    if (
+      submittedFormData.minimum_price_nyp !== null &&
+      submittedFormData.minimum_price_nyp !== undefined
+    ) {
+      releaseUpdatePayload.append(
+        "minimum_price_nyp",
+        submittedFormData.minimum_price_nyp.toString()
+      );
+    }
+    // Also send currency for NYP
+    if (submittedFormData.currency) {
+      releaseUpdatePayload.append("currency", submittedFormData.currency);
+    }
+  } else {
+    releaseUpdatePayload.append("minimum_price_nyp", "");
+  }
 
   try {
     await axios.patch(
@@ -176,9 +236,14 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
           if (track.audio_file_object) {
             updateTrackPayload.append("audio_file", track.audio_file_object);
           }
+
+          // Send genre_names. If track.genre_names is empty, this loop does nothing.
+          // This means 'genre_names' might not be part of FormData if the list is empty.
           track.genre_names.forEach((name) =>
             updateTrackPayload.append("genre_names", name)
           );
+          // The problematic block that explicitly sent genre_names="" if the array was empty has been removed.
+
           await axios.patch(
             `/tracks/${track._originalId}/`,
             updateTrackPayload,
@@ -291,7 +356,6 @@ watch(
 
 <style scoped>
 .view-container {
-  /* Common styling for view pages */
   max-width: 850px;
   margin: 2rem auto;
   padding: 1.5rem 2rem;

@@ -9,6 +9,7 @@ import os # For file deletion (though utility handles it)
 from django.db.models.signals import pre_save, post_delete # For file deletion signals
 from django.dispatch import receiver # For file deletion signals
 import logging # Import Python's logging module
+from decimal import Decimal # For default price
 
 # Import from the new utility module
 from vaultwave.utils import (
@@ -16,6 +17,9 @@ from vaultwave.utils import (
     delete_file_on_instance_delete,
     validate_image_not_gif_utility
 )
+# Import CURRENCY_CHOICES from the new constants.py
+from vaultwave.constants import CURRENCY_CHOICES
+
 
 # Get an instance of a logger
 logger = logging.getLogger(__name__) # Use __name__ for module-specific logger
@@ -33,12 +37,14 @@ def cover_art_path(instance, filename):
 def track_audio_path(instance, filename):
     artist_id_for_path = instance.release.artist.id if instance.release and instance.release.artist else "unknown_artist"
     release_id_for_path = instance.release.id if instance.release and instance.release.id else "unknown_release"
-    # The track_id_for_path will use "new_track_temp_id" if the instance.id is not yet set.
-    # Django's file handling should manage renaming the file/path if the ID-dependent part changes after the initial save.
     track_id_for_path = instance.id if instance.id else "new_track_temp_id"
     return f'tracks/{artist_id_for_path}/{release_id_for_path}/{track_id_for_path}/{filename}'
 
-# Removed local validate_image_not_gif, will use validate_image_not_gif_utility directly in fields
+def release_download_path(instance, filename):
+    artist_id_for_path = instance.artist.id if instance.artist else "unknown_artist"
+    release_id_for_path = instance.id if instance.id else "new_release"
+    return f'release_downloads/{artist_id_for_path}/{release_id_for_path}/{filename}'
+
 
 class Genre(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -70,6 +76,11 @@ class Release(models.Model):
         EP = 'EP', 'EP'
         SINGLE = 'SINGLE', 'Single'
 
+    class PricingModel(models.TextChoices):
+        FREE = 'FREE', 'Free'
+        PAID = 'PAID', 'Paid'
+        NAME_YOUR_PRICE = 'NYP', 'Name Your Price'
+
     title = models.CharField(max_length=255)
     artist = models.ForeignKey(Artist, on_delete=models.CASCADE, related_name='releases')
     release_type = models.CharField(max_length=10, choices=ReleaseType.choices, default=ReleaseType.ALBUM)
@@ -82,8 +93,76 @@ class Release(models.Model):
     )
     genres = models.ManyToManyField(Genre, blank=True, related_name='releases')
     is_published = models.BooleanField(default=True, help_text="If unchecked, release is a draft.")
+    
+    # Shop related fields for downloads
+    download_file = models.FileField(
+        upload_to=release_download_path, 
+        null=True, 
+        blank=True, 
+        help_text="The downloadable file for the release (e.g., ZIP archive)."
+    )
+    pricing_model = models.CharField(
+        max_length=10, 
+        choices=PricingModel.choices, 
+        default=PricingModel.PAID, 
+        help_text="Choose the pricing model for downloads."
+    )
+    price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        null=True, 
+        blank=True, 
+        help_text="Price for 'Paid' model. Leave blank if not 'Paid'."
+    )
+    currency = models.CharField(
+        max_length=3, 
+        choices=CURRENCY_CHOICES, 
+        null=True, 
+        blank=True, 
+        default='USD', 
+        help_text="Currency for 'Paid' model."
+    )
+    minimum_price_nyp = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        null=True, 
+        blank=True,
+        default=Decimal('0.00'), 
+        help_text="Minimum price for 'Name Your Price' model. Can be 0."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def clean(self):
+        super().clean()
+        if self.pricing_model == self.PricingModel.PAID:
+            if self.price is None or self.price < Decimal('0.00'):
+                raise ValidationError({'price': "Price must be set and cannot be negative for 'Paid' model."})
+            if not self.currency:
+                raise ValidationError({'currency': "Currency must be set for 'Paid' model."})
+        else:
+            pass
+        
+        if self.pricing_model == self.PricingModel.NAME_YOUR_PRICE:
+            if self.minimum_price_nyp is not None and self.minimum_price_nyp < Decimal('0.00'):
+                raise ValidationError({'minimum_price_nyp': "Minimum 'Name Your Price' cannot be negative."})
+        
+        if self.download_file and self.pricing_model not in [self.PricingModel.FREE, self.PricingModel.PAID, self.PricingModel.NAME_YOUR_PRICE]:
+             raise ValidationError("Download file provided but pricing model is unclear or not set for downloads.")
+        
+        if self.download_file and not self.pricing_model:
+             raise ValidationError({'pricing_model': "A pricing model must be selected if a download file is provided."})
+
+
+    def save(self, *args, **kwargs):
+        if self.pricing_model != self.PricingModel.PAID:
+            self.price = None
+        if self.pricing_model != self.PricingModel.NAME_YOUR_PRICE:
+            self.minimum_price_nyp = None
+        
+        self.full_clean() 
+        super().save(*args, **kwargs)
 
     def is_visible(self):
         return self.is_published and self.release_date <= timezone.now()
@@ -101,12 +180,10 @@ class Track(models.Model):
     duration_in_seconds = models.PositiveIntegerField(null=True, blank=True, help_text="Duration in seconds (auto-populated)")
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # To store the original audio file name to detect changes
     _original_audio_file_name_on_load = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Store the original file name when the instance is loaded from DB
         if self.pk and self.audio_file and hasattr(self.audio_file, 'name'):
             self._original_audio_file_name_on_load = self.audio_file.name
         else:
@@ -120,7 +197,6 @@ class Track(models.Model):
         
         is_new_instance = self.pk is None
         
-        # Determine if the audio file has changed or if it's a new instance with a file
         file_changed = False
         current_audio_file_name = self.audio_file.name if self.audio_file and hasattr(self.audio_file, 'name') else None
 
@@ -132,22 +208,19 @@ class Track(models.Model):
                 file_changed = True
                 logger.info(f"Track PK '{self.pk}': Audio file changed from '{self._original_audio_file_name_on_load}' to '{current_audio_file_name}'.")
         elif not current_audio_file_name and self._original_audio_file_name_on_load:
-            file_changed = True # File is being cleared
+            file_changed = True 
             logger.info(f"Track PK '{self.pk}': Audio file '{self._original_audio_file_name_on_load}' is being cleared.")
 
-        # Save the model instance and the file to storage first.
         super().save(*args, **kwargs)
         logger.info(f"Track PK '{self.pk}': super().save() completed. Current audio_file.name from object: '{self.audio_file.name if self.audio_file and hasattr(self.audio_file, 'name') else 'No audio file'}'.")
 
-        # After super().save(), self.audio_file.name should reflect the final path.
-        # Update our tracker for the next save cycle if the instance is kept in memory.
         current_audio_file_name_in_storage = self.audio_file.name if self.audio_file and hasattr(self.audio_file, 'name') else None
-        self._original_audio_file_name_on_load = current_audio_file_name_in_storage # Update for subsequent saves if object persists
+        self._original_audio_file_name_on_load = current_audio_file_name_in_storage 
         
         new_duration = None
         should_update_duration_in_db = False
 
-        if not current_audio_file_name_in_storage: # If audio file is None or empty string after save
+        if not current_audio_file_name_in_storage: 
             if self.duration_in_seconds is not None:
                 logger.info(f"Track PK '{self.pk}': Audio file is not present in storage. Clearing duration from {self.duration_in_seconds}s to None.")
                 self.duration_in_seconds = None
@@ -173,7 +246,7 @@ class Track(models.Model):
                         elif audio_metadata_obj.info.length > 0:
                             new_duration = round(audio_metadata_obj.info.length)
                             logger.info(f"Track PK '{self.pk}': Mutagen successfully read duration: {new_duration}s from '{current_audio_file_name_in_storage}'.")
-                        else: # length <= 0
+                        else: 
                             logger.warning(f"Track PK '{self.pk}': Mutagen extracted zero or negative duration ({audio_metadata_obj.info.length}s) for '{current_audio_file_name_in_storage}'. Type: {type(audio_metadata_obj)}")
                 else:
                     logger.error(f"Track PK '{self.pk}': Audio file '{current_audio_file_name_in_storage}' NOT FOUND in storage for duration calculation despite self.audio_file object existing.")
@@ -195,7 +268,6 @@ class Track(models.Model):
         
         if should_update_duration_in_db:
             logger.info(f"Track PK '{self.pk}': Calling super().save(update_fields=['duration_in_seconds']) to save duration: {self.duration_in_seconds}s.")
-            # Save again, but only the duration field to avoid recursion and unnecessary signal triggers for other fields.
             super().save(update_fields=['duration_in_seconds']) 
         
         logger.info(f"Track.save() finished for track PK '{self.pk}'.")
@@ -228,8 +300,6 @@ class Highlight(models.Model):
         ordering = ['-highlighted_at']
 
 # --- Signal Receivers for Deleting Old Files ---
-# Use the imported utility functions
-
 @receiver(pre_save, sender=Artist)
 def artist_pre_save_delete_old_picture(sender, instance, **kwargs):
     delete_file_if_changed(sender, instance, 'artist_picture')
@@ -237,6 +307,7 @@ def artist_pre_save_delete_old_picture(sender, instance, **kwargs):
 @receiver(pre_save, sender=Release)
 def release_pre_save_delete_old_cover(sender, instance, **kwargs):
     delete_file_if_changed(sender, instance, 'cover_art')
+    delete_file_if_changed(sender, instance, 'download_file') 
 
 @receiver(pre_save, sender=Track)
 def track_pre_save_delete_old_audio(sender, instance, **kwargs):
@@ -248,8 +319,9 @@ def artist_post_delete_cleanup_picture(sender, instance, **kwargs):
     delete_file_on_instance_delete(instance.artist_picture)
 
 @receiver(post_delete, sender=Release)
-def release_post_delete_cleanup_cover(sender, instance, **kwargs):
+def release_post_delete_cleanup_cover_and_download(sender, instance, **kwargs):
     delete_file_on_instance_delete(instance.cover_art)
+    delete_file_on_instance_delete(instance.download_file) 
 
 @receiver(post_delete, sender=Track)
 def track_post_delete_cleanup_audio(sender, instance, **kwargs):

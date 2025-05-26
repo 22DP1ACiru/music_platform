@@ -5,8 +5,7 @@ import axios from "axios";
 import { useAuthStore } from "@/stores/auth";
 import ReleaseForm, {
   type ReleaseFormData as FormComponentState,
-  type TrackFormData as FormTrackData,
-} from "@/components/ReleaseForm.vue"; // Import the new component and types
+} from "@/components/ReleaseForm.vue";
 
 const authStore = useAuthStore();
 const router = useRouter();
@@ -24,7 +23,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
     isLoading.value = false;
     return;
   }
-  // The form component now provides fullReleaseDateTimeForSubmission as release_date_for_api
+
   const releaseDateForApi = (submittedFormData as any).release_date_for_api;
   if (!releaseDateForApi) {
     error.value = "Invalid release date or time specified by form component.";
@@ -48,6 +47,41 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
     releaseApiData.append("genre_names", genre);
   });
 
+  // Add new shop fields
+  if (submittedFormData.new_download_file_object) {
+    releaseApiData.append(
+      "download_file",
+      submittedFormData.new_download_file_object
+    );
+  }
+  releaseApiData.append("pricing_model", submittedFormData.pricing_model);
+  if (submittedFormData.pricing_model === "PAID") {
+    if (
+      submittedFormData.price !== null &&
+      submittedFormData.price !== undefined
+    ) {
+      releaseApiData.append("price", submittedFormData.price.toString());
+    }
+    if (submittedFormData.currency) {
+      releaseApiData.append("currency", submittedFormData.currency);
+    }
+  }
+  if (submittedFormData.pricing_model === "NYP") {
+    if (
+      submittedFormData.minimum_price_nyp !== null &&
+      submittedFormData.minimum_price_nyp !== undefined
+    ) {
+      releaseApiData.append(
+        "minimum_price_nyp",
+        submittedFormData.minimum_price_nyp.toString()
+      );
+    }
+    // Also send currency for NYP as backend might expect it
+    if (submittedFormData.currency) {
+      releaseApiData.append("currency", submittedFormData.currency);
+    }
+  }
+
   try {
     const releaseResponse = await axios.post("/releases/", releaseApiData, {
       headers: { "Content-Type": "multipart/form-data" },
@@ -55,7 +89,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
     const newReleaseId = releaseResponse.data.id;
 
     for (const track of submittedFormData.tracks) {
-      if (track._isRemoved) continue; // Should not happen for new tracks in create mode
+      if (track._isRemoved) continue;
 
       if (
         !track.title ||
@@ -71,7 +105,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
       }
       const trackApiData = new FormData();
       trackApiData.append("title", track.title);
-      trackApiData.append("audio_file", track.audio_file_object); // Use audio_file_object
+      trackApiData.append("audio_file", track.audio_file_object);
       trackApiData.append("release", newReleaseId.toString());
       trackApiData.append("track_number", track.track_number.toString());
       track.genre_names.forEach((genre) => {
@@ -123,7 +157,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
 };
 
 const handleCancel = () => {
-  router.push({ name: "releases" }); // Navigate to releases list on cancel
+  router.push({ name: "releases" });
 };
 </script>
 
@@ -150,7 +184,6 @@ const handleCancel = () => {
 
 <style scoped>
 .view-container {
-  /* Common styling for view pages */
   max-width: 850px;
   margin: 2rem auto;
   padding: 1.5rem 2rem;

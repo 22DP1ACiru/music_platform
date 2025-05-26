@@ -4,28 +4,36 @@ import axios from "axios";
 
 // --- Interfaces ---
 export interface TrackFormData {
-  id: number | string; // Can be temp string/number for new, number for existing
+  id: number | string;
   title: string;
   track_number: number | null;
-  audio_file_url?: string | null; // URL for existing audio
-  audio_file_object?: File | null; // New audio file object
+  audio_file_url?: string | null;
+  audio_file_object?: File | null;
   genre_names: string[];
   _isNew?: boolean;
   _isRemoved?: boolean;
-  _originalId?: number; // DB ID for existing tracks
+  _originalId?: number;
 }
 
 export interface ReleaseFormData {
-  id?: number | null; // Only for edit mode
+  id?: number | null;
   title: string;
   release_type: "ALBUM" | "EP" | "SINGLE";
-  release_date_str: string; // YYYY-MM-DD
-  release_time_str: string; // HH:MM
-  cover_art_url?: string | null; // URL for existing cover art
-  new_cover_art_file?: File | null; // New cover art file object
+  release_date_str: string;
+  release_time_str: string;
+  cover_art_url?: string | null;
+  new_cover_art_file?: File | null;
   genre_names: string[];
   is_published: boolean;
   tracks: TrackFormData[];
+
+  // New shop fields
+  download_file_url?: string | null; // URL for existing download file
+  new_download_file_object?: File | null; // New download file
+  pricing_model: "FREE" | "PAID" | "NYP";
+  price?: number | string | null; // string for input, number for API
+  currency?: string | null;
+  minimum_price_nyp?: number | string | null; // string for input, number for API
 }
 
 interface Genre {
@@ -36,7 +44,7 @@ interface Genre {
 // --- Props ---
 const props = defineProps({
   initialData: {
-    type: Object as PropType<Partial<ReleaseFormData>>, // Partial because create mode won't have all fields
+    type: Object as PropType<Partial<ReleaseFormData>>,
     default: () => ({}),
   },
   isEditMode: {
@@ -44,7 +52,6 @@ const props = defineProps({
     default: false,
   },
   isLoadingSubmit: {
-    // To show loading state from parent
     type: Boolean,
     default: false,
   },
@@ -55,7 +62,7 @@ const emit = defineEmits<{
   (
     e: "submit-release",
     formData: ReleaseFormData & { release_date_for_api: string | null }
-  ): void; // Add API date to emitted type
+  ): void;
   (e: "cancel-form"): void;
 }>();
 
@@ -77,20 +84,32 @@ const formState = reactive<ReleaseFormData>({
         .padStart(2, "0")}`;
     })(),
   cover_art_url: props.initialData?.cover_art_url || null,
-  new_cover_art_file: props.initialData?.new_cover_art_file || null, // Will be a File object if provided
+  new_cover_art_file: props.initialData?.new_cover_art_file || null,
   genre_names: [...(props.initialData?.genre_names || [])],
   is_published:
     props.initialData?.is_published === undefined
       ? true
       : props.initialData.is_published,
   tracks: props.initialData?.tracks?.map((t) => ({ ...t })) || [],
+
+  // Initialize new shop fields
+  download_file_url: props.initialData?.download_file_url || null,
+  new_download_file_object: props.initialData?.new_download_file_object || null,
+  pricing_model: props.initialData?.pricing_model || "PAID", // Default to PAID
+  price:
+    props.initialData?.price === undefined ? null : props.initialData.price, // Allow null, handle empty string from input
+  currency: props.initialData?.currency || "USD",
+  minimum_price_nyp:
+    props.initialData?.minimum_price_nyp === undefined
+      ? null
+      : props.initialData.minimum_price_nyp,
 });
 
 const availableGenres = ref<Genre[]>([]);
-const newReleaseGenreInput = ref(""); // For new genre input for the release
-const newTrackGenreInputs = ref<string[]>([]); // For new genre inputs for each track
+const newReleaseGenreInput = ref("");
+const newTrackGenreInputs = ref<string[]>([]);
 
-const localTrackIdCounter = ref(Date.now()); // For unique keys for new tracks in v-for
+const localTrackIdCounter = ref(Date.now());
 
 // --- Computed Properties ---
 const fullReleaseDateTimeForSubmission = computed(() => {
@@ -115,7 +134,6 @@ const fetchGenres = async () => {
     newTrackGenreInputs.value = formState.tracks.map(() => "");
   } catch (err) {
     console.error("ReleaseForm: Failed to fetch genres:", err);
-    // Potentially emit an error or show a message
   }
 };
 
@@ -150,11 +168,11 @@ const addTrack = () => {
   const newTrackNumber =
     formState.tracks.filter((t) => !t._isRemoved).length + 1;
   formState.tracks.push({
-    id: `new-${localTrackIdCounter.value++}`, // Temporary frontend ID
+    id: `new-${localTrackIdCounter.value++}`,
     title: "",
     track_number: newTrackNumber,
-    audio_file_url: null, // for new tracks
-    audio_file_object: null, // for new tracks
+    audio_file_url: null,
+    audio_file_object: null,
     genre_names: [],
     _isNew: true,
     _isRemoved: false,
@@ -196,12 +214,9 @@ const handleTrackFileChange = (event: Event, trackIndex: number) => {
   const track = formState.tracks[trackIndex];
   if (target.files && target.files[0] && track) {
     track.audio_file_object = target.files[0];
-    track.audio_file_url = target.files[0].name; // Display new file name as placeholder
+    track.audio_file_url = target.files[0].name;
   } else if (track) {
     track.audio_file_object = null;
-    // If clearing a new file for an existing track, we might want to revert audio_file_url to original
-    // This depends on how complex we want the "undo" of file selection to be.
-    // For now, clearing it just means no new file is selected. The existing file (if any) remains on backend unless a new one is uploaded.
   }
 };
 
@@ -211,9 +226,8 @@ const handleCoverArtChange = (event: Event) => {
     const fileType = target.files[0].type;
     if (fileType === "image/gif") {
       alert("Animated GIFs are not allowed. Please use a JPG, PNG, or WEBP.");
-      target.value = ""; // Clear the input
+      target.value = "";
       formState.new_cover_art_file = null;
-      // Revert preview if it was changed to the GIF
       if (props.isEditMode && props.initialData?.cover_art_url) {
         formState.cover_art_url = props.initialData.cover_art_url;
       } else if (
@@ -221,33 +235,47 @@ const handleCoverArtChange = (event: Event) => {
         formState.cover_art_url &&
         formState.cover_art_url.startsWith("blob:")
       ) {
-        URL.revokeObjectURL(formState.cover_art_url); // Clean up blob URL
+        URL.revokeObjectURL(formState.cover_art_url);
         formState.cover_art_url = null;
       }
       return;
     }
-    formState.new_cover_art_file = target.files[0]; // This is a File object
+    formState.new_cover_art_file = target.files[0];
     if (
       formState.cover_art_url &&
       formState.cover_art_url.startsWith("blob:")
     ) {
-      URL.revokeObjectURL(formState.cover_art_url); // Clean up previous blob URL if any
+      URL.revokeObjectURL(formState.cover_art_url);
     }
-    formState.cover_art_url = URL.createObjectURL(target.files[0]); // Preview new
+    formState.cover_art_url = URL.createObjectURL(target.files[0]);
   } else {
     formState.new_cover_art_file = null;
-    // If user clears selection, revert to original URL if in edit mode
     if (
       formState.cover_art_url &&
       formState.cover_art_url.startsWith("blob:")
     ) {
-      URL.revokeObjectURL(formState.cover_art_url); // Clean up blob URL
+      URL.revokeObjectURL(formState.cover_art_url);
     }
     if (props.isEditMode && props.initialData?.cover_art_url) {
       formState.cover_art_url = props.initialData.cover_art_url;
     } else {
-      // Create mode or edit mode where original was null
       formState.cover_art_url = null;
+    }
+  }
+};
+
+const handleDownloadFileChange = (event: Event) => {
+  const target = event.target as HTMLInputElement;
+  if (target.files && target.files[0]) {
+    formState.new_download_file_object = target.files[0];
+    formState.download_file_url = URL.createObjectURL(target.files[0]); // Preview for new file
+  } else {
+    formState.new_download_file_object = null;
+    // Revert to original if edit mode and clearing selection
+    if (props.isEditMode && props.initialData?.download_file_url) {
+      formState.download_file_url = props.initialData.download_file_url;
+    } else {
+      formState.download_file_url = null;
     }
   }
 };
@@ -262,15 +290,60 @@ const triggerSubmit = () => {
     alert("Invalid release date or time.");
     return;
   }
+  if (
+    formState.pricing_model === "PAID" &&
+    (formState.price === null ||
+      formState.price === "" ||
+      Number(formState.price) < 0)
+  ) {
+    alert("Price is required and cannot be negative for 'Paid' model.");
+    return;
+  }
+  if (formState.pricing_model === "PAID" && !formState.currency) {
+    alert("Currency is required for 'Paid' model.");
+    return;
+  }
+  if (
+    formState.pricing_model === "NYP" &&
+    formState.minimum_price_nyp !== null &&
+    formState.minimum_price_nyp !== "" &&
+    Number(formState.minimum_price_nyp) < 0
+  ) {
+    alert("Minimum 'Name Your Price' cannot be negative.");
+    return;
+  }
+  if (
+    !formState.new_download_file_object &&
+    !formState.download_file_url &&
+    props.isEditMode
+  ) {
+    // In edit mode, if there's no existing download file and no new one, it's okay if they intend to clear it.
+    // Or, if creating, and no download file provided. This could be allowed if pricing is FREE.
+  } else if (
+    !formState.new_download_file_object &&
+    !formState.download_file_url &&
+    !props.isEditMode
+  ) {
+    // if creating and no download file, it implies it's not downloadable yet, unless it's free.
+    // The backend model requires pricing_model regardless.
+    // Let's assume for now a download file is generally expected if not FREE.
+    if (formState.pricing_model !== "FREE") {
+      // alert("A download file is required unless the pricing model is 'Free'.");
+      // return;
+      // This rule can be very strict. Let backend validate if file is truly mandatory.
+    }
+  }
 
-  // Create a new object for submission to ensure reactivity doesn't interfere
-  // and to explicitly pass File objects.
   const dataToEmit = {
-    ...formState, // Spreads all properties from formState
-    // Ensure File objects are passed directly, not their reactive proxies if any confusion
+    ...formState,
     new_cover_art_file:
       formState.new_cover_art_file instanceof File
         ? formState.new_cover_art_file
+        : null,
+    // Pass the download file object
+    new_download_file_object:
+      formState.new_download_file_object instanceof File
+        ? formState.new_download_file_object
         : null,
     tracks: formState.tracks.map((track) => ({
       ...track,
@@ -280,13 +353,22 @@ const triggerSubmit = () => {
           : null,
     })),
     release_date_for_api: apiDate,
+    // Convert price strings to numbers or null
+    price:
+      formState.price === "" || formState.price === null
+        ? null
+        : Number(formState.price),
+    minimum_price_nyp:
+      formState.minimum_price_nyp === "" || formState.minimum_price_nyp === null
+        ? null
+        : Number(formState.minimum_price_nyp),
   };
 
   emit("submit-release", dataToEmit);
 };
 
 const cancel = () => {
-  emit("cancel-form"); // Parent view will handle navigation
+  emit("cancel-form");
 };
 
 // --- Lifecycle Hooks & Watchers ---
@@ -295,13 +377,11 @@ onMounted(() => {
   if (formState.tracks.length === 0 && !props.isEditMode) {
     addTrack();
   }
-  // Sync newTrackGenreInputs length if initialData for tracks exists
   if (props.initialData?.tracks) {
     newTrackGenreInputs.value = props.initialData.tracks.map(() => "");
   }
 });
 
-// Watch for changes in initialData if the form needs to be reset from parent
 watch(
   () => props.initialData,
   (newData) => {
@@ -320,19 +400,30 @@ watch(
           .padStart(2, "0")}`;
       })();
     formState.cover_art_url = newData?.cover_art_url || null;
-    formState.new_cover_art_file = newData?.new_cover_art_file || null; // Should be File or null
+    formState.new_cover_art_file = newData?.new_cover_art_file || null;
     formState.genre_names = [...(newData?.genre_names || [])];
     formState.is_published =
       newData?.is_published === undefined ? true : newData.is_published;
 
-    // Ensure tracks are properly mapped, preserving File objects if they exist in initialData
     formState.tracks =
       newData?.tracks?.map((t) => ({
         ...t,
         _isNew: t._isNew === undefined ? false : t._isNew,
         audio_file_object:
-          t.audio_file_object instanceof File ? t.audio_file_object : null, // Preserve File object
+          t.audio_file_object instanceof File ? t.audio_file_object : null,
       })) || [];
+
+    // Initialize new shop fields from props
+    formState.download_file_url = newData?.download_file_url || null;
+    formState.new_download_file_object =
+      newData?.new_download_file_object || null;
+    formState.pricing_model = newData?.pricing_model || "PAID";
+    formState.price = newData?.price === undefined ? null : newData.price;
+    formState.currency = newData?.currency || "USD";
+    formState.minimum_price_nyp =
+      newData?.minimum_price_nyp === undefined
+        ? null
+        : newData.minimum_price_nyp;
 
     newTrackGenreInputs.value = formState.tracks.map(() => "");
     if (formState.tracks.length === 0 && !props.isEditMode) {
@@ -340,7 +431,20 @@ watch(
     }
   },
   { deep: true, immediate: true }
-); // immediate: true to run on initial props too
+);
+
+watch(
+  () => formState.pricing_model,
+  (newModel) => {
+    if (newModel !== "PAID") {
+      formState.price = null;
+      // formState.currency = null; // Or keep default USD? Let's keep default for now.
+    }
+    if (newModel !== "NYP") {
+      formState.minimum_price_nyp = null;
+    }
+  }
+);
 </script>
 
 <template>
@@ -451,6 +555,100 @@ watch(
           v-model="formState.is_published"
         />
         <label for="is-published-form">Publish now? (Uncheck for Draft)</label>
+      </div>
+    </fieldset>
+
+    <!-- Download and Pricing Section -->
+    <fieldset>
+      <legend>Download & Pricing</legend>
+      <div class="form-group">
+        <label for="download-file-form">Download File (e.g., ZIP):</label>
+        <div class="download-file-preview-container">
+          <span
+            v-if="
+              formState.download_file_url && !formState.new_download_file_object
+            "
+          >
+            Current:
+            {{
+              formState.download_file_url.substring(
+                formState.download_file_url.lastIndexOf("/") + 1
+              )
+            }}
+          </span>
+          <span v-else-if="formState.new_download_file_object">
+            New: {{ formState.new_download_file_object.name }}
+          </span>
+          <span v-else class="placeholder">No download file selected.</span>
+        </div>
+        <input
+          type="file"
+          id="download-file-form"
+          @change="handleDownloadFileChange"
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="pricing-model-form">Pricing Model:</label>
+        <select id="pricing-model-form" v-model="formState.pricing_model">
+          <option value="FREE">Free</option>
+          <option value="PAID">Paid (Fixed Price)</option>
+          <option value="NYP">Name Your Price</option>
+        </select>
+      </div>
+
+      <div
+        v-if="formState.pricing_model === 'PAID'"
+        class="conditional-pricing-fields"
+      >
+        <div class="form-group">
+          <label for="price-form">Price:</label>
+          <input
+            type="number"
+            id="price-form"
+            v-model.number="formState.price"
+            step="0.01"
+            min="0"
+            placeholder="e.g., 9.99"
+          />
+        </div>
+        <div class="form-group">
+          <label for="currency-form">Currency:</label>
+          <select id="currency-form" v-model="formState.currency">
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+            <option value="GBP">GBP</option>
+            <!-- Add more currencies as needed from shop.models.CURRENCY_CHOICES -->
+          </select>
+        </div>
+      </div>
+
+      <div
+        v-if="formState.pricing_model === 'NYP'"
+        class="conditional-pricing-fields"
+      >
+        <div class="form-group">
+          <label for="minimum-price-nyp-form"
+            >Minimum Price (optional, 0 for no minimum):</label
+          >
+          <input
+            type="number"
+            id="minimum-price-nyp-form"
+            v-model.number="formState.minimum_price_nyp"
+            step="0.01"
+            min="0"
+            placeholder="e.g., 1.00"
+          />
+        </div>
+        <div class="form-group">
+          <!-- NYP also needs a currency for transactions -->
+          <label for="nyp-currency-form">Currency for NYP Transactions:</label>
+          <select id="nyp-currency-form" v-model="formState.currency">
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+            <option value="GBP">GBP</option>
+          </select>
+        </div>
       </div>
     </fieldset>
 
@@ -615,7 +813,6 @@ watch(
 <style scoped>
 .release-form-component {
   max-width: 800px;
-  margin: 0 auto; /* Form itself might not need margin if parent view handles it */
 }
 .release-form-component fieldset {
   border: 1px solid var(--color-border);
@@ -684,13 +881,13 @@ watch(
 .cover-art-preview {
   max-width: 200px;
   max-height: 200px;
-  width: 100%; /* Make it responsive within its container */
-  height: auto; /* Maintain aspect ratio */
-  aspect-ratio: 1 / 1; /* Enforce square aspect ratio */
-  object-fit: cover; /* Crop image to fit */
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
   border: 1px solid var(--color-border);
   border-radius: 4px;
-  display: block; /* Remove extra space below image */
+  display: block;
 }
 .cover-art-preview.placeholder {
   display: flex;
@@ -699,7 +896,7 @@ watch(
   background-color: var(--color-background-mute);
   color: var(--color-text-light);
   font-style: italic;
-  width: 200px; /* Fixed size for placeholder */
+  width: 200px;
   height: 200px;
 }
 
@@ -787,6 +984,26 @@ watch(
   margin-bottom: 0.3em;
   font-style: italic;
 }
+.download-file-preview-container {
+  font-size: 0.9em;
+  font-style: italic;
+  color: var(--color-text-light);
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  background-color: var(--color-background-mute);
+  border-radius: 4px;
+  min-height: 1.5em; /* Ensure it has some height even if empty */
+}
+.download-file-preview-container .placeholder {
+  color: var(--color-text);
+}
+.conditional-pricing-fields {
+  padding-left: 1rem;
+  border-left: 2px solid var(--color-border);
+  margin-top: 1rem;
+  padding-top: 0.5rem;
+}
+
 .remove-track-button,
 .add-track-button {
   padding: 0.5em 1em;

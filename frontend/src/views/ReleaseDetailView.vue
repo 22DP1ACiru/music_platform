@@ -2,23 +2,22 @@
 import { ref, onMounted, watch, computed } from "vue";
 import { useRouter, RouterLink } from "vue-router";
 import axios from "axios";
-import { usePlayerStore, type PlayerTrackInfo } from "@/stores/player"; // Import PlayerTrackInfo
+import { usePlayerStore, type PlayerTrackInfo } from "@/stores/player";
 import { useAuthStore } from "@/stores/auth";
 
 interface ArtistInfo {
   id: number;
   name: string;
-  user_id: number; // Added to check ownership
+  user_id: number;
 }
 
-// Updated TrackInfoFromApi to include stream_url and ensure audio_file is the original
 interface TrackInfoFromApi {
   id: number;
   title: string;
   track_number: number | null;
   duration_in_seconds: number | null;
-  audio_file: string; // Original direct media URL (e.g., for download link if needed)
-  stream_url: string; // URL for the streaming endpoint
+  audio_file: string;
+  stream_url: string;
   genres_data?: { id: number; name: string }[];
 }
 
@@ -34,6 +33,13 @@ interface ReleaseDetail {
   description?: string;
   genres_data?: { id: number; name: string }[];
   is_published: boolean;
+  // New shop fields
+  download_file: string | null; // URL to the download file
+  pricing_model: "FREE" | "PAID" | "NYP";
+  pricing_model_display: string;
+  price: string | null; // Comes as string from API (DecimalField)
+  currency: string | null;
+  minimum_price_nyp: string | null; // Comes as string
 }
 
 const playerStore = usePlayerStore();
@@ -43,16 +49,48 @@ const release = ref<ReleaseDetail | null>(null);
 const props = defineProps<{ id: string | string[] }>();
 const isLoading = ref(true);
 const error = ref<string | null>(null);
+const nypAmount = ref<string>(""); // For NYP input
 
 const isOwner = computed(() => {
   if (!authStore.isLoggedIn || !release.value || !authStore.authUser) {
     return false;
   }
-  // Ensure artist and user_id exist before comparison
   return (
     release.value.artist &&
     release.value.artist.user_id === authStore.authUser.id
   );
+});
+
+const formattedPrice = computed(() => {
+  if (
+    release.value?.pricing_model === "PAID" &&
+    release.value.price &&
+    release.value.currency
+  ) {
+    const priceNum = parseFloat(release.value.price);
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: release.value.currency,
+    }).format(priceNum);
+  }
+  return "";
+});
+
+const formattedMinNypPrice = computed(() => {
+  if (
+    release.value?.pricing_model === "NYP" &&
+    release.value.minimum_price_nyp &&
+    release.value.currency
+  ) {
+    const priceNum = parseFloat(release.value.minimum_price_nyp);
+    if (priceNum > 0) {
+      return `(Minimum ${new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: release.value.currency,
+      }).format(priceNum)})`;
+    }
+  }
+  return "(Enter 0 or more)";
 });
 
 const fetchReleaseDetail = async (id: string | string[]) => {
@@ -64,10 +102,18 @@ const fetchReleaseDetail = async (id: string | string[]) => {
   }
   isLoading.value = true;
   error.value = null;
-  release.value = null; // Clear previous release data
+  release.value = null;
   try {
     const response = await axios.get<ReleaseDetail>(`/releases/${releaseId}/`);
     release.value = response.data;
+    if (
+      release.value?.pricing_model === "NYP" &&
+      release.value.minimum_price_nyp
+    ) {
+      nypAmount.value = parseFloat(release.value.minimum_price_nyp).toFixed(2);
+    } else if (release.value?.pricing_model === "NYP") {
+      nypAmount.value = "0.00";
+    }
   } catch (err: any) {
     console.error(`Failed to fetch release ${releaseId}:`, err);
     if (axios.isAxiosError(err) && err.response?.status === 404) {
@@ -80,7 +126,6 @@ const fetchReleaseDetail = async (id: string | string[]) => {
   }
 };
 
-// Helper to convert API track to PlayerTrackInfo
 function mapToPlayerTrackInfo(
   apiTrack: TrackInfoFromApi,
   releaseData: ReleaseDetail
@@ -88,7 +133,7 @@ function mapToPlayerTrackInfo(
   return {
     id: apiTrack.id,
     title: apiTrack.title,
-    audio_file: apiTrack.stream_url, // IMPORTANT: Use stream_url for playback
+    audio_file: apiTrack.stream_url,
     artistName: releaseData.artist?.name,
     releaseTitle: releaseData.title,
     coverArtUrl: releaseData.cover_art,
@@ -137,6 +182,65 @@ const handleAddTrackToQueue = (trackToAdd: TrackInfoFromApi) => {
 const goToEditRelease = () => {
   if (release.value && isOwner.value) {
     router.push({ name: "release-edit", params: { id: release.value.id } });
+  }
+};
+
+const handleDownload = () => {
+  if (release.value?.download_file) {
+    // For direct download, ensure the URL is correct.
+    // If it's a relative URL from the API (e.g., /media/downloads/file.zip),
+    // prepend the API base URL if not already handled by Axios default or browser.
+    let downloadUrl = release.value.download_file;
+    if (!downloadUrl.startsWith("http")) {
+      const apiUrl = axios.defaults.baseURL || window.location.origin;
+      downloadUrl = `${apiUrl.replace("/api", "")}${downloadUrl}`; // Adjust if /api is part of baseURL
+    }
+    console.log("Attempting to download from:", downloadUrl);
+    window.open(downloadUrl, "_blank");
+  } else {
+    alert("No download file available.");
+  }
+};
+
+const handlePurchase = () => {
+  // This is where you'd initiate the payment flow.
+  // For "Paid", you know the price. For "NYP", use nypAmount.value.
+  // 1. Validate nypAmount if NYP.
+  // 2. Create an order on the backend.
+  // 3. Redirect to payment gateway.
+  // (This is a placeholder for a much larger feature)
+  let amountToPay: number | null = null;
+  let paymentCurrency = release.value?.currency;
+
+  if (release.value?.pricing_model === "PAID" && release.value.price) {
+    amountToPay = parseFloat(release.value.price);
+  } else if (release.value?.pricing_model === "NYP") {
+    const enteredAmount = parseFloat(nypAmount.value);
+    const minAmount = release.value.minimum_price_nyp
+      ? parseFloat(release.value.minimum_price_nyp)
+      : 0;
+    if (isNaN(enteredAmount) || enteredAmount < minAmount) {
+      alert(
+        `Please enter an amount of at least ${minAmount.toFixed(
+          2
+        )} ${paymentCurrency}.`
+      );
+      return;
+    }
+    amountToPay = enteredAmount;
+  }
+
+  if (amountToPay !== null && paymentCurrency) {
+    alert(
+      `Initiate purchase for ${release.value?.title} at ${amountToPay.toFixed(
+        2
+      )} ${paymentCurrency}. \n(Payment gateway integration needed)`
+    );
+    // Example: Create an order then redirect
+    // const orderData = { release_id: release.value.id, amount: amountToPay, currency: paymentCurrency };
+    // axios.post('/shop/create-order/', orderData).then(response => { /* redirect to payment */ });
+  } else {
+    alert("Pricing information is unclear for purchase.");
   }
 };
 
@@ -207,6 +311,68 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
           <p v-if="release.description" class="description">
             {{ release.description }}
           </p>
+
+          <!-- Download/Purchase Section -->
+          <div class="shop-actions" v-if="release.download_file">
+            <div v-if="release.pricing_model === 'FREE'" class="price-display">
+              <button
+                @click="handleDownload"
+                class="action-button download-button"
+              >
+                Download (Free)
+              </button>
+            </div>
+            <div
+              v-else-if="release.pricing_model === 'PAID'"
+              class="price-display"
+            >
+              <span>{{ formattedPrice }}</span>
+              <button
+                @click="handlePurchase"
+                class="action-button purchase-button"
+              >
+                Buy Download
+              </button>
+            </div>
+            <div
+              v-else-if="release.pricing_model === 'NYP'"
+              class="price-display nyp-section"
+            >
+              <label for="nyp-amount"
+                >Name Your Price {{ formattedMinNypPrice }}:</label
+              >
+              <div class="nyp-input-group">
+                <span class="currency-symbol">{{
+                  release.currency === "EUR"
+                    ? "€"
+                    : release.currency === "GBP"
+                    ? "£"
+                    : "$"
+                }}</span>
+                <input
+                  type="number"
+                  id="nyp-amount"
+                  v-model="nypAmount"
+                  step="0.01"
+                  min="0"
+                />
+                <!-- <span class="nyp-currency-label">{{ release.currency }}</span> -->
+              </div>
+              <button
+                @click="handlePurchase"
+                class="action-button purchase-button"
+              >
+                Pay & Download
+              </button>
+            </div>
+            <p class="pricing-model-note">
+              Download Pricing: {{ release.pricing_model_display }}
+            </p>
+          </div>
+          <div v-else class="shop-actions">
+            <p>Download not yet available for this release.</p>
+          </div>
+
           <div class="header-actions">
             <button
               @click="handlePlayAllFromRelease"
@@ -240,7 +406,7 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
               'is-paused':
                 playerStore.currentTrack?.id === track.id &&
                 !playerStore.isPlaying &&
-                playerStore.currentTrack?.id === track.id, // Condition for paused but current
+                playerStore.currentTrack?.id === track.id,
             }"
           >
             <button
@@ -342,6 +508,82 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   line-height: 1.6;
   margin-bottom: 1rem;
 }
+
+.shop-actions {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background-color: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+.price-display {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+.price-display span:first-child {
+  /* For fixed price display */
+  font-size: 1.2em;
+  font-weight: bold;
+  color: var(--color-accent);
+}
+.nyp-section {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.nyp-section label {
+  font-size: 0.95em;
+  margin-bottom: 0.3rem;
+}
+.nyp-input-group {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.nyp-input-group .currency-symbol {
+  font-size: 1.1em;
+}
+.nyp-input-group input[type="number"] {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  width: 100px; /* Adjust as needed */
+  text-align: right;
+}
+/* .nyp-input-group .nyp-currency-label {
+    font-size: 0.9em;
+    color: var(--color-text-light);
+} */
+.action-button {
+  padding: 0.6em 1.2em;
+  font-size: 0.95em;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: white;
+}
+.download-button {
+  background-color: var(
+    --color-accent-hover
+  ); /* A slightly different shade or distinct color */
+}
+.download-button:hover {
+  background-color: var(--color-accent);
+}
+.purchase-button {
+  background-color: var(--color-accent);
+}
+.purchase-button:hover {
+  background-color: var(--color-accent-hover);
+}
+.pricing-model-note {
+  font-size: 0.85em;
+  font-style: italic;
+  color: var(--color-text-light);
+  margin-top: 0.5rem;
+}
+
 .header-actions {
   margin-top: 1rem;
   display: flex;
@@ -351,14 +593,16 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 .edit-release-button {
   padding: 0.6em 1.2em;
   font-size: 0.95em;
-  background-color: var(--color-accent, #007bff);
-  color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
 }
+.play-all-button {
+  background-color: var(--color-accent);
+  color: white;
+}
 .play-all-button:hover {
-  background-color: var(--color-accent-hover, #0056b3);
+  background-color: var(--color-accent-hover);
 }
 .edit-release-button {
   background-color: var(--color-background-soft);
@@ -398,22 +642,22 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 }
 .track-item.is-playing .track-title,
 .track-item.is-paused .track-title {
-  color: var(--color-accent); /* Highlight title of current track */
+  color: var(--color-accent);
   font-weight: 600;
 }
 
 .play-icon-button {
   background: none;
   border: none;
-  color: var(--color-accent, #007bff);
+  color: var(--color-accent);
   font-size: 1.2rem;
   cursor: pointer;
   padding: 0.2em 0.4em;
-  width: 28px; /* Fixed width for alignment */
+  width: 28px;
   text-align: center;
 }
 .play-icon-button:hover {
-  color: var(--color-accent-hover, #0056b3);
+  color: var(--color-accent-hover);
 }
 .play-icon,
 .pause-icon {
@@ -437,15 +681,15 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 }
 .add-queue-button {
   padding: 0.3em 0.7em;
-  font-size: 1em; /* Make it a bit bigger for easier clicking */
+  font-size: 1em;
   line-height: 1;
   background-color: var(--color-background-soft);
   border: 1px solid var(--color-border);
-  border-radius: 50%; /* Make it round */
+  border-radius: 50%;
   color: var(--color-text);
-  margin-left: 0.5rem; /* Spacing from duration */
+  margin-left: 0.5rem;
   cursor: pointer;
-  min-width: 28px; /* Consistent size */
+  min-width: 28px;
   min-height: 28px;
   display: flex;
   align-items: center;

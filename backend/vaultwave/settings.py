@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'music',
     'playlists',
     'shop',
+    'chat',
 ]
 
 MIDDLEWARE = [
