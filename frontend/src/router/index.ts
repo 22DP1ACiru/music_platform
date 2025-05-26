@@ -67,21 +67,22 @@ const router = createRouter({
       props: true,
       meta: { requiresAuth: true, requiresArtist: true },
     },
+    {
+      path: "/library",
+      name: "library",
+      component: () => import("../views/LibraryView.vue"),
+      meta: { requiresAuth: true },
+    },
   ],
 });
 
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to, _from, next) => {
+  // Changed from to _from
   const authStore = useAuthStore();
 
-  // Ensure auth store is initialized, especially if tryAutoLogin is not fully complete yet
-  // This is important for direct navigations or page reloads.
   if (!authStore.user && localStorage.getItem("accessToken")) {
-    // If user state is not set but a token exists, try to auto-login/fetch user
-    // This ensures user data (including profile) is loaded before guards run.
-    // Consider if tryAutoLogin should return a promise to await here.
-    // For now, this will trigger the fetch. Subsequent checks will use the populated store.
-    if (!authStore.isLoading) {
-      // Avoid multiple calls if already loading
+    // Use authLoading which is the correct name from the store
+    if (!authStore.authLoading) {
       await authStore.tryAutoLogin();
     }
   }
@@ -90,7 +91,6 @@ router.beforeEach(async (to, from, next) => {
   const requiresArtist = to.matched.some(
     (record) => record.meta.requiresArtist
   );
-  // Meta field for routes like 'artist-create' that should only be accessible if user DOES NOT have an artist profile yet
   const requiresArtistCreation = to.matched.some(
     (record) => record.meta.requiresArtistCreation
   );
@@ -99,46 +99,39 @@ router.beforeEach(async (to, from, next) => {
     next({ name: "login", query: { redirect: to.fullPath } });
   } else if (requiresArtist) {
     if (!authStore.isLoggedIn) {
-      // Should be caught by requiresAuth
       next({ name: "login", query: { redirect: to.fullPath } });
-    } else if (authStore.isLoading) {
-      // If user data is still loading
-      // Option 1: Wait for loading to finish
-      // This might require a watcher or a promise from tryAutoLogin/fetchUser
-      // Option 2: Redirect to a loading page or home, and let user retry
-      // For simplicity, let's retry navigation after a short delay or redirect to home
-      // This is a temporary measure; robust solution would await user load.
+    } else if (authStore.authLoading) {
+      // Use authLoading
       console.warn(
-        "Navigation guard: User/profile data still loading for requiresArtist check. Retrying or redirecting."
+        "Navigation guard: User/profile data still loading for requiresArtist check."
       );
-      // Simple approach: Redirect to home, user can click again.
-      // A better UX would be to show a global loading indicator and truly wait.
-      next({ name: "home" }); // Or handle loading state more gracefully
+      next({ name: "home" });
     } else if (!authStore.hasArtistProfile) {
       alert(
         "You need an artist profile to access this page. Please create one from your profile."
       );
       next({ name: "profile" });
     } else {
-      next(); // Has artist profile
+      next();
     }
   } else if (requiresArtistCreation) {
     if (!authStore.isLoggedIn) {
       next({ name: "login", query: { redirect: to.fullPath } });
-    } else if (authStore.isLoading) {
+    } else if (authStore.authLoading) {
+      // Use authLoading
       console.warn(
         "Navigation guard: User/profile data still loading for requiresArtistCreation check."
       );
       next({ name: "home" });
     } else if (authStore.hasArtistProfile) {
       alert("You already have an artist profile.");
-      // Redirect to their artist detail page or profile
       next({
         name: "artist-detail",
-        params: { id: authStore.artistProfileId },
+        // Ensure artistProfileId is not null before using it
+        params: { id: authStore.artistProfileId || "error" },
       });
     } else {
-      next(); // Does NOT have artist profile, so allow creation
+      next();
     }
   } else {
     next();
