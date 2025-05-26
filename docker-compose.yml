@@ -71,7 +71,7 @@ services:
       - ./frontend:/app # Mount frontend code
       - /app/node_modules # Don't mount host node_modules over container's
     ports:
-      - "5173:5173" # Default Vite port
+      - "5341:5341" # Default Vite port
     environment:
       - VITE_API_URL=http://localhost:8102/api # Tell Vue where the backend API is
     depends_on:

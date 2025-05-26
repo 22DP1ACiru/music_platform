@@ -73,8 +73,8 @@ MIDDLEWARE = [
 ]
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
+    "http://localhost:5341",
+    "http://127.0.0.1:5341",
 ]
 
 ROOT_URLCONF = 'vaultwave.urls'

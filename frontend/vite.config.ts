@@ -1,7 +1,7 @@
-import { fileURLToPath, URL } from 'node:url'
+import { fileURLToPath, URL } from "node:url";
 
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
+import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -11,15 +11,16 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url))
-    }
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
   },
   server: {
-    host: '0.0.0.0', // Listen on all network interfaces within the container
-    port: 5173,      // The port Vite runs on (should match EXPOSE in Dockerfile and ports in docker-compose.yml)
+    host: "0.0.0.0", // Listen on all network interfaces within the container
+    port: 5341, // The port Vite runs on (should match EXPOSE in Dockerfile and ports in docker-compose.yml)
     strictPort: true, // Ensures Vite fails if the port is already in use
-    watch: {         // Helps with hot module reloading in some Docker/WSL file system scenarios
-      usePolling: true
-    }
-  }
-})
+    watch: {
+      // Helps with hot module reloading in some Docker/WSL file system scenarios
+      usePolling: true,
+    },
+  },
+});
