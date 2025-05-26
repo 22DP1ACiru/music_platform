@@ -3,12 +3,12 @@ import { type PropType, ref, computed, watch } from "vue";
 import type { ReleaseDetail } from "@/types";
 import { useCartStore } from "@/stores/cart";
 import { useRouter } from "vue-router";
-import { Decimal } from "decimal.js"; // For precise decimal arithmetic
+import { Decimal } from "decimal.js";
 
 const props = defineProps({
   release: {
     type: Object as PropType<ReleaseDetail | null>,
-    required: true,
+    default: null,
   },
   isVisible: {
     type: Boolean,
@@ -46,8 +46,13 @@ const currencySymbol = computed(() => {
   const currency = props.release?.currency;
   if (currency === "EUR") return "€";
   if (currency === "GBP") return "£";
-  return "$"; // Default USD
+  return "$";
 });
+
+// --- REMOVED: Proactive Currency Mismatch Logic ---
+// const isCurrencyMismatch = computed(...)
+// const currencyMismatchMessage = computed(...)
+// --- END REMOVED ---
 
 watch(
   () => props.release,
@@ -55,7 +60,7 @@ watch(
     if (newRelease?.pricing_model === "NYP") {
       nypAmountInput.value = minNypAmount.value.toFixed(2);
     } else if (newRelease?.pricing_model === "PAID" && newRelease.price) {
-      nypAmountInput.value = new Decimal(newRelease.price).toFixed(2); // Pre-fill for PAID (though not editable)
+      nypAmountInput.value = new Decimal(newRelease.price).toFixed(2);
     } else {
       nypAmountInput.value = "0.00";
     }
@@ -65,7 +70,7 @@ watch(
 );
 
 const validateNypAmount = (): boolean => {
-  if (props.release?.pricing_model !== "NYP") return true; // Not applicable
+  if (props.release?.pricing_model !== "NYP") return true;
 
   try {
     const enteredAmount = new Decimal(nypAmountInput.value);
@@ -88,6 +93,9 @@ const validateNypAmount = (): boolean => {
 };
 
 const handleAddToCart = async () => {
+  // REMOVED: Proactive currency check
+  // if (isCurrencyMismatch.value) { ... }
+
   if (!props.release || !props.release.product_info_id) {
     localError.value = "Product information is missing for this release.";
     return;
@@ -108,15 +116,19 @@ const handleAddToCart = async () => {
   );
   if (success) {
     emit("item-added-to-cart");
-    emit("close"); // Close modal on success
+    emit("close");
   } else {
     localError.value = cartStore.error || "Failed to add item to cart.";
+    // The error from cartStore might now be the backend's currency mismatch error during order creation
     emit("error-adding-item", localError.value);
   }
   isLoadingAction.value = false;
 };
 
 const handleCheckoutNow = async () => {
+  // REMOVED: Proactive currency check
+  // if (isCurrencyMismatch.value) { ... }
+
   if (!props.release || !props.release.product_info_id) {
     localError.value = "Product information is missing for this release.";
     return;
@@ -135,7 +147,7 @@ const handleCheckoutNow = async () => {
     priceOverride
   );
   if (addedToCart) {
-    emit("item-added-to-cart"); // Emit even if navigating away
+    emit("item-added-to-cart");
     emit("close");
     router.push({ name: "cart" });
   } else {
@@ -145,26 +157,26 @@ const handleCheckoutNow = async () => {
   isLoadingAction.value = false;
 };
 
-// Close modal if escape key is pressed
 const handleKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape" && props.isVisible) {
     emit("close");
   }
 };
 
-// Add/remove event listener
 watch(
   () => props.isVisible,
   (newValue) => {
     if (newValue) {
       document.addEventListener("keydown", handleKeydown);
+      localError.value = null;
+      // REMOVED: Proactive currency check on modal open
+      // if (props.release && isCurrencyMismatch.value) { ... }
     } else {
       document.removeEventListener("keydown", handleKeydown);
     }
   }
 );
 
-// Ensure listener is removed when component is unmounted
 import { onUnmounted } from "vue";
 onUnmounted(() => {
   document.removeEventListener("keydown", handleKeydown);
@@ -179,12 +191,15 @@ onUnmounted(() => {
   >
     <div class="modal-content" @click.stop>
       <button class="close-button" @click="$emit('close')" title="Close modal">
-        &times;
+        ×
       </button>
       <h3 class="modal-title">Acquire: {{ release.title }}</h3>
       <p class="modal-artist">by {{ release.artist.name }}</p>
 
       <div class="modal-body">
+        <!-- REMOVED: Proactive Currency Mismatch Message -->
+        <!-- <p v-if="isCurrencyMismatch" class="error-message modal-error currency-mismatch-info"> ... </p> -->
+
         <div v-if="release.pricing_model === 'PAID'" class="price-display">
           <p>
             Price:
@@ -213,6 +228,8 @@ onUnmounted(() => {
               :min="minNypAmount.toFixed(2)"
               class="nyp-input-field"
               placeholder="Your price"
+              _DISABLED_ATTRIBUTE_REMOVED_
+              :disabled="isCurrencyMismatch"
             />
           </div>
         </div>
@@ -227,6 +244,8 @@ onUnmounted(() => {
           @click="handleAddToCart"
           class="action-button add-to-cart-btn"
           :disabled="isLoadingAction"
+          _DISABLED_ATTRIBUTE_REMOVED_
+          isCurrencyMismatch
         >
           {{ isLoadingAction ? "Processing..." : "Add to Cart" }}
         </button>
@@ -234,6 +253,8 @@ onUnmounted(() => {
           @click="handleCheckoutNow"
           class="action-button checkout-now-btn"
           :disabled="isLoadingAction"
+          _DISABLED_ATTRIBUTE_REMOVED_
+          isCurrencyMismatch
         >
           {{ isLoadingAction ? "Processing..." : "Checkout Now" }}
         </button>
@@ -250,6 +271,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* Styles remain largely the same, but the currency-mismatch-info specific styles might not be needed */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -260,7 +282,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1050; /* Ensure it's above other content */
+  z-index: 1050;
 }
 
 .modal-content {
@@ -345,7 +367,6 @@ onUnmounted(() => {
   font-size: 1.1em;
   outline: none;
 }
-/* Hide spinners on number input */
 .nyp-input-field::-webkit-outer-spin-button,
 .nyp-input-field::-webkit-inner-spin-button {
   -webkit-appearance: none;
@@ -354,13 +375,23 @@ onUnmounted(() => {
 .nyp-input-field[type="number"] {
   -moz-appearance: textfield;
 }
+.nyp-input-field:disabled {
+  /* Style for disabled input if you re-add the disable logic */
+  background-color: var(--color-background-mute);
+  cursor: not-allowed;
+}
 
 .error-message.modal-error {
   font-size: 0.9em;
   margin-top: 1rem;
   padding: 0.6rem;
   text-align: center;
+  color: var(--vt-c-red-dark);
+  background-color: var(--vt-c-red-soft);
+  border: 1px solid var(--vt-c-red-dark);
+  border-radius: 4px;
 }
+/* Removed .currency-mismatch-info .link-button as the proactive message is removed */
 
 .modal-actions {
   display: flex;
@@ -386,9 +417,10 @@ onUnmounted(() => {
 .checkout-now-btn:hover {
   background-color: var(--color-accent-hover);
 }
-.add-to-cart-btn:disabled,
-.checkout-now-btn:disabled {
+.action-button:disabled {
   background-color: var(--color-border);
+  border-color: var(--color-border-hover);
+  color: var(--color-text-light);
   cursor: not-allowed;
 }
 

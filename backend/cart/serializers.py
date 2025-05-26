@@ -1,27 +1,58 @@
 from rest_framework import serializers
 from .models import Cart, CartItem
-from shop.serializers import ProductSerializer # Assuming ProductSerializer exists and is suitable
-from shop.models import Product # For validation
-from music.models import Release # For NYP validation
+from shop.serializers import ProductSerializer 
+from shop.models import Product 
+from music.models import Release 
 from decimal import Decimal
 
 class CartItemSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
-    # product_id is write-only, used when adding items
     product_id = serializers.PrimaryKeyRelatedField(
-        queryset=Product.objects.filter(is_active=True), # Only active products
+        queryset=Product.objects.filter(is_active=True), 
         source='product',
         write_only=True
     )
-    effective_price = serializers.DecimalField(source='get_effective_price', max_digits=10, decimal_places=2, read_only=True)
+    # This is the price_override entered by user for NYP in original currency
+    price_override_original = serializers.DecimalField(source='price_override', max_digits=10, decimal_places=2, read_only=True, allow_null=True)
+    
+    # Effective price of the item in its original currency
+    effective_price_original_currency = serializers.DecimalField(
+        source='get_effective_price_in_original_currency', 
+        max_digits=10, decimal_places=2, read_only=True
+    )
+    # Effective price of the item converted to settlement currency (e.g., USD)
+    effective_price_settlement_currency = serializers.DecimalField(
+        source='get_effective_price_in_settlement_currency', 
+        max_digits=10, decimal_places=2, read_only=True, allow_null=True # Allow null if conversion fails
+    )
+    original_currency = serializers.CharField(source='product.currency', read_only=True)
+
 
     class Meta:
         model = CartItem
-        fields = ['id', 'product_id', 'product', 'price_override', 'added_at', 'effective_price']
-        read_only_fields = ['id', 'product', 'added_at', 'effective_price']
+        fields = [
+            'id', 
+            'product_id', # For writing
+            'product',    # For reading (nested product details)
+            'price_override', # For writing NYP price
+            'price_override_original',
+            'added_at', 
+            'effective_price_original_currency', 
+            'original_currency',
+            'effective_price_settlement_currency'
+        ]
+        # `price_override` itself is used for input during `add_item`
+        # `price_override_original` is just for clearly showing what was stored if needed.
+        # For display in cart, we'll primarily use effective_price_settlement_currency.
+        read_only_fields = [
+            'id', 'product', 'added_at', 
+            'effective_price_original_currency', 'original_currency', 
+            'effective_price_settlement_currency', 'price_override_original'
+        ]
 
+    # Validate method remains the same - it validates price_override against product's original currency min_price
     def validate(self, data):
-        product = data.get('product') # This will be the Product instance from product_id source
+        product = data.get('product') 
         price_override = data.get('price_override')
 
         if product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE:
@@ -31,25 +62,24 @@ class CartItemSerializer(serializers.ModelSerializer):
                 )
             min_price = product.release.minimum_price_nyp if product.release.minimum_price_nyp is not None else Decimal('0.00')
             if price_override < min_price:
+                if product.currency:
+                     min_price_display = f"{min_price} {product.currency}"
+                else:
+                     min_price_display = f"{min_price}"
                 raise serializers.ValidationError(
-                    {"price_override": f"Entered price {price_override} is below the minimum of {min_price} {product.currency}."}
+                    {"price_override": f"Entered price {price_override} {product.currency} is below the minimum of {min_price_display}."}
                 )
         elif price_override is not None:
-            # If it's not NYP, an explicit price_override might be an error or should be ignored.
-            # For now, let's say if it's not NYP, price_override should not be sent.
-            # If it is sent, we could validate it matches product.price or simply ignore it.
-            # To be strict, we can raise an error if price_override is sent for non-NYP.
             if not (product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE):
-                 raise serializers.ValidationError(
-                    {"price_override": "Price override is only applicable for 'Name Your Price' items."}
-                )
+                data['price_override'] = None 
         return data
 
 
 class CartSerializer(serializers.ModelSerializer):
     items = CartItemSerializer(many=True, read_only=True)
-    total_price = serializers.DecimalField(source='get_total_price', max_digits=10, decimal_places=2, read_only=True)
-    currency = serializers.CharField(source='get_currency', read_only=True)
+    # These now reflect the cart total in the settlement currency (e.g., USD)
+    total_price = serializers.DecimalField(source='get_total_price_in_settlement_currency', max_digits=10, decimal_places=2, read_only=True)
+    currency = serializers.CharField(source='get_display_currency', read_only=True) # Should be USD
     user = serializers.StringRelatedField(read_only=True)
 
     class Meta:
@@ -63,12 +93,7 @@ class AddToCartSerializer(serializers.Serializer):
 
     def validate_product_id(self, value):
         try:
-            product = Product.objects.get(pk=value, is_active=True)
-            # Check if product is already in user's library (optional, prevents re-adding already owned items)
-            # request = self.context.get('request')
-            # if request and request.user.is_authenticated:
-            #   if product.release and UserLibraryItem.objects.filter(user=request.user, release=product.release).exists():
-            #       raise serializers.ValidationError("This item is already in your library.")
+            Product.objects.get(pk=value, is_active=True)
         except Product.DoesNotExist:
             raise serializers.ValidationError("Product not found or is not active.")
         return value
@@ -76,7 +101,7 @@ class AddToCartSerializer(serializers.Serializer):
     def validate(self, data):
         product_id = data.get('product_id')
         price_override = data.get('price_override')
-        product = Product.objects.get(pk=product_id) # Already validated by validate_product_id
+        product = Product.objects.get(pk=product_id)
 
         if product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE:
             if price_override is None:
@@ -85,13 +110,14 @@ class AddToCartSerializer(serializers.Serializer):
                 )
             min_price = product.release.minimum_price_nyp if product.release.minimum_price_nyp is not None else Decimal('0.00')
             if price_override < min_price:
+                if product.currency:
+                     min_price_display = f"{min_price} {product.currency}"
+                else:
+                     min_price_display = f"{min_price}"
                 raise serializers.ValidationError(
-                    {"price_override": f"Entered price {price_override} is below the minimum of {min_price} {product.currency}."}
+                    {"price_override": f"Entered price {price_override} {product.currency} is below the minimum of {min_price_display}."}
                 )
         elif price_override is not None:
              if not (product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE):
-                # If price_override is provided for a non-NYP item, clear it or raise error.
-                # For now, let's clear it, the effective price will be the product's price.
                 data['price_override'] = None 
-                # Alternative: raise serializers.ValidationError({"price_override": "Price override is only for NYP items."})
         return data

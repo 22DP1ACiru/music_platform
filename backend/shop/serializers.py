@@ -1,16 +1,17 @@
 from rest_framework import serializers
 from .models import Order, OrderItem, Product
-from music.models import Release # For NYP validation and library item
-from library.models import UserLibraryItem # For creating library item
+from music.models import Release 
+from library.models import UserLibraryItem 
 from django.db import transaction
-from decimal import Decimal 
+from decimal import Decimal
+from .constants import ORDER_SETTLEMENT_CURRENCY, convert_to_usd
 
 class ProductSerializer(serializers.ModelSerializer):
     release_title = serializers.CharField(source='release.title', read_only=True, allow_null=True)
     track_title = serializers.CharField(source='track.title', read_only=True, allow_null=True)
     product_type_display = serializers.CharField(source='get_product_type_display', read_only=True)
     release_id = serializers.PrimaryKeyRelatedField(source='release', read_only=True, allow_null=True)
-    artist_name = serializers.CharField(source='release.artist.name', read_only=True, allow_null=True) # Added for cart display
+    artist_name = serializers.CharField(source='release.artist.name', read_only=True, allow_null=True)
     cover_art = serializers.ImageField(source='release.cover_art', read_only=True, allow_null=True)
 
     class Meta:
@@ -28,13 +29,16 @@ class ProductSerializer(serializers.ModelSerializer):
             'release_id', 
             'track',   
             'release_title',
-            'artist_name',
-            'cover_art',
-            'track_title',
+            'track_title', 
+            'artist_name', 
+            'cover_art',  
             'created_at', 
             'updated_at'
         ]
-        read_only_fields = ['created_at', 'updated_at', 'product_type_display', 'release_title', 'track_title', 'release_id']
+        read_only_fields = [
+            'created_at', 'updated_at', 'product_type_display', 
+            'release_title', 'track_title', 'release_id', 'artist_name', 'cover_art'
+        ]
 
 
 class OrderItemCreateSerializer(serializers.Serializer):
@@ -60,8 +64,15 @@ class OrderItemCreateSerializer(serializers.Serializer):
                 )
             min_price = product.release.minimum_price_nyp if product.release.minimum_price_nyp is not None else Decimal('0.00')
             if price_override < min_price:
+                # Compare in original currency before conversion
+                # The validation should be against the artist's set minimum in their currency
+                if product.currency: # Check if product has a currency
+                     min_price_display = f"{min_price} {product.currency}"
+                else: # Fallback if product somehow has no currency (shouldn't happen with validation)
+                     min_price_display = f"{min_price}"
+
                 raise serializers.ValidationError(
-                    {"price_override": f"Entered price is below the minimum of {min_price} {product.currency}."}
+                    {"price_override": f"Entered price {price_override} {product.currency} is below the minimum of {min_price_display}."}
                 )
         elif price_override is not None:
             if not (product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE):
@@ -72,14 +83,12 @@ class OrderItemCreateSerializer(serializers.Serializer):
 class OrderCreateSerializer(serializers.ModelSerializer):
     items = OrderItemCreateSerializer(many=True, write_only=True)
     email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
-    # Expose order details for response after creation
     status_display = serializers.CharField(source='get_status_display', read_only=True)
-
 
     class Meta:
         model = Order
-        fields = ['id', 'items', 'email', 'status', 'status_display', 'total_amount', 'currency', 'created_at', 'updated_at'] # Added updated_at
-        read_only_fields = ('id', 'status', 'status_display', 'total_amount', 'currency', 'created_at', 'updated_at') # status is now read_only here
+        fields = ['id', 'items', 'email', 'status', 'status_display', 'total_amount', 'currency', 'created_at', 'updated_at']
+        read_only_fields = ('id', 'status', 'status_display', 'total_amount', 'currency', 'created_at', 'updated_at')
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
@@ -91,56 +100,55 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             final_email = user.email
 
         with transaction.atomic():
+            order_total_in_settlement_currency = Decimal('0.00')
+            
             order = Order.objects.create(
                 user=user if user.is_authenticated else None,
                 email=final_email,
-                status=Order.ORDER_STATUS_CHOICES[0][0], # PENDING (This is the key change here)
-                total_amount=Decimal('0.00'), 
-                currency='USD' 
+                status=Order.ORDER_STATUS_CHOICES[0][0], # PENDING
+                total_amount=order_total_in_settlement_currency, # Will be updated
+                currency=ORDER_SETTLEMENT_CURRENCY # Order will be in USD
             )
-
-            current_total = Decimal('0.00')
-            order_currency = None
 
             for item_data in items_data:
                 product = Product.objects.get(pk=item_data['product_id'])
                 quantity = item_data['quantity']
-                price_for_this_item = product.price 
+                
+                original_price_for_item = product.price 
+                original_currency = product.currency
 
                 if product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE:
-                    price_for_this_item = item_data['price_override'] 
+                    # price_override is already validated to be >= minimum_price_nyp in product's original currency
+                    original_price_for_item = item_data['price_override']
                 
-                if order_currency is None:
-                    order_currency = product.currency
-                elif order_currency != product.currency:
+                # Convert this item's price to the order's settlement currency (USD)
+                try:
+                    price_in_settlement_currency = convert_to_usd(original_price_for_item, original_currency)
+                except ValueError as e: # Catch if currency conversion is not possible
+                    # This order cannot proceed. Delete the partially created order.
                     order.delete() 
-                    raise serializers.ValidationError(
-                        {"currency": "All items in an order must have the same currency."}
-                    )
+                    raise serializers.ValidationError({"currency_conversion": str(e)})
+
 
                 OrderItem.objects.create(
                     order=order,
                     product=product,
                     quantity=quantity,
-                    price_at_purchase=price_for_this_item 
+                    # Store the price_at_purchase in the order's settlement currency
+                    price_at_purchase=price_in_settlement_currency 
+                    # Optional: Add fields to OrderItem to store original_price and original_currency for records
+                    # original_price=original_price_for_item,
+                    # original_currency=original_currency,
                 )
-                current_total += (price_for_this_item * quantity)
+                order_total_in_settlement_currency += (price_in_settlement_currency * quantity)
             
-            order.total_amount = current_total
-            order.currency = order_currency or 'USD'
-            order.save() # Save the order with PENDING status and calculated total
-
-            # REMOVED: Automatic setting to COMPLETED and library addition
-            # This will now happen in a separate "confirm_payment" step
-            # order.status = Order.ORDER_STATUS_CHOICES[2][0] # COMPLETED
-            # order.payment_gateway_id = "simulated_payment_success_pending_confirmation" 
-            # order.save()
-            # Library addition logic will also move
+            order.total_amount = order_total_in_settlement_currency
+            # order.currency is already set to ORDER_SETTLEMENT_CURRENCY
+            order.save()
 
         return order
 
 class OrderItemSerializer(serializers.ModelSerializer):
-    # product_name = serializers.CharField(source='product.name', read_only=True) # Redundant if using ProductSerializer
     product = ProductSerializer(read_only=True)
 
     class Meta:

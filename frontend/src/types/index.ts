@@ -84,7 +84,9 @@ export interface CartItem {
   product: ProductSummaryForCart; // Nested Product details
   price_override: string | null; // Decimal as string
   added_at: string;
-  effective_price: string; // Decimal as string
+  effective_price_original_currency: string;
+  original_currency: string;
+  effective_price_settlement_currency: string | null;
 }
 
 export interface Cart {

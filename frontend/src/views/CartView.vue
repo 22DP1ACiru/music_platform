@@ -33,7 +33,8 @@ const handleClearCart = async () => {
   }
 };
 
-const formatPrice = (amount: string | number, currency: string) => {
+const formatPrice = (amount: string | number | null, currency: string) => {
+  if (amount === null || amount === undefined) return "N/A";
   const numericAmount =
     typeof amount === "string" ? parseFloat(amount) : amount;
   if (isNaN(numericAmount)) return String(amount);
@@ -109,10 +110,24 @@ const proceedToCheckout = async () => {
               by {{ item.product.artist_name }}
             </p>
             <p class="item-price">
-              Price: {{ formatPrice(item.effective_price, cart.currency) }}
-              <span v-if="item.price_override" class="nyp-indicator"
-                >(Your Price)</span
+              Price:
+              {{
+                formatPrice(
+                  item.effective_price_settlement_currency,
+                  cart.currency
+                )
+              }}
+              <span v-if="item.price_override" class="nyp-indicator">
+                (Your Price:
+                {{ formatPrice(item.price_override, item.product.currency) }})
+              </span>
+              <span
+                v-else-if="item.product.currency !== cart.currency"
+                class="original-price-note"
               >
+                (Originally
+                {{ formatPrice(item.product.price, item.product.currency) }})
+              </span>
             </p>
           </div>
           <button
@@ -126,7 +141,7 @@ const proceedToCheckout = async () => {
       </div>
 
       <div class="cart-summary">
-        <h3>Cart Total: {{ formatPrice(cartTotalPrice, cartCurrency) }}</h3>
+        <h3>Cart Total: {{ formatPrice(cart.total_price, cart.currency) }}</h3>
         <div class="cart-actions">
           <button @click="handleClearCart" class="action-button clear-cart-btn">
             Clear Cart
@@ -218,14 +233,12 @@ const proceedToCheckout = async () => {
   color: var(--color-text-light);
   margin: 0 0 0.25rem 0;
 }
-.item-price {
-  font-size: 1em;
-  color: var(--color-text);
-}
-.nyp-indicator {
+.item-price .nyp-indicator,
+.item-price .original-price-note {
   font-size: 0.8em;
   font-style: italic;
   color: var(--color-text-light);
+  margin-left: 0.5em;
 }
 
 .remove-item-btn {
@@ -237,6 +250,7 @@ const proceedToCheckout = async () => {
   padding: 0.5rem;
   border-radius: 4px;
 }
+
 .remove-item-btn:hover {
   background-color: var(--vt-c-red-soft);
   border-color: var(--vt-c-red-dark);

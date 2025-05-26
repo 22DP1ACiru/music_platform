@@ -86,7 +86,7 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: "/order/confirm/:orderId", // Use orderId as a param
+      path: "/order/confirm/:orderId",
       name: "order-confirm",
       component: () => import("../views/OrderConfirmView.vue"),
       props: true, // Pass route params as props to the component

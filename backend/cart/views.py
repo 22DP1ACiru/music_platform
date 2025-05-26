@@ -39,21 +39,21 @@ class CartViewSet(viewsets.GenericViewSet): # Not ModelViewSet as we have custom
 
             product = get_object_or_404(Product, pk=product_id, is_active=True)
 
-            # Prevent adding if already in library
             if product.release and UserLibraryItem.objects.filter(user=request.user, release=product.release).exists():
                 return Response(
                     {"detail": f"'{product.name}' is already in your library and cannot be added to the cart."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Check cart currency consistency (simplified: first item sets currency)
-            if cart.items.exists():
-                current_cart_currency = cart.items.first().product.currency
-                if product.currency != current_cart_currency:
-                    return Response(
-                        {"detail": f"Cannot add item with currency {product.currency} to cart with currency {current_cart_currency}. Please clear cart or checkout existing items first."},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+            # --- MODIFICATION: Comment out or relax this currency check for now ---
+            # if cart.items.exists():
+            #     current_cart_currency = cart.items.first().product.currency
+            #     if product.currency != current_cart_currency:
+            #         return Response(
+            #             {"detail": f"Cannot add item with currency {product.currency} to cart with currency {current_cart_currency}. Please clear cart or checkout existing items first."},
+            #             status=status.HTTP_400_BAD_REQUEST
+            #         )
+            # --- END MODIFICATION ---
             
             cart_item, created = CartItem.objects.get_or_create(
                 cart=cart,
@@ -61,17 +61,15 @@ class CartViewSet(viewsets.GenericViewSet): # Not ModelViewSet as we have custom
                 defaults={'price_override': price_override}
             )
 
-            if not created: # Item already exists
-                # If it's an NYP item and a new price_override is provided, update it.
+            if not created: 
                 if product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE and price_override is not None:
                     if cart_item.price_override != price_override:
                         cart_item.price_override = price_override
                         cart_item.save()
-                        return Response(CartSerializer(cart, context={'request': request}).data, status=status.HTTP_200_OK)
-                return Response(
-                    {"detail": f"'{product.name}' is already in your cart."},
-                    status=status.HTTP_200_OK # Or 409 Conflict, but 200 is fine for idempotency
-                )
+                # No specific message needed if just re-fetching after "already in cart"
+                # The CartSerializer will return the current state.
+                # If you want to explicitly state it's already there, use a different status or detail message.
+                return Response(CartSerializer(cart, context={'request': request}).data, status=status.HTTP_200_OK) 
             
             return Response(CartSerializer(cart, context={'request': request}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

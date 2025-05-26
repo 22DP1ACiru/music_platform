@@ -57,7 +57,7 @@ INSTALLED_APPS = [
     'shop',
     'chat',
     'library',
-    'cart', # Add the new cart app
+    'cart',
     'vaultwave'
 ]
 
@@ -225,3 +225,12 @@ FORBIDDEN_USERNAME_SUBSTRINGS = [
     'system',
     'info',
 ]
+
+# A list of supported currencies
+CURRENCY_CHOICES = [
+    ('USD', 'US Dollar'),
+    ('EUR', 'Euro'),
+    ('GBP', 'British Pound'),
+]
+
+DEFAULT_CURRENCY = 'USD'
