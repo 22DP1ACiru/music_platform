@@ -9,3 +9,4 @@ django-cors-headers>=3.14,<4.0
 Pillow>=10.0,<11.0 # For image processing
 mutagen>=1.47
 django-filter>=24.2
+pydub>=0.25

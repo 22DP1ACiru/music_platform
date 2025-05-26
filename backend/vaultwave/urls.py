@@ -1,5 +1,5 @@
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include # Ensure include is imported
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
@@ -7,7 +7,7 @@ from users.views import UserViewSet, UserProfileViewSet, RegisterView
 from music.views import (
     GenreViewSet, ArtistViewSet, ReleaseViewSet,
     TrackViewSet, CommentViewSet, HighlightViewSet,
-    stream_track_audio 
+    stream_track_audio, GeneratedDownloadStatusViewSet # Import new ViewSet
 )
 from playlists.views import PlaylistViewSet
 
@@ -25,17 +25,20 @@ router.register(r'profiles', UserProfileViewSet, basename='userprofile')
 router.register(r'genres', GenreViewSet)
 router.register(r'artists', ArtistViewSet)
 router.register(r'releases', ReleaseViewSet, basename='release')
-# MODIFIED: Explicitly provide a basename for TrackViewSet
 router.register(r'tracks', TrackViewSet, basename='track') 
 router.register(r'comments', CommentViewSet)
 router.register(r'highlights', HighlightViewSet)
 
 router.register(r'playlists', PlaylistViewSet, basename='playlist')
 
+# New ViewSet for checking download status
+router.register(r'generated-download-status', GeneratedDownloadStatusViewSet, basename='generated-download-status')
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include(router.urls)),
+    path('api/music/', include('music.urls')), # Include URLs from music app
     path('api/tracks/<int:track_id>/stream/', stream_track_audio, name='track-stream'), 
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),

@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir --upgrade pip
 
 # Install system dependencies (if needed, e.g., for Pillow or specific libraries)
 # RUN apt-get update && apt-get install -y --no-install-recommends some-package
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg libsm6 libxext6 && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install dependencies
 COPY requirements.txt .

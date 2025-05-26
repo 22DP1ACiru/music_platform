@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Genre, Artist, Release, Track, Comment, Highlight
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload # Added GeneratedDownload
 
 @admin.register(Genre)
 class GenreAdmin(admin.ModelAdmin):
@@ -29,18 +29,14 @@ class ReleaseAdmin(admin.ModelAdmin):
         (None, {
             'fields': ('title', 'artist', 'release_type', 'release_date', 'cover_art', 'genres', 'is_published')
         }),
-        ('Download & Pricing', {
+        ('Musician-Uploaded Download & Pricing', { # Clarified this section
             'fields': ('download_file', 'pricing_model', 'price', 'currency', 'minimum_price_nyp'),
-            'description': "Configure download options and pricing for this release."
+            'description': "Configure download options and pricing for this release based on a musician-provided file."
         }),
     )
     
     def get_form(self, request, obj=None, **kwargs):
         form = super().get_form(request, obj, **kwargs)
-        # Conditional logic for fields can be added here if needed,
-        # e.g. hide price if pricing_model is not PAID.
-        # For simplicity, Django admin handles nullable fields well.
-        # Frontend forms are better for complex conditional UI.
         return form
 
 
@@ -63,3 +59,27 @@ class HighlightAdmin(admin.ModelAdmin):
     list_display = ('release', 'highlighted_by', 'highlighted_at', 'is_active', 'order')
     list_filter = ('is_active', 'highlighted_by')
     search_fields = ('release__title', 'release__artist__name')
+
+@admin.register(GeneratedDownload)
+class GeneratedDownloadAdmin(admin.ModelAdmin):
+    list_display = ('id', 'release', 'user', 'requested_format', 'status', 'celery_task_id', 'created_at', 'expires_at')
+    list_filter = ('status', 'requested_format', 'created_at', 'expires_at')
+    search_fields = ('release__title', 'user__username', 'celery_task_id', 'unique_identifier')
+    readonly_fields = ('created_at', 'updated_at', 'celery_task_id', 'download_file', 'unique_identifier', 'failure_reason')
+    actions = ['cleanup_expired_files']
+
+    def cleanup_expired_files(self, request, queryset):
+        # Example action: find expired and FAILED/READY items and delete their files
+        # This should ideally be a periodic Celery task, but an admin action can be useful
+        count = 0
+        for item in queryset.filter(models.Q(expires_at__lt=timezone.now()) | models.Q(status=GeneratedDownload.StatusChoices.FAILED)):
+            if item.download_file:
+                try:
+                    item.download_file.delete(save=False) # Delete file from storage
+                    item.status = GeneratedDownload.StatusChoices.EXPIRED # Or some other status
+                    item.save(update_fields=['status', 'download_file'])
+                    count +=1
+                except Exception as e:
+                    logger.error(f"Failed to cleanup generated file for {item.id}: {e}")
+        self.message_user(request, f"Cleaned up {count} expired/failed download files.")
+    cleanup_expired_files.short_description = "Cleanup selected expired/failed download files"

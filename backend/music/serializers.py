@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Genre, Artist, Release, Track, Comment, Highlight
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload # Added GeneratedDownload
 from rest_framework.reverse import reverse # Import reverse
 from decimal import Decimal # For validation
 
@@ -45,7 +45,6 @@ class TrackSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'release_title', 'artist_name', 'duration_in_seconds', 
             'genres_data', 'stream_url'
-            # Removed 'audio_file' from read_only_fields
         ]
 
     def get_stream_url(self, obj: Track) -> str | None:
@@ -60,7 +59,6 @@ class TrackSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         genre_names = validated_data.pop('genre_names', [])
-        # audio_file should be handled by ModelSerializer's default create
         track = Track.objects.create(**validated_data) 
         
         genres_to_set = []
@@ -73,11 +71,6 @@ class TrackSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         genre_names = validated_data.pop('genre_names', None)
-        
-        # audio_file is now part of validated_data if provided in the request
-        # ModelSerializer's super().update() will handle it.
-        # The Track model's save() method and signals will manage file replacement and duration.
-        
         instance = super().update(instance, validated_data)
 
         if genre_names is not None: 
@@ -105,7 +98,8 @@ class ReleaseSerializer(serializers.ModelSerializer):
     
     tracks = TrackSerializer(many=True, read_only=True) 
     release_type_display = serializers.CharField(source='get_release_type_display', read_only=True)
-    pricing_model_display = serializers.CharField(source='get_pricing_model_display', read_only=True) # For display
+    pricing_model_display = serializers.CharField(source='get_pricing_model_display', read_only=True) 
+    available_download_formats = serializers.SerializerMethodField() # New field
 
     class Meta:
         model = Release
@@ -116,16 +110,26 @@ class ReleaseSerializer(serializers.ModelSerializer):
             'genre_names', 
             'is_published', 'is_visible',
             'tracks', 
-            # New shop fields
-            'download_file', 
+            'download_file', # Musician-uploaded
             'pricing_model', 
             'pricing_model_display',
             'price', 
             'currency', 
             'minimum_price_nyp',
+            'available_download_formats', # New field
             'created_at', 'updated_at'
          ]
-        read_only_fields = ['is_visible', 'release_type_display', 'genres_data', 'artist', 'pricing_model_display'] 
+        read_only_fields = ['is_visible', 'release_type_display', 'genres_data', 'artist', 'pricing_model_display', 'available_download_formats'] 
+
+    def get_available_download_formats(self, obj: Release):
+        # This is where you'd define logic based on uploaded track types
+        # For now, return a static list. In future, inspect obj.tracks.all()
+        # and their original formats to dynamically determine this.
+        return [
+            {'value': fmt.value, 'label': fmt.label}
+            for fmt in GeneratedDownload.DownloadFormatChoices
+        ]
+
 
     def validate(self, data):
         pricing_model = data.get('pricing_model', getattr(self.instance, 'pricing_model', None))
@@ -134,44 +138,29 @@ class ReleaseSerializer(serializers.ModelSerializer):
         minimum_price_nyp = data.get('minimum_price_nyp', getattr(self.instance, 'minimum_price_nyp', None))
         download_file = data.get('download_file', getattr(self.instance, 'download_file', None))
 
-        # If pricing_model is not being updated, and instance exists, use instance's pricing_model
         if 'pricing_model' not in data and self.instance:
             pricing_model = self.instance.pricing_model
         
         if pricing_model == Release.PricingModel.PAID:
-            if price is None: # Price must be provided if PAID is chosen
+            if price is None: 
                 raise serializers.ValidationError({"price": "Price is required for 'Paid' model."})
             if price < Decimal('0.00'):
                 raise serializers.ValidationError({"price": "Price cannot be negative."})
-            if not currency: # Currency must be provided if PAID is chosen
+            if not currency: 
                 raise serializers.ValidationError({"currency": "Currency is required for 'Paid' model."})
         elif pricing_model == Release.PricingModel.NAME_YOUR_PRICE:
             if minimum_price_nyp is not None and minimum_price_nyp < Decimal('0.00'):
                 raise serializers.ValidationError({"minimum_price_nyp": "Minimum 'Name Your Price' cannot be negative."})
-            # For NYP, 'price' and 'currency' in the Release model itself are not used directly for setting asking price
-            # They are typically set to None.
         
-        # Ensure download_file is present if it's not FREE (optional, but good for business logic)
-        # This validation might be too strict depending on workflow (e.g. setup pricing before uploading file)
-        # For now, we ensure that if a download is priced, a file should ideally exist.
-        # The model's default pricing_model helps, but API can be more explicit.
-        if not download_file and pricing_model != Release.PricingModel.FREE:
-            # This rule might be relaxed. User might want to set up pricing before uploading the final file.
-            # For now, let's comment it out from serializer validation and rely on model's clean/save logic.
-            # raise serializers.ValidationError({"download_file": "A download file is required for non-Free pricing models."})
-            pass
-
+        # Validation for musician-uploaded download_file
         if download_file and not pricing_model:
-             raise serializers.ValidationError({'pricing_model': "A pricing model must be selected if a download file is provided."})
+             raise serializers.ValidationError({'pricing_model': "A pricing model must be selected if a musician-uploaded download file is provided."})
 
 
         return data
 
     def create(self, validated_data):
         genre_names = validated_data.pop('genre_names', [])
-        
-        # If pricing_model is PAID, ensure price and currency are not null before creating.
-        # This should be caught by .validate(), but as a safeguard:
         if validated_data.get('pricing_model') == Release.PricingModel.PAID:
             if validated_data.get('price') is None or validated_data.get('currency') is None:
                 raise serializers.ValidationError("Price and Currency are required for 'Paid' releases.")
@@ -189,38 +178,31 @@ class ReleaseSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         genre_names = validated_data.pop('genre_names', None) 
         
-        # Handle cover_art specifically: if it's an empty string, clear it.
         cover_art_data = validated_data.get('cover_art', Ellipsis) 
-        if cover_art_data is None: # Explicitly passed as null (empty string from form)
+        if cover_art_data is None: 
             instance.cover_art = None
-            validated_data.pop('cover_art') # Remove from validated_data if handled
-        elif cover_art_data is not Ellipsis and cover_art_data is not False : # File was uploaded
+            validated_data.pop('cover_art') 
+        elif cover_art_data is not Ellipsis and cover_art_data is not False : 
              instance.cover_art = cover_art_data
              validated_data.pop('cover_art')
 
-
-        # Handle download_file similarly
         download_file_data = validated_data.get('download_file', Ellipsis)
-        if download_file_data is None: # Explicitly passed as null
+        if download_file_data is None: 
             instance.download_file = None
             validated_data.pop('download_file')
         elif download_file_data is not Ellipsis and download_file_data is not False :
             instance.download_file = download_file_data
             validated_data.pop('download_file')
 
-
-        # If pricing model changes, adjust related fields
         pricing_model = validated_data.get('pricing_model', instance.pricing_model)
 
         if pricing_model != Release.PricingModel.PAID:
-            validated_data['price'] = None # Ensure price is nulled if not PAID
-            # validated_data['currency'] = None # Allow currency to persist or be nulled based on form
-        else: # PAID model
-            # Ensure price and currency are present if not already in validated_data and instance values are None
+            validated_data['price'] = None 
+        else: 
             if 'price' not in validated_data and instance.price is None:
                 raise serializers.ValidationError({"price": "Price is required for 'Paid' model."})
             if 'currency' not in validated_data and instance.currency is None:
-                 validated_data['currency'] = 'USD' # Or raise error: "Currency is required..."
+                 validated_data['currency'] = 'USD' 
         
         if pricing_model != Release.PricingModel.NAME_YOUR_PRICE:
             validated_data['minimum_price_nyp'] = None
@@ -252,3 +234,29 @@ class HighlightSerializer(serializers.ModelSerializer):
     class Meta:
         model = Highlight
         fields = ['id', 'release', 'highlighted_by', 'highlighted_at', 'is_active', 'order']
+
+# --- Serializers for GeneratedDownload ---
+class GeneratedDownloadRequestSerializer(serializers.Serializer):
+    requested_format = serializers.ChoiceField(choices=GeneratedDownload.DownloadFormatChoices.choices)
+    # quality_options = serializers.JSONField(required=False) # If you add this later
+
+class GeneratedDownloadStatusSerializer(serializers.ModelSerializer):
+    release_title = serializers.CharField(source='release.title', read_only=True)
+    download_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GeneratedDownload
+        fields = [
+            'id', 'unique_identifier', 'release', 'release_title', 'user', 
+            'requested_format', 'status', 'celery_task_id',
+            'download_url', # Use this URL for actual download
+            'created_at', 'updated_at', 'expires_at', 'failure_reason'
+        ]
+        read_only_fields = fields # All fields are read-only from API perspective after creation
+
+    def get_download_url(self, obj: GeneratedDownload):
+        request = self.context.get('request')
+        if obj.status == GeneratedDownload.StatusChoices.READY and obj.download_file and request:
+            # Construct URL to the download view that serves the file
+            return reverse('generated-download-file', kwargs={'download_uuid': str(obj.unique_identifier)}, request=request)
+        return None

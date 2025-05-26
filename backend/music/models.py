@@ -10,6 +10,7 @@ from django.db.models.signals import pre_save, post_delete # For file deletion s
 from django.dispatch import receiver # For file deletion signals
 import logging # Import Python's logging module
 from decimal import Decimal # For default price
+import uuid # For unique identifiers for generated downloads
 
 # Import from the new utility module
 from vaultwave.utils import (
@@ -44,6 +45,15 @@ def release_download_path(instance, filename):
     artist_id_for_path = instance.artist.id if instance.artist else "unknown_artist"
     release_id_for_path = instance.id if instance.id else "new_release"
     return f'release_downloads/{artist_id_for_path}/{release_id_for_path}/{filename}'
+
+def generated_release_download_path(instance, filename):
+    # instance is GeneratedDownload
+    release_id_for_path = instance.release.id if instance.release else "unknown_release"
+    # Use instance.id (GeneratedDownload ID) or a UUID for uniqueness to avoid collisions
+    # filename will likely be constructed like "release_title_format.zip"
+    # Path: generated_downloads/release_<release_id>/<uuid_or_generated_id>_<filename>
+    unique_id = instance.unique_identifier or uuid.uuid4()
+    return f'generated_downloads/release_{release_id_for_path}/{unique_id}_{filename}'
 
 
 class Genre(models.Model):
@@ -94,12 +104,12 @@ class Release(models.Model):
     genres = models.ManyToManyField(Genre, blank=True, related_name='releases')
     is_published = models.BooleanField(default=True, help_text="If unchecked, release is a draft.")
     
-    # Shop related fields for downloads
+    # Shop related fields for downloads (musician-uploaded)
     download_file = models.FileField(
         upload_to=release_download_path, 
         null=True, 
         blank=True, 
-        help_text="The downloadable file for the release (e.g., ZIP archive)."
+        help_text="The downloadable file for the release (e.g., ZIP archive) uploaded by the musician."
     )
     pricing_model = models.CharField(
         max_length=10, 
@@ -142,12 +152,14 @@ class Release(models.Model):
             if not self.currency:
                 raise ValidationError({'currency': "Currency must be set for 'Paid' model."})
         else:
-            pass
+            pass # No specific price validation if not 'PAID'
         
         if self.pricing_model == self.PricingModel.NAME_YOUR_PRICE:
             if self.minimum_price_nyp is not None and self.minimum_price_nyp < Decimal('0.00'):
                 raise ValidationError({'minimum_price_nyp': "Minimum 'Name Your Price' cannot be negative."})
         
+        # This validation regarding download_file is for musician-uploaded files.
+        # For on-demand generated files, this model won't store the file directly.
         if self.download_file and self.pricing_model not in [self.PricingModel.FREE, self.PricingModel.PAID, self.PricingModel.NAME_YOUR_PRICE]:
              raise ValidationError("Download file provided but pricing model is unclear or not set for downloads.")
         
@@ -156,8 +168,10 @@ class Release(models.Model):
 
 
     def save(self, *args, **kwargs):
+        # Nullify price/min_price if pricing model doesn't match
         if self.pricing_model != self.PricingModel.PAID:
             self.price = None
+            # Keep currency as it might be used for NYP or default display
         if self.pricing_model != self.PricingModel.NAME_YOUR_PRICE:
             self.minimum_price_nyp = None
         
@@ -208,18 +222,22 @@ class Track(models.Model):
                 file_changed = True
                 logger.info(f"Track PK '{self.pk}': Audio file changed from '{self._original_audio_file_name_on_load}' to '{current_audio_file_name}'.")
         elif not current_audio_file_name and self._original_audio_file_name_on_load:
+            # File is being cleared
             file_changed = True 
             logger.info(f"Track PK '{self.pk}': Audio file '{self._original_audio_file_name_on_load}' is being cleared.")
 
+        # Save the model first, especially if it's a new instance or file path depends on PK
         super().save(*args, **kwargs)
         logger.info(f"Track PK '{self.pk}': super().save() completed. Current audio_file.name from object: '{self.audio_file.name if self.audio_file and hasattr(self.audio_file, 'name') else 'No audio file'}'.")
 
+        # Update the original file name tracker *after* save, as save might rename the file
         current_audio_file_name_in_storage = self.audio_file.name if self.audio_file and hasattr(self.audio_file, 'name') else None
         self._original_audio_file_name_on_load = current_audio_file_name_in_storage 
         
         new_duration = None
         should_update_duration_in_db = False
 
+        # If file was cleared or does not exist in storage
         if not current_audio_file_name_in_storage: 
             if self.duration_in_seconds is not None:
                 logger.info(f"Track PK '{self.pk}': Audio file is not present in storage. Clearing duration from {self.duration_in_seconds}s to None.")
@@ -227,13 +245,15 @@ class Track(models.Model):
                 should_update_duration_in_db = True
             else:
                 logger.info(f"Track PK '{self.pk}': Audio file is not present and duration is already None. No change.")
+        # If file changed, or if duration was not previously set (e.g., new file or previous error)
         elif file_changed or self.duration_in_seconds is None:
             logger.info(f"Track PK '{self.pk}': Attempting duration calculation. file_changed={file_changed}, current_duration={self.duration_in_seconds}s.")
             try:
+                # Check if file exists in storage *before* trying to open
                 if self.audio_file.storage.exists(current_audio_file_name_in_storage):
                     logger.info(f"Track PK '{self.pk}': File '{current_audio_file_name_in_storage}' exists in storage. Opening with mutagen...")
                     with self.audio_file.storage.open(current_audio_file_name_in_storage, 'rb') as f:
-                        audio_metadata_obj = MutagenFile(f) 
+                        audio_metadata_obj = MutagenFile(f) # Pass the file object directly
                         
                         if audio_metadata_obj is None:
                             logger.warning(f"Track PK '{self.pk}': MutagenFile(f) returned None for '{current_audio_file_name_in_storage}'. File type not recognized or error during init.")
@@ -252,7 +272,7 @@ class Track(models.Model):
                     logger.error(f"Track PK '{self.pk}': Audio file '{current_audio_file_name_in_storage}' NOT FOUND in storage for duration calculation despite self.audio_file object existing.")
             except MutagenError as e:
                 logger.error(f"Track PK '{self.pk}': MutagenError for '{self.title}' reading '{current_audio_file_name_in_storage}': {e}", exc_info=True)
-            except FileNotFoundError as e: 
+            except FileNotFoundError as e: # Should be caught by storage.exists, but as a fallback
                 logger.error(f"Track PK '{self.pk}': FileNotFoundError for '{current_audio_file_name_in_storage}' when opening with storage: {e}", exc_info=True)
             except Exception as e:
                 logger.error(f"Track PK '{self.pk}': Unexpected error reading audio for '{self.title}' from '{current_audio_file_name_in_storage}': {e}", exc_info=True)
@@ -268,6 +288,9 @@ class Track(models.Model):
         
         if should_update_duration_in_db:
             logger.info(f"Track PK '{self.pk}': Calling super().save(update_fields=['duration_in_seconds']) to save duration: {self.duration_in_seconds}s.")
+            # Re-fetch the instance to avoid saving a stale version if other fields were changed elsewhere
+            # This is a known issue with calling save() multiple times in one method if not careful.
+            # However, update_fields should limit the scope.
             super().save(update_fields=['duration_in_seconds']) 
         
         logger.info(f"Track.save() finished for track PK '{self.pk}'.")
@@ -299,6 +322,56 @@ class Highlight(models.Model):
     class Meta:
         ordering = ['-highlighted_at']
 
+
+# --- Model for On-Demand Generated Downloads ---
+class GeneratedDownload(models.Model):
+    class StatusChoices(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PROCESSING = 'PROCESSING', 'Processing'
+        READY = 'READY', 'Ready'
+        FAILED = 'FAILED', 'Failed'
+        EXPIRED = 'EXPIRED', 'Expired'
+
+    class DownloadFormatChoices(models.TextChoices):
+        # Define based on what your Celery task will support
+        MP3_320 = 'MP3_320', 'MP3 (320kbps)'
+        MP3_192 = 'MP3_192', 'MP3 (192kbps)'
+        FLAC = 'FLAC', 'FLAC'
+        WAV = 'WAV', 'WAV (Original Quality)' # Or just 'Original'
+        # ORIGINAL = 'ORIGINAL', 'Original Uploaded Format' # If you want to offer this option directly for individual tracks too
+    
+    release = models.ForeignKey(Release, on_delete=models.CASCADE, related_name='generated_downloads')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='generated_downloads')
+    requested_format = models.CharField(max_length=20, choices=DownloadFormatChoices.choices)
+    # quality_options = models.JSONField(null=True, blank=True) # For more granular control if needed, e.g., VBR settings for MP3
+
+    status = models.CharField(max_length=20, choices=StatusChoices.choices, default=StatusChoices.PENDING)
+    celery_task_id = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    
+    # Using FileField to store the generated ZIP. This benefits from Django's storage system.
+    download_file = models.FileField(
+        upload_to=generated_release_download_path, 
+        null=True, 
+        blank=True, 
+        help_text="The generated ZIP file for download."
+    )
+    unique_identifier = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, help_text="Unique ID for download URL")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField(null=True, blank=True, help_text="When this download link/file expires.")
+    failure_reason = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"Download for {self.release.title} ({self.get_requested_format_display()}) by {self.user.username} - {self.get_status_display()}"
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'expires_at']),
+        ]
+
+
 # --- Signal Receivers for Deleting Old Files ---
 @receiver(pre_save, sender=Artist)
 def artist_pre_save_delete_old_picture(sender, instance, **kwargs):
@@ -313,6 +386,10 @@ def release_pre_save_delete_old_cover(sender, instance, **kwargs):
 def track_pre_save_delete_old_audio(sender, instance, **kwargs):
     delete_file_if_changed(sender, instance, 'audio_file')
 
+@receiver(pre_save, sender=GeneratedDownload) # Signal for new model
+def generated_download_pre_save_delete_old_file(sender, instance, **kwargs):
+    delete_file_if_changed(sender, instance, 'download_file')
+
 
 @receiver(post_delete, sender=Artist)
 def artist_post_delete_cleanup_picture(sender, instance, **kwargs):
@@ -321,8 +398,12 @@ def artist_post_delete_cleanup_picture(sender, instance, **kwargs):
 @receiver(post_delete, sender=Release)
 def release_post_delete_cleanup_cover_and_download(sender, instance, **kwargs):
     delete_file_on_instance_delete(instance.cover_art)
-    delete_file_on_instance_delete(instance.download_file) 
+    delete_file_on_instance_delete(instance.download_file) # Musician-uploaded
 
 @receiver(post_delete, sender=Track)
 def track_post_delete_cleanup_audio(sender, instance, **kwargs):
     delete_file_on_instance_delete(instance.audio_file)
+
+@receiver(post_delete, sender=GeneratedDownload) # Signal for new model
+def generated_download_post_delete_cleanup_file(sender, instance, **kwargs):
+    delete_file_on_instance_delete(instance.download_file)
