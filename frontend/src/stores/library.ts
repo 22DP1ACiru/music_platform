@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, onUnmounted } from "vue"; // Added onUnmounted for store cleanup
 import axios from "axios";
-import type { ReleaseDetail, GeneratedDownloadStatus } from "@/types"; // Import from new types file
+import type { ReleaseDetail, GeneratedDownloadStatus } from "@/types";
 
 export interface LibraryItem {
   id: number;
@@ -21,6 +21,8 @@ export const useLibraryStore = defineStore("library", () => {
   >({});
   const activeDownloadErrors = ref<Record<number, string | null>>({});
   const isProcessingDownload = ref<Record<number, boolean>>({});
+
+  const pollingIntervals: Record<number, number | undefined> = {};
 
   const getLibraryItemByReleaseId = computed(() => {
     return (releaseId: number) =>
@@ -48,10 +50,18 @@ export const useLibraryStore = defineStore("library", () => {
 
   async function addItemToLibrary(
     releaseId: number,
-    acquisitionType: "FREE" | "PAID" | "NYP"
+    acquisitionType: "FREE" | "PURCHASED" | "NYP" // Corrected from "PAID" to "PURCHASED" to align with your type
   ) {
     if (getLibraryItemByReleaseId.value(releaseId)) {
       console.log("Library Store: Item already in library.");
+      // Consider updating acquisition_type if it's different and more favorable (e.g. FREE -> PURCHASED)
+      const existingItem = getLibraryItemByReleaseId.value(releaseId);
+      if (existingItem && existingItem.acquisition_type !== acquisitionType) {
+        // This is a more complex scenario: what if it was FREE and now it's PURCHASED?
+        // For now, if it exists, we assume it's fine. The backend `get_or_create` in `add_item_to_library`
+        // might also need refinement if types can change.
+        // For simplicity, just return true if it exists.
+      }
       return true;
     }
     isLoading.value = true;
@@ -85,6 +95,8 @@ export const useLibraryStore = defineStore("library", () => {
       libraryItems.value = libraryItems.value.filter(
         (item) => item.id !== libraryItemId
       );
+      // Clean up state related to this removed item
+      stopPollingForLibraryItem(libraryItemId); // Ensure polling stops
       delete activeDownloadRequests.value[libraryItemId];
       delete activeDownloadErrors.value[libraryItemId];
       delete isProcessingDownload.value[libraryItemId];
@@ -119,7 +131,7 @@ export const useLibraryStore = defineStore("library", () => {
         response.data.status === "PENDING" ||
         response.data.status === "PROCESSING"
       ) {
-        startPollingForLibraryItem(libraryItemId, response.data.id); // Pass GeneratedDownload.id
+        startPollingForLibraryItem(libraryItemId, response.data.id);
       }
     } catch (err) {
       console.error(
@@ -138,12 +150,11 @@ export const useLibraryStore = defineStore("library", () => {
     }
   }
 
-  const pollingIntervals: Record<number, number | undefined> = {};
-
   async function pollSpecificDownloadStatus(
-    libraryItemId: number, // This is UserLibraryItem.id, used as a key for UI state
-    downloadInstanceId: number // This is GeneratedDownload.id, used for API calls
+    libraryItemId: number,
+    downloadInstanceId: number
   ) {
+    // No need to set isProcessingDownload here, it's for the initial request.
     try {
       const response = await axios.get<GeneratedDownloadStatus>(
         `/generated-download-status/${downloadInstanceId}/`
@@ -164,7 +175,13 @@ export const useLibraryStore = defineStore("library", () => {
       );
       if (axios.isAxiosError(err) && err.response?.status === 404) {
         activeDownloadErrors.value[libraryItemId] =
-          "Download request not found during polling.";
+          "Download request not found during polling. It might have been cleaned up or an error occurred.";
+        // Update the status to reflect it's no longer actively processing/pending for this UI instance
+        if (activeDownloadRequests.value[libraryItemId]) {
+          activeDownloadRequests.value[libraryItemId]!.status = "FAILED"; // Or a new 'UNKNOWN' status
+          activeDownloadRequests.value[libraryItemId]!.failure_reason =
+            "Polling could not find the download record.";
+        }
       } else {
         activeDownloadErrors.value[libraryItemId] =
           "Error checking download status during polling.";
@@ -175,18 +192,23 @@ export const useLibraryStore = defineStore("library", () => {
 
   function startPollingForLibraryItem(
     libraryItemId: number,
-    downloadInstanceId: number // GeneratedDownload.id
+    downloadInstanceId: number
   ) {
-    stopPollingForLibraryItem(libraryItemId);
+    stopPollingForLibraryItem(libraryItemId); // Clear existing interval for this item first
+    console.log(
+      `Library Store: Started polling for library item ${libraryItemId}, download instance ${downloadInstanceId}`
+    );
     pollSpecificDownloadStatus(libraryItemId, downloadInstanceId); // Initial poll
     pollingIntervals[libraryItemId] = window.setInterval(() => {
-      // Use downloadInstanceId for subsequent polls as it refers to the specific GeneratedDownload record
       pollSpecificDownloadStatus(libraryItemId, downloadInstanceId);
-    }, 5000);
+    }, 5000); // Poll every 5 seconds
   }
 
   function stopPollingForLibraryItem(libraryItemId: number) {
     if (pollingIntervals[libraryItemId]) {
+      console.log(
+        `Library Store: Stopped polling for library item ${libraryItemId}`
+      );
       clearInterval(pollingIntervals[libraryItemId]);
       delete pollingIntervals[libraryItemId];
     }
@@ -198,6 +220,45 @@ export const useLibraryStore = defineStore("library", () => {
       stopPollingForLibraryItem(libItemId);
     });
   }
+
+  // --- Page Visibility API Handler ---
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === "visible") {
+      console.log(
+        "Library Store: Tab became visible. Re-checking active downloads."
+      );
+      for (const itemIdStr in activeDownloadRequests.value) {
+        const itemId = parseInt(itemIdStr);
+        const request = activeDownloadRequests.value[itemId];
+        if (
+          request &&
+          (request.status === "PENDING" || request.status === "PROCESSING")
+        ) {
+          console.log(
+            `Library Store: Forcing poll for visible tab on item ${itemId}, download ${request.id}`
+          );
+          pollSpecificDownloadStatus(itemId, request.id); // request.id is GeneratedDownload.id
+        }
+      }
+    }
+  };
+
+  // Setup visibility listener when the store is initialized
+  // This assumes the store is initialized once per application lifecycle.
+  if (typeof document !== "undefined") {
+    // Ensure document exists (for SSR/testing safety)
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+  }
+
+  // Cleanup listener if the store instance were to be "unmounted" or disposed.
+  // Pinia stores are generally global singletons, so this is more for completeness
+  // or if you had a pattern of dynamically creating/destroying stores.
+  onUnmounted(() => {
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    }
+    clearAllPolling(); // Also clear intervals when store/app might be closing down
+  });
 
   return {
     libraryItems,
@@ -211,8 +272,8 @@ export const useLibraryStore = defineStore("library", () => {
     removeItemFromLibrary,
     getLibraryItemByReleaseId,
     requestLibraryItemDownload,
-    startPollingForLibraryItem,
-    stopPollingForLibraryItem,
+    startPollingForLibraryItem, // Export if direct control needed, though visibilityChange handles most cases
+    stopPollingForLibraryItem, // Export for manual stop if necessary
     clearAllPolling,
   };
 });

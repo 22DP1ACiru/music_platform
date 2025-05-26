@@ -1,14 +1,13 @@
-// frontend/src/views/LibraryView.vue
 <script setup lang="ts">
 import { onMounted, computed, ref, onUnmounted, watch } from "vue";
 import { useLibraryStore, type LibraryItem } from "@/stores/library";
-import { usePlayerStore } from "@/stores/player"; // Keep PlayerTrackInfo here or move to types
+import { usePlayerStore } from "@/stores/player";
 import { useAuthStore } from "@/stores/auth";
 import { RouterLink } from "vue-router";
 import axios from "axios";
 import type {
   TrackInfoFromApi,
-  GeneratedDownloadStatus,
+  // GeneratedDownloadStatus, // No longer directly used for notification logic here
   PlayerTrackInfo,
 } from "@/types";
 
@@ -22,9 +21,42 @@ const libraryItems = computed(() => libraryStore.libraryItems);
 const isLoading = computed(() => libraryStore.isLoading);
 const error = computed(() => libraryStore.error);
 
-onMounted(() => {
+// Watcher for activeDownloadRequests is still useful for reacting to store changes,
+// even without alerts. For example, if future UI elements depend on these changes.
+// For now, its direct utility is reduced without alerts, but keeping it doesn't harm.
+// If it causes performance issues with very large libraries, it could be re-evaluated.
+watch(
+  () => libraryStore.activeDownloadRequests,
+  (currentRequests, oldRequests) => {
+    // Logic related to notifications (alerts and notifiedItemsThisSession) has been removed.
+    // The UI will reactively update based on changes in libraryStore.activeDownloadRequests.
+    // This watcher could be used in the future if other side effects are needed when statuses change.
+    console.log(
+      "LibraryView: Active download requests updated in store.",
+      currentRequests
+    );
+  },
+  { deep: true, immediate: true }
+);
+
+onMounted(async () => {
   if (authStore.isLoggedIn) {
-    libraryStore.fetchLibraryItems();
+    await libraryStore.fetchLibraryItems();
+
+    // Ensure polling is active for any ongoing downloads when the view mounts
+    for (const itemIdStr in libraryStore.activeDownloadRequests) {
+      const itemId = parseInt(itemIdStr);
+      const request = libraryStore.activeDownloadRequests[itemId];
+      if (
+        request &&
+        (request.status === "PENDING" || request.status === "PROCESSING")
+      ) {
+        console.log(
+          `LibraryView onMount: Ensuring polling is active for item ${itemId}, download ${request.id} (Status: ${request.status})`
+        );
+        libraryStore.startPollingForLibraryItem(itemId, request.id);
+      }
+    }
   }
 });
 
@@ -81,7 +113,7 @@ const handleAddReleaseToQueue = (libraryItem: LibraryItem) => {
       mapToPlayerTrackInfoFromLibrary(apiTrack, libraryItem.release)
     );
   });
-  alert(`${libraryItem.release.title} added to queue.`);
+  // Removed alert: alert(`${libraryItem.release.title} added to queue.`);
 };
 
 const handleRemoveItem = async (libraryItemId: number) => {
@@ -93,19 +125,17 @@ const handleRemoveItem = async (libraryItemId: number) => {
 const handleRequestDownloadForLibraryItem = async (libraryItemId: number) => {
   const format = selectedFormats.value[libraryItemId];
   if (!format) {
-    alert("Please select a download format.");
+    // Consider a less obtrusive way to show this error if alerts are fully removed
+    console.warn("Please select a download format.");
+    // For now, let's keep a console warning or a soft UI error if you add one
+    libraryStore.activeDownloadErrors[libraryItemId] =
+      "Please select a download format.";
     return;
   }
-  await libraryStore.requestLibraryItemDownload(libraryItemId, format);
+  // Clear any previous error for this item before making a new request
+  libraryStore.activeDownloadErrors[libraryItemId] = null;
 
-  const requestStatus = libraryStore.activeDownloadRequests[libraryItemId];
-  if (
-    requestStatus &&
-    (requestStatus.status === "PENDING" ||
-      requestStatus.status === "PROCESSING")
-  ) {
-    libraryStore.startPollingForLibraryItem(libraryItemId, requestStatus.id);
-  }
+  await libraryStore.requestLibraryItemDownload(libraryItemId, format);
 };
 
 const triggerActualDownloadFromLibrary = async (libraryItemId: number) => {
@@ -153,25 +183,24 @@ const triggerActualDownloadFromLibrary = async (libraryItemId: number) => {
       libraryStore.isProcessingDownload[libraryItemId] = false;
     }
   } else {
-    alert("Download URL not available.");
+    // Consider a less obtrusive way to show this error if alerts are fully removed
+    console.warn("Download URL not available.");
+    libraryStore.activeDownloadErrors[libraryItemId] =
+      "Download URL not available. Please try requesting again.";
   }
 };
 
 const formatAcquisitionType = (
   type: LibraryItem["acquisition_type"]
 ): string => {
-  // Added type for 'type'
   switch (type) {
     case "FREE":
       return "Free";
-    case "PURCHASED": // Changed from "PAID" to "PURCHASED" to match model
+    case "PURCHASED":
       return "Purchased";
     case "NYP":
       return "Name Your Price";
     default:
-      // This part ensures that if a new type is added to the backend model
-      // but not here, it will still display something reasonable (the raw type)
-      // and TypeScript will warn you if `type` could be something unexpected.
       const exhaustiveCheck: never = type;
       return exhaustiveCheck;
   }
@@ -277,7 +306,6 @@ watch(
           </button>
         </div>
 
-        <!-- Track List within Library Item -->
         <details class="track-list-details">
           <summary>
             Show Tracks ({{ item.release.tracks?.length || 0 }})
@@ -340,7 +368,6 @@ watch(
           </ol>
         </details>
 
-        <!-- Download Section for each Library Item -->
         <div class="item-download-section">
           <h4>Download Release</h4>
           <div
@@ -469,12 +496,20 @@ watch(
         </div>
 
         <button
+          v-if="item.acquisition_type === 'FREE'"
           @click="handleRemoveItem(item.id)"
           class="action-btn remove-item-btn"
           title="Remove from Library"
         >
           🗑️ Remove
         </button>
+        <span
+          v-else
+          class="purchased-item-note"
+          title="Purchased items cannot be removed"
+        >
+          (Acquired)
+        </span>
       </div>
     </div>
   </div>
@@ -604,6 +639,15 @@ watch(
 .remove-item-btn:hover {
   background-color: var(--vt-c-red);
   color: var(--vt-c-white);
+}
+
+.purchased-item-note {
+  font-size: 0.8em;
+  color: var(--color-text-light);
+  margin-top: auto; /* Similar alignment to button */
+  align-self: flex-start;
+  padding: 0.4em 0.8em; /* Match button padding for alignment */
+  font-style: italic;
 }
 
 .track-list-details {

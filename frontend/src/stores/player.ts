@@ -1,16 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
-
-// Interface for track info needed by the player
-export interface PlayerTrackInfo {
-  id: number; // Unique ID for the track
-  title: string;
-  audio_file: string; // The URL to play
-  artistName?: string;
-  releaseTitle?: string;
-  coverArtUrl?: string | null;
-  duration?: number | null; // Duration in seconds
-}
+import type { PlayerTrackInfo } from "@/types"; // Import from shared types
 
 // Interface for the complete persisted player state
 interface PersistedPlayerState {
