@@ -1,7 +1,7 @@
 from rest_framework import serializers
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload # Added GeneratedDownload
-from rest_framework.reverse import reverse # Import reverse
-from decimal import Decimal # For validation
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload
+from rest_framework.reverse import reverse
+from decimal import Decimal
 
 class GenreSerializer(serializers.ModelSerializer):
     class Meta:
@@ -36,6 +36,11 @@ class TrackSerializer(serializers.ModelSerializer):
             'audio_file', 
             'stream_url', 
             'duration_in_seconds',
+            'codec_name',
+            'bit_rate',
+            'sample_rate',
+            'channels',
+            'is_lossless',
             'release', 
             'release_title', 'artist_name',
             'genres_data', 
@@ -44,6 +49,7 @@ class TrackSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'release_title', 'artist_name', 'duration_in_seconds', 
+            'codec_name', 'bit_rate', 'sample_rate', 'channels', 'is_lossless', # New read-only
             'genres_data', 'stream_url'
         ]
 
@@ -96,16 +102,11 @@ class ReleaseSerializer(serializers.ModelSerializer):
         required=False
     )
     
+    # Important: Ensure tracks are preloaded in the viewset for this to be efficient
     tracks = TrackSerializer(many=True, read_only=True) 
     release_type_display = serializers.CharField(source='get_release_type_display', read_only=True)
     pricing_model_display = serializers.CharField(source='get_pricing_model_display', read_only=True) 
     available_download_formats = serializers.SerializerMethodField() 
-
-    # The 'download_file' (FileField) is for musician-uploaded ZIPs.
-    # If we are fully replacing this with on-demand, we can remove it from fields for musician forms.
-    # However, keeping it in the model/serializer allows admins to manage it or for legacy data.
-    # For now, we'll keep it here but the frontend form will stop sending it.
-    # If frontend sends `null` or omits it, it will be handled by model's save/clean.
 
     class Meta:
         model = Release
@@ -115,8 +116,8 @@ class ReleaseSerializer(serializers.ModelSerializer):
             'genres_data', 
             'genre_names', 
             'is_published', 'is_visible',
-            'tracks', 
-            'download_file', # Musician-uploaded ZIP (kept for legacy/admin, form will omit)
+            'tracks',
+            'download_file', 
             'pricing_model', 
             'pricing_model_display',
             'price', 
@@ -126,26 +127,94 @@ class ReleaseSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
          ]
         read_only_fields = ['is_visible', 'release_type_display', 'genres_data', 'artist', 'pricing_model_display', 'available_download_formats'] 
-        # If 'download_file' is to be writeable by admin or specific scenarios, don't make it read_only.
-        # If musician form should NOT be able to set it, control this in the view/form handling.
 
     def get_available_download_formats(self, obj: Release):
-        # Logic to determine available formats based on uploaded track types
-        # For simplicity now, return all. Enhance later.
-        # This should check if all tracks are lossless to offer FLAC/WAV, etc.
-        # If any track is lossy, then offering WAV/FLAC from that lossy source is not ideal.
-
-        # Basic example:
-        # has_lossless_tracks = any(t.audio_file.name.lower().endswith(('.wav', '.flac')) for t in obj.tracks.all() if t.audio_file)
-        # formats = [{'value': GeneratedDownload.DownloadFormatChoices.MP3_320, 'label': GeneratedDownload.DownloadFormatChoices.MP3_320.label}]
-        # if has_lossless_tracks:
-        #     formats.append({'value': GeneratedDownload.DownloadFormatChoices.FLAC, 'label': GeneratedDownload.DownloadFormatChoices.FLAC.label})
-        # return formats
+        formats = []
+        # The `obj.tracks` here will be instances of TrackSerializer output if context is a list view,
+        # or actual Track model instances if it's a detail view and tracks are prefetched.
+        # For ReleaseDetailView, `obj.tracks.all()` would be better to access model instances.
+        # However, since `tracks` is a field in this serializer, it should be populated with
+        # serialized track data, which includes the new metadata fields.
         
-        return [
-            {'value': fmt.value, 'label': fmt.label}
-            for fmt in GeneratedDownload.DownloadFormatChoices
+        # If `obj.tracks` is already serialized data (list of dicts from TrackSerializer):
+        serialized_tracks = self.fields['tracks'].to_representation(obj.tracks.all()) if hasattr(obj.tracks, 'all') else obj.tracks
+
+
+        if not serialized_tracks:
+            return []
+
+        all_tracks_are_lossless_uploads = True
+        # Use a flag to see if any track is *not* marked as lossless or has unknown status
+        for track_data in serialized_tracks:
+            if track_data.get('is_lossless') is False or track_data.get('is_lossless') is None:
+                all_tracks_are_lossless_uploads = False
+                break
+        
+        # Common original format (simple check for now: if all are mp3)
+        all_mp3_original = True
+        for track_data in serialized_tracks:
+            if track_data.get('codec_name') != 'mp3': # or check original_format if you had that
+                all_mp3_original = False
+                break
+
+        # 1. ORIGINAL_ZIP - Always offer
+        formats.append({
+            'value': GeneratedDownload.DownloadFormatChoices.ORIGINAL_ZIP.value,
+            'label': GeneratedDownload.DownloadFormatChoices.ORIGINAL_ZIP.label
+        })
+
+        # 2. MP3 options
+        # Offer 320k unless all originals are already lower bitrate MP3s (e.g. all 192k)
+        # This is a simplified check. A more precise check would involve looking at actual bit_rate.
+        can_offer_mp3_320 = True # Assume yes initially
+        # if all_mp3_original: # if all are mp3s, check if offering 320 makes sense
+            # Example: if all tracks have bit_rate <= 192000, maybe don't offer 320k
+            # For now, let's always offer it and let Celery handle not up-converting quality.
+        if can_offer_mp3_320:
+            formats.append({
+                'value': GeneratedDownload.DownloadFormatChoices.MP3_320.value,
+                'label': GeneratedDownload.DownloadFormatChoices.MP3_320.label
+            })
+        formats.append({
+            'value': GeneratedDownload.DownloadFormatChoices.MP3_192.value,
+            'label': GeneratedDownload.DownloadFormatChoices.MP3_192.label
+        })
+        
+        # 3. Lossless options (FLAC, WAV) - only if all original uploads were lossless
+        if all_tracks_are_lossless_uploads:
+            formats.append({
+                'value': GeneratedDownload.DownloadFormatChoices.FLAC.value,
+                'label': GeneratedDownload.DownloadFormatChoices.FLAC.label
+            })
+            formats.append({
+                'value': GeneratedDownload.DownloadFormatChoices.WAV.value,
+                'label': GeneratedDownload.DownloadFormatChoices.WAV.label
+            })
+        
+        # Deduplicate and order logic (optional, if above logic could create dupes)
+        final_formats = []
+        seen_values = set()
+        # Define preferred order
+        preferred_order = [
+            GeneratedDownload.DownloadFormatChoices.ORIGINAL_ZIP.value,
+            GeneratedDownload.DownloadFormatChoices.FLAC.value,
+            GeneratedDownload.DownloadFormatChoices.WAV.value,
+            GeneratedDownload.DownloadFormatChoices.MP3_320.value,
+            GeneratedDownload.DownloadFormatChoices.MP3_192.value,
         ]
+        # Add available formats in preferred order
+        for p_val in preferred_order:
+            for fmt in formats:
+                if fmt['value'] == p_val and p_val not in seen_values:
+                    final_formats.append(fmt)
+                    seen_values.add(p_val)
+        # Add any other formats not in preferred order (if any)
+        for fmt in formats:
+            if fmt['value'] not in seen_values:
+                 final_formats.append(fmt)
+                 seen_values.add(fmt['value'])
+
+        return final_formats
 
 
     def validate(self, data):
@@ -154,20 +223,15 @@ class ReleaseSerializer(serializers.ModelSerializer):
         currency = data.get('currency', getattr(self.instance, 'currency', None))
         minimum_price_nyp = data.get('minimum_price_nyp', getattr(self.instance, 'minimum_price_nyp', None))
         
-        # download_file is the musician-uploaded one. This validation might be removed if the field is deprecated from forms.
-        # download_file = data.get('download_file', getattr(self.instance, 'download_file', None))
-
         if 'pricing_model' not in data and self.instance:
             pricing_model = self.instance.pricing_model
         
         if pricing_model == Release.PricingModel.PAID:
             if price is None: 
                 raise serializers.ValidationError({"price": "Price is required for 'Paid' model."})
-            # Price can be 0.00 for PAID model (e.g. "pay what you want starting from $0, but it's a 'purchase'")
-            # Let's adjust to allow 0, but not negative.
             if isinstance(price, Decimal) and price < Decimal('0.00'):
                  raise serializers.ValidationError({"price": "Price cannot be negative."})
-            elif not isinstance(price, Decimal) and float(price) < 0.00: # Handle string input before conversion
+            elif not isinstance(price, Decimal) and float(price) < 0.00: 
                  raise serializers.ValidationError({"price": "Price cannot be negative."})
 
             if not currency: 
@@ -179,11 +243,6 @@ class ReleaseSerializer(serializers.ModelSerializer):
                 elif not isinstance(minimum_price_nyp, Decimal) and float(minimum_price_nyp) < 0.00:
                     raise serializers.ValidationError({"minimum_price_nyp": "Minimum 'Name Your Price' cannot be negative."})
         
-        # If on-demand ZIPs are the primary way, this validation for musician-uploaded 'download_file' becomes less critical
-        # or might be removed if the field is removed from the forms.
-        # if download_file and not pricing_model:
-        #      raise serializers.ValidationError({'pricing_model': "A pricing model must be selected if a musician-uploaded download file is provided."})
-
         return data
 
     def create(self, validated_data):
@@ -213,29 +272,23 @@ class ReleaseSerializer(serializers.ModelSerializer):
              instance.cover_art = cover_art_data
              validated_data.pop('cover_art')
 
-        # Handle musician-uploaded download_file (if still part of the form/API)
-        # If we remove it from the form, this part might not receive 'download_file' in validated_data
         download_file_data = validated_data.get('download_file', Ellipsis)
-        if download_file_data is None: # Explicitly passed as null
+        if download_file_data is None: 
             instance.download_file = None
             if 'download_file' in validated_data: validated_data.pop('download_file')
         elif download_file_data is not Ellipsis and download_file_data is not False:
             instance.download_file = download_file_data
             if 'download_file' in validated_data: validated_data.pop('download_file')
-        # If download_file_data is Ellipsis, it means it wasn't in the request, so no change to instance.download_file from here.
-
-
+        
         pricing_model = validated_data.get('pricing_model', instance.pricing_model)
 
         if pricing_model != Release.PricingModel.PAID:
             validated_data['price'] = None 
         else: 
             if 'price' not in validated_data and instance.price is None:
-                 # If switching to PAID and price isn't provided, it's an issue.
-                 # Backend model validation should catch this, but serializer can be more proactive.
                 raise serializers.ValidationError({"price": "Price is required when switching to 'Paid' model."})
             if 'currency' not in validated_data and instance.currency is None:
-                 validated_data['currency'] = 'USD' # Default currency if switching to PAID and not provided
+                 validated_data['currency'] = 'USD' 
         
         if pricing_model != Release.PricingModel.NAME_YOUR_PRICE:
             validated_data['minimum_price_nyp'] = None
@@ -268,10 +321,8 @@ class HighlightSerializer(serializers.ModelSerializer):
         model = Highlight
         fields = ['id', 'release', 'highlighted_by', 'highlighted_at', 'is_active', 'order']
 
-# --- Serializers for GeneratedDownload ---
 class GeneratedDownloadRequestSerializer(serializers.Serializer):
     requested_format = serializers.ChoiceField(choices=GeneratedDownload.DownloadFormatChoices.choices)
-    # quality_options = serializers.JSONField(required=False) # If you add this later
 
 class GeneratedDownloadStatusSerializer(serializers.ModelSerializer):
     release_title = serializers.CharField(source='release.title', read_only=True)
