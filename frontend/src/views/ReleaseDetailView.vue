@@ -1,4 +1,3 @@
-// frontend/src/views/ReleaseDetailView.vue
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from "vue";
 import { useRouter, RouterLink, useRoute } from "vue-router";
@@ -6,21 +5,27 @@ import axios from "axios";
 import { usePlayerStore } from "@/stores/player";
 import { useAuthStore } from "@/stores/auth";
 import { useLibraryStore } from "@/stores/library";
+import { useCartStore } from "@/stores/cart"; // Import cart store
 import type { ReleaseDetail, TrackInfoFromApi, PlayerTrackInfo } from "@/types";
+import BuyModal from "@/components/BuyModal.vue"; // Import the modal
 
 const playerStore = usePlayerStore();
 const authStore = useAuthStore();
 const libraryStore = useLibraryStore();
+const cartStore = useCartStore(); // Initialize cart store
 const router = useRouter();
 const route = useRoute();
 const release = ref<ReleaseDetail | null>(null);
 const props = defineProps<{ id: string | string[] }>();
 const isLoading = ref(true);
 const error = ref<string | null>(null);
-const nypAmount = ref<string>("");
+// Removed nypAmount ref, it's now managed inside BuyModal
 
-const isAddingToLibrary = ref(false);
+const isAddingToLibrary = ref(false); // For FREE items
 const addToLibraryError = ref<string | null>(null);
+
+const showBuyModal = ref(false); // To control modal visibility
+const modalError = ref<string | null>(null); // Error specific to modal operations
 
 const isOwner = computed(() => {
   if (!authStore.isLoggedIn || !release.value || !authStore.authUser) {
@@ -35,6 +40,14 @@ const isOwner = computed(() => {
 const isInLibrary = computed(() => {
   if (!release.value || !authStore.isLoggedIn) return false;
   return !!libraryStore.getLibraryItemByReleaseId(release.value.id);
+});
+
+const isInCart = computed(() => {
+  if (!release.value || !cartStore.cart || !release.value.product_info_id)
+    return false;
+  return cartStore.cart.items.some(
+    (item) => item.product.id === release.value!.product_info_id
+  );
 });
 
 const formattedPrice = computed(() => {
@@ -52,7 +65,8 @@ const formattedPrice = computed(() => {
   return "";
 });
 
-const formattedMinNypPrice = computed(() => {
+// This is now primarily for display on ReleaseDetailView, modal has its own logic
+const formattedMinNypPriceDisplay = computed(() => {
   if (
     release.value?.pricing_model === "NYP" &&
     release.value.minimum_price_nyp &&
@@ -78,19 +92,23 @@ const fetchReleaseDetail = async (id: string | string[]) => {
   }
   isLoading.value = true;
   error.value = null;
-  addToLibraryError.value = null;
+  addToLibraryError.value = null; // Clear previous specific errors
+  modalError.value = null;
   release.value = null;
 
   try {
     const response = await axios.get<ReleaseDetail>(`/releases/${releaseId}/`);
     release.value = response.data;
-    if (release.value?.pricing_model === "NYP") {
-      nypAmount.value = release.value.minimum_price_nyp
-        ? parseFloat(release.value.minimum_price_nyp).toFixed(2)
-        : "0.00";
-    }
-    if (authStore.isLoggedIn && libraryStore.libraryItems.length === 0) {
-      await libraryStore.fetchLibraryItems();
+
+    if (authStore.isLoggedIn) {
+      if (libraryStore.libraryItems.length === 0) {
+        // Fetch library if not already loaded
+        await libraryStore.fetchLibraryItems();
+      }
+      if (!cartStore.cart) {
+        // Fetch cart if not already loaded
+        await cartStore.fetchCart();
+      }
     }
   } catch (err: any) {
     console.error(`Failed to fetch release ${releaseId}:`, err);
@@ -162,178 +180,63 @@ const goToEditRelease = () => {
   }
 };
 
-const handleAcquireRelease = async () => {
+// For FREE items or Owner adding to library
+const handleAddFreeItemToLibrary = async () => {
   if (!release.value) return;
   if (!authStore.isLoggedIn) {
     addToLibraryError.value = "Please log in to add items to your library.";
     router.push({ name: "login", query: { redirect: route.fullPath } });
     return;
   }
-  // Artist self-acquisition check:
-  // This logic should ideally be on the backend or more robustly handled.
-  // For now, a simple frontend check:
-  if (isOwner.value) {
-    // Instead of error, let's try adding it as FREE acquisition if owner
-    // Or simply disallow "acquiring" own items via purchase flow.
-    // For simplicity, if owner, we might assume it's already "in library" conceptually.
-    // Let's try adding it as FREE if they click and are owner.
-    // This is similar to how library "add-item" works for free items or owners.
-    isAddingToLibrary.value = true;
-    addToLibraryError.value = null;
-    const addedViaLibrary = await libraryStore.addItemToLibrary(
-      release.value.id,
-      "FREE"
-    );
-    if (addedViaLibrary) {
-      alert("As the artist, this release is available in your library.");
-    } else {
-      addToLibraryError.value =
-        libraryStore.error || "Could not update library status.";
-    }
-    isAddingToLibrary.value = false;
-    return;
-  }
 
   isAddingToLibrary.value = true;
   addToLibraryError.value = null;
+  modalError.value = null;
 
-  // If the product is FREE, use the existing libraryStore.addItemToLibrary
-  if (release.value.pricing_model === "FREE") {
-    const success = await libraryStore.addItemToLibrary(
-      release.value.id,
-      "FREE"
-    );
-    if (success) {
-      alert(`${release.value.title} has been added to your library!`);
-    } else {
-      addToLibraryError.value =
-        libraryStore.error || "Failed to add free item to library.";
-    }
-    isAddingToLibrary.value = false;
-    return;
-  }
-
-  // For PAID or NYP, proceed with order creation
-  const orderPayloadItems: any[] = [];
-  let itemPriceForOrder: number | undefined = undefined;
-
-  if (release.value.pricing_model === "PAID") {
-    // For PAID, price_override is not strictly needed if backend defaults to product.price
-    // but can be explicit. For now, let's not send price_override for PAID.
-  } else if (release.value.pricing_model === "NYP") {
-    const enteredAmount = parseFloat(nypAmount.value);
-    const minAmount = release.value.minimum_price_nyp
-      ? parseFloat(release.value.minimum_price_nyp)
-      : 0;
-    if (isNaN(enteredAmount) || enteredAmount < minAmount) {
-      addToLibraryError.value = `Please enter an amount of at least ${minAmount.toFixed(
-        2
-      )} ${release.value.currency || "USD"}.`;
-      isAddingToLibrary.value = false;
-      return;
-    }
-    itemPriceForOrder = enteredAmount;
-  }
-
-  if (!release.value.product_info_id) {
+  const success = await libraryStore.addItemToLibrary(
+    release.value.id,
+    "FREE" // Or determine acquisition type based on ownership too if backend logic varies
+  );
+  if (success) {
+    alert(`${release.value.title} has been added to your library!`);
+  } else {
     addToLibraryError.value =
-      "Product information not found for this release. Cannot acquire.";
-    isAddingToLibrary.value = false;
+      libraryStore.error || "Failed to add free item to library.";
+  }
+  isAddingToLibrary.value = false;
+};
+
+const openBuyModal = () => {
+  if (!authStore.isLoggedIn) {
+    modalError.value = "Please log in to acquire releases.";
+    router.push({ name: "login", query: { redirect: route.fullPath } });
     return;
   }
-
-  // We need product.id. Assume release.id can map to product.id on backend (via signal)
-  // OR, if ReleaseSerializer includes product_info.id, use that.
-  // For now, assuming the first product related to the release is the one to buy.
-  // This needs to be robust: fetch product_id associated with this release.
-  // Let's assume for now release.id IS effectively the key to find the Product.
-  // The backend OrderItemCreateSerializer uses product_id.
-  // The Product is created from Release, so Product.release_id = Release.id
-  // We need to find the Product.id whose release_id matches release.value.id.
-  // This info is not directly on ReleaseDetail.vue.
-  // Easiest: modify ReleaseSerializer to include `product_info_id = serializers.ReadOnlyField(source='product_info.id')`
-
-  // TEMPORARY: This is a placeholder. You MUST get the actual Product ID.
-  // For the signal `create_or_update_product_from_release`, the Product.release is a OneToOneField.
-  // So, if a Product exists for this Release, we need its ID.
-  // The frontend might not know the Product ID directly.
-  // The OrderItemCreateSerializer expects `product_id`.
-  // Simplification: Let's assume backend ReleaseSerializer is modified to return `product_info: { id: <product_id> }`
-  // Or, have a dedicated endpoint to get Product ID for a Release ID.
-
-  // For now, let's assume the ReleaseSerializer includes product_info.id as `product_id_on_release`
-  // if (!release.value.product_id_on_release) { // You'd add this field to ReleaseDetail type
-  //   addToLibraryError.value = "Product information not found for this release.";
-  //   isAddingToLibrary.value = false;
-  //   return;
-  // }
-
-  const orderItem: any = {
-    // product_id: release.value.product_id_on_release, // Replace with actual product ID logic
-    // HACK: For now, let's assume the Release ID itself is enough for backend to find the Product
-    // This is NOT how the OrderItemCreateSerializer is written (it expects product_id).
-    // To make this work with current serializer, we need the Product ID.
-    // The simplest way is to add `product_info_id = serializers.IntegerField(source='product_info.id', read_only=True)` to `ReleaseSerializer`
-    // and update `ReleaseDetail` type in frontend.
-    // Let's assume this is done and `release.value.product_info_id` exists.
-
-    product_id: release.value.product_info_id,
-    // The Product model has a release_id. Backend will need to look up Product by release_id
-    // if we send release.id here. This requires backend serializer change.
-    // OR frontend needs the actual Product ID.
-
-    quantity: 1,
-  };
   if (
-    release.value.pricing_model === "NYP" &&
-    itemPriceForOrder !== undefined
+    release.value &&
+    (release.value.pricing_model === "PAID" ||
+      release.value.pricing_model === "NYP")
   ) {
-    orderItem.price_override = itemPriceForOrder.toFixed(2);
+    modalError.value = null; // Clear previous modal errors
+    showBuyModal.value = true;
   }
+};
 
-  orderPayloadItems.push(orderItem);
-
-  try {
-    await axios.post("/shop/orders/", { items: orderPayloadItems });
-    alert(
-      `${release.value.title} has been acquired and added to your library!`
-    );
-    // Refresh library items
-    await libraryStore.fetchLibraryItems();
-  } catch (err: any) {
-    if (axios.isAxiosError(err) && err.response) {
-      const errorData = err.response.data;
-      if (
-        errorData.items &&
-        errorData.items[0] &&
-        errorData.items[0].price_override
-      ) {
-        addToLibraryError.value = `NYP Error: ${errorData.items[0].price_override.join(
-          ", "
-        )}`;
-      } else if (
-        errorData.items &&
-        errorData.items[0] &&
-        errorData.items[0].product_id
-      ) {
-        addToLibraryError.value = `Product Error: ${errorData.items[0].product_id.join(
-          ", "
-        )}`;
-      } else if (errorData.currency) {
-        addToLibraryError.value = `Currency Error: ${errorData.currency.join(
-          ", "
-        )}`;
-      } else {
-        addToLibraryError.value =
-          err.response.data.detail || "Could not process acquisition.";
-      }
-    } else {
-      addToLibraryError.value = "An unexpected error occurred.";
-    }
-    console.error("Error acquiring release:", err);
-  } finally {
-    isAddingToLibrary.value = false;
+const handleModalItemAdded = () => {
+  // Item was successfully added to cart (or checkout initiated) via modal
+  alert(
+    `${release.value?.title} processed successfully! Check your cart or library.`
+  );
+  // Re-fetch library to update "In Your Library" status if checkout adds to library immediately
+  // Or if adding to cart should reflect (e.g. disable "Buy" button)
+  if (authStore.isLoggedIn) {
+    libraryStore.fetchLibraryItems();
+    cartStore.fetchCart(); // Refresh cart state
   }
+};
+
+const handleModalError = (errorMessage: string) => {
+  modalError.value = errorMessage;
 };
 
 onMounted(() => {
@@ -413,7 +316,7 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
               <span
                 v-else-if="release.pricing_model === 'NYP'"
                 class="price-tag nyp-label"
-                >Name Your Price</span
+                >Name Your Price {{ formattedMinNypPriceDisplay }}</span
               >
               <span
                 v-else-if="release.pricing_model === 'FREE'"
@@ -422,52 +325,9 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
               >
             </div>
 
-            <div
-              v-if="release.pricing_model === 'NYP' && !isInLibrary && !isOwner"
-              class="nyp-input-area"
-            >
-              <label for="nyp-amount" class="nyp-amount-label"
-                >Enter amount {{ formattedMinNypPrice }}:</label
-              >
-              <div class="nyp-input-group">
-                <span class="currency-symbol">{{
-                  release.currency === "EUR"
-                    ? "€"
-                    : release.currency === "GBP"
-                    ? "£"
-                    : "$"
-                }}</span>
-                <input
-                  type="number"
-                  id="nyp-amount"
-                  v-model="nypAmount"
-                  step="0.01"
-                  min="0"
-                />
-              </div>
-            </div>
-
-            <button
-              v-if="!isInLibrary && !isOwner"
-              @click="handleAcquireRelease"
-              class="action-button main-action-button"
-              :disabled="
-                isAddingToLibrary ||
-                (!authStore.isLoggedIn && release.pricing_model !== 'FREE')
-              "
-            >
-              {{
-                isAddingToLibrary
-                  ? "Processing..."
-                  : release.pricing_model === "FREE"
-                  ? "Add to Library"
-                  : !authStore.isLoggedIn
-                  ? "Login to Acquire"
-                  : "Acquire Release"
-              }}
-            </button>
-            <div v-else-if="isOwner" class="in-library-message owned-message">
-              ✓ You are the artist of this release.
+            <!-- Buttons: "Buy", "Add to Library", or status messages -->
+            <div v-if="isOwner" class="in-library-message owned-message">
+              ✓ This is your release.
             </div>
             <div v-else-if="isInLibrary" class="in-library-message">
               ✓ In Your Library
@@ -475,18 +335,56 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
                 >(Go to Library)</RouterLink
               >
             </div>
+            <div
+              v-else-if="
+                isInCart &&
+                (release.pricing_model === 'PAID' ||
+                  release.pricing_model === 'NYP')
+              "
+              class="in-cart-message"
+            >
+              ✓ In Your Cart
+              <RouterLink :to="{ name: 'cart' }" class="cart-link"
+                >(Go to Cart)</RouterLink
+              >
+            </div>
+            <div v-else>
+              <button
+                v-if="release.pricing_model === 'FREE'"
+                @click="handleAddFreeItemToLibrary"
+                class="action-button main-action-button"
+                :disabled="isAddingToLibrary"
+              >
+                {{ isAddingToLibrary ? "Adding..." : "Add to Library (Free)" }}
+              </button>
+              <button
+                v-else-if="
+                  release.pricing_model === 'PAID' ||
+                  release.pricing_model === 'NYP'
+                "
+                @click="openBuyModal"
+                class="action-button main-action-button buy-button"
+              >
+                {{
+                  release.pricing_model === "PAID"
+                    ? `Buy ${formattedPrice}`
+                    : "Name Your Price & Buy"
+                }}
+              </button>
+            </div>
 
             <p v-if="addToLibraryError" class="error-message acquisition-error">
               {{ addToLibraryError }}
             </p>
-            <p class="pricing-model-note">
-              Acquisition type: {{ release.pricing_model_display }}
+            <p v-if="modalError" class="error-message acquisition-error">
+              {{ modalError }}
             </p>
             <p
               v-if="
                 !authStore.isLoggedIn &&
                 release.pricing_model !== 'FREE' &&
-                !isOwner
+                !isOwner &&
+                !isInLibrary
               "
               class="login-prompt"
             >
@@ -577,6 +475,14 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
       <p>Could not load release data.</p>
     </div>
     <button @click="router.back()" class="back-button">Go Back</button>
+
+    <BuyModal
+      :is-visible="showBuyModal"
+      :release="release"
+      @close="showBuyModal = false"
+      @item-added-to-cart="handleModalItemAdded"
+      @error-adding-item="handleModalError"
+    />
   </div>
 </template>
 
@@ -660,38 +566,10 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 }
 .price-tag.nyp-label {
   color: var(--color-heading);
+  font-size: 1.1em; /* Slightly smaller for NYP label */
 }
 .price-tag.free-label {
-  color: #34a853; /* Green for free */
-}
-
-.nyp-input-area {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin-bottom: 0.5rem;
-}
-.nyp-amount-label {
-  font-size: 0.9em;
-  color: var(--color-text-light);
-}
-.nyp-input-group {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-.nyp-input-group .currency-symbol {
-  font-size: 1.1em;
-  padding-right: 0.1em;
-}
-.nyp-input-group input[type="number"] {
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  width: 100px;
-  text-align: right;
-  background-color: var(--color-background);
-  color: var(--color-text);
+  color: #34a853;
 }
 
 .action-button {
@@ -701,11 +579,11 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   border-radius: 4px;
   cursor: pointer;
   color: white;
+  align-self: flex-start;
 }
 
 .main-action-button {
   background-color: var(--color-accent);
-  align-self: flex-start;
 }
 .main-action-button:hover {
   background-color: var(--color-accent-hover);
@@ -714,7 +592,8 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   background-color: var(--color-border);
   cursor: not-allowed;
 }
-.in-library-message {
+.in-library-message,
+.in-cart-message {
   font-size: 1em;
   color: var(--color-text);
   padding: 0.5em;
@@ -730,19 +609,14 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   font-style: italic;
 }
 
-.library-link {
+.library-link,
+.cart-link {
   font-size: 0.9em;
   margin-left: 0.5em;
   font-weight: normal;
   color: var(--color-link);
 }
 
-.pricing-model-note {
-  font-size: 0.85em;
-  font-style: italic;
-  color: var(--color-text-light);
-  margin-top: 0.25rem;
-}
 .login-prompt {
   font-size: 0.9em;
   color: var(--color-text);
@@ -758,6 +632,8 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   color: var(--vt-c-red-dark);
   padding: 0.5em;
   font-size: 0.9em;
+  border-radius: 4px;
+  margin-top: 0.5rem;
 }
 
 .header-actions {

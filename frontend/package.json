@@ -10,11 +10,13 @@
   },
   "dependencies": {
     "axios": "^1.8.4",
+    "decimal.js": "^10.5.0",
     "pinia": "^3.0.1",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@types/decimal.js": "^0.0.32",
     "@vitejs/plugin-vue": "^5.2.1",
     "@vue/tsconfig": "^0.7.0",
     "typescript": "~5.7.2",
