@@ -1,9 +1,8 @@
-// frontend/src/views/OrderHistoryView.vue
 <script setup lang="ts">
 import { onMounted, computed } from "vue";
 import { useOrderStore } from "@/stores/order";
 import { useAuthStore } from "@/stores/auth";
-import { RouterLink } from "vue-router";
+// import { RouterLink } from "vue-router"; // RouterLink not explicitly used in template
 
 const orderStore = useOrderStore();
 const authStore = useAuthStore();
@@ -20,7 +19,7 @@ onMounted(() => {
 
 const formatCurrency = (amount: string, currencyCode: string) => {
   const numericAmount = parseFloat(amount);
-  if (isNaN(numericAmount)) return amount; // return original if not a number
+  if (isNaN(numericAmount)) return amount;
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency: currencyCode,
@@ -50,7 +49,8 @@ const formatDate = (dateString: string) => {
             class="order-status"
             :class="`status-${order.status.toLowerCase()}`"
           >
-            {{ order.status }}
+            {{ order.status_display || order.status }}
+            <!-- Use status_display if available -->
           </span>
         </div>
         <p class="order-date">Placed on: {{ formatDate(order.created_at) }}</p>
@@ -60,9 +60,10 @@ const formatDate = (dateString: string) => {
 
         <div class="order-items">
           <h4>Items:</h4>
-          <ul>
+          <ul v-if="order.items && order.items.length > 0">
             <li v-for="item in order.items" :key="item.id" class="order-item">
-              <span class="item-name">{{ item.product_name }}</span>
+              <!-- CORRECTED LINE BELOW -->
+              <span class="item-name">{{ item.product.name }}</span>
               <span class="item-qty">Qty: {{ item.quantity }}</span>
               <span class="item-price">
                 Price:
@@ -70,6 +71,7 @@ const formatDate = (dateString: string) => {
               </span>
             </li>
           </ul>
+          <p v-else>No items information available for this order.</p>
         </div>
         <p v-if="order.payment_gateway_id" class="payment-info">
           Payment ID: {{ order.payment_gateway_id }}
@@ -139,27 +141,27 @@ const formatDate = (dateString: string) => {
   text-transform: capitalize;
 }
 .status-pending {
-  background-color: #ffc107;
+  background-color: #ffc107; /* Yellow for pending */
   color: #333;
 }
 .status-processing {
-  background-color: #17a2b8;
+  background-color: #17a2b8; /* Info blue for processing */
   color: white;
 }
 .status-completed {
-  background-color: #28a745;
+  background-color: #28a745; /* Green for completed */
   color: white;
 }
 .status-failed {
-  background-color: #dc3545;
+  background-color: #dc3545; /* Red for failed */
   color: white;
 }
 .status-cancelled {
-  background-color: #6c757d;
+  background-color: #6c757d; /* Gray for cancelled */
   color: white;
 }
 .status-refunded {
-  background-color: #fd7e14;
+  background-color: #fd7e14; /* Orange for refunded */
   color: white;
 }
 

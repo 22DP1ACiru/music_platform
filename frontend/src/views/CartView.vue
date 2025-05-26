@@ -3,6 +3,7 @@ import { computed, onMounted } from "vue";
 import { useCartStore } from "@/stores/cart";
 import { useAuthStore } from "@/stores/auth";
 import { useRouter, RouterLink } from "vue-router";
+import axios from "axios";
 
 const cartStore = useCartStore();
 const authStore = useAuthStore();
@@ -35,46 +36,46 @@ const handleClearCart = async () => {
 const formatPrice = (amount: string | number, currency: string) => {
   const numericAmount =
     typeof amount === "string" ? parseFloat(amount) : amount;
-  if (isNaN(numericAmount)) return String(amount); // fallback
+  if (isNaN(numericAmount)) return String(amount);
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency: currency,
   }).format(numericAmount);
 };
 
-const proceedToCheckout = () => {
+const proceedToCheckout = async () => {
+  // Made async
   if (cart.value && cart.value.items.length > 0) {
     const orderItemsPayload = cart.value.items.map((item) => ({
       product_id: item.product.id,
-      quantity: 1, // Assuming quantity is always 1 for digital goods in cart
-      price_override: item.price_override || undefined, // Send if NYP
+      quantity: 1,
+      price_override: item.price_override || undefined,
     }));
 
-    // This should eventually post to an order creation endpoint that takes cart items
-    // For now, we will just simulate adding to the order store by using the existing order mechanism.
-    // This is a placeholder for real checkout logic.
     console.log("Proceeding to checkout with items:", orderItemsPayload);
-    // Typically, you'd post this `orderItemsPayload` to your /shop/orders/ endpoint.
-    // The backend OrderCreateSerializer should be able to handle this.
-    // After successful order creation, clear the cart.
+    cartStore.error = null; // Clear previous errors
 
-    // Example of how you might integrate with the existing Order system:
-    axios
-      .post("/shop/orders/", { items: orderItemsPayload })
-      .then((response) => {
-        alert("Order placed successfully! Your cart has been cleared.");
-        cartStore.clearCart(); // Clear the cart on frontend
-        router.push({ name: "order-history" }); // Redirect to order history
-      })
-      .catch((err) => {
-        console.error("Failed to create order from cart:", err);
-        if (axios.isAxiosError(err) && err.response) {
-          cartStore.error =
-            err.response.data.detail || "Could not place order.";
-        } else {
-          cartStore.error = "An unexpected error occurred during checkout.";
-        }
+    try {
+      const response = await axios.post("/shop/orders/", {
+        items: orderItemsPayload,
       });
+      // Order created with PENDING status
+      const newOrder = response.data;
+      console.log("Order created (PENDING):", newOrder);
+
+      // Clear the frontend cart state immediately after successful order creation initiation
+      cartStore.cart = null; // Or call a specific action like cartStore.resetCartStateLocally()
+
+      // Redirect to the order confirmation page
+      router.push({ name: "order-confirm", params: { orderId: newOrder.id } });
+    } catch (err) {
+      console.error("Failed to create order from cart:", err);
+      if (axios.isAxiosError(err) && err.response) {
+        cartStore.error = err.response.data.detail || "Could not place order.";
+      } else {
+        cartStore.error = "An unexpected error occurred during checkout.";
+      }
+    }
   } else {
     alert("Your cart is empty.");
   }

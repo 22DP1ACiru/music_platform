@@ -79,14 +79,19 @@ const router = createRouter({
       component: () => import("../views/OrderHistoryView.vue"),
       meta: { requiresAuth: true },
     },
-    // --- NEW CART ROUTE ---
     {
       path: "/cart",
       name: "cart",
       component: () => import("../views/CartView.vue"),
       meta: { requiresAuth: true },
     },
-    // --- END NEW CART ROUTE ---
+    {
+      path: "/order/confirm/:orderId", // Use orderId as a param
+      name: "order-confirm",
+      component: () => import("../views/OrderConfirmView.vue"),
+      props: true, // Pass route params as props to the component
+      meta: { requiresAuth: true },
+    },
   ],
 });
 

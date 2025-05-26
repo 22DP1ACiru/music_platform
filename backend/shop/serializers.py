@@ -1,19 +1,17 @@
-# backend/shop/serializers.py
 from rest_framework import serializers
 from .models import Order, OrderItem, Product
-from music.models import Release # For creating library item
+from music.models import Release # For NYP validation and library item
 from library.models import UserLibraryItem # For creating library item
 from django.db import transaction
-from decimal import Decimal # Import Decimal
+from decimal import Decimal 
 
-# ProductSerializer Updated
 class ProductSerializer(serializers.ModelSerializer):
     release_title = serializers.CharField(source='release.title', read_only=True, allow_null=True)
     track_title = serializers.CharField(source='track.title', read_only=True, allow_null=True)
     product_type_display = serializers.CharField(source='get_product_type_display', read_only=True)
-    # Include the release ID directly
     release_id = serializers.PrimaryKeyRelatedField(source='release', read_only=True, allow_null=True)
-
+    artist_name = serializers.CharField(source='release.artist.name', read_only=True, allow_null=True) # Added for cart display
+    cover_art = serializers.ImageField(source='release.cover_art', read_only=True, allow_null=True)
 
     class Meta:
         model = Product
@@ -26,10 +24,12 @@ class ProductSerializer(serializers.ModelSerializer):
             'price', 
             'currency', 
             'is_active',
-            'release', # This is the FK relation, will show ID by default in some contexts
-            'release_id', # Explicitly adding release ID
+            'release', 
+            'release_id', 
             'track',   
             'release_title',
+            'artist_name',
+            'cover_art',
             'track_title',
             'created_at', 
             'updated_at'
@@ -65,20 +65,21 @@ class OrderItemCreateSerializer(serializers.Serializer):
                 )
         elif price_override is not None:
             if not (product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE):
-                 pass # Let's allow it but it will be ignored by cart item effective price
-
+                data['price_override'] = None 
         return data
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
     items = OrderItemCreateSerializer(many=True, write_only=True)
     email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
+    # Expose order details for response after creation
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
 
 
     class Meta:
         model = Order
-        fields = ['id', 'items', 'email', 'status', 'total_amount', 'currency', 'created_at']
-        read_only_fields = ('id', 'status', 'total_amount', 'currency', 'created_at')
+        fields = ['id', 'items', 'email', 'status', 'status_display', 'total_amount', 'currency', 'created_at', 'updated_at'] # Added updated_at
+        read_only_fields = ('id', 'status', 'status_display', 'total_amount', 'currency', 'created_at', 'updated_at') # status is now read_only here
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
@@ -93,7 +94,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             order = Order.objects.create(
                 user=user if user.is_authenticated else None,
                 email=final_email,
-                status=Order.ORDER_STATUS_CHOICES[0][0], # PENDING
+                status=Order.ORDER_STATUS_CHOICES[0][0], # PENDING (This is the key change here)
                 total_amount=Decimal('0.00'), 
                 currency='USD' 
             )
@@ -127,49 +128,35 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             
             order.total_amount = current_total
             order.currency = order_currency or 'USD'
-            
-            order.status = Order.ORDER_STATUS_CHOICES[2][0] # COMPLETED
-            order.payment_gateway_id = "simulated_payment_success"
-            order.save()
+            order.save() # Save the order with PENDING status and calculated total
 
-            if order.status == Order.ORDER_STATUS_CHOICES[2][0] and user.is_authenticated:
-                for item_data in items_data:
-                    product_instance = Product.objects.get(pk=item_data['product_id']) 
-                    if product_instance.release:
-                        acquisition_type = UserLibraryItem.ACQUISITION_CHOICES[1][0] # PURCHASED
-                        if product_instance.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE:
-                             acquisition_type = UserLibraryItem.ACQUISITION_CHOICES[2][0] # NYP
-                        elif product_instance.release.pricing_model == Release.PricingModel.FREE:
-                             acquisition_type = UserLibraryItem.ACQUISITION_CHOICES[0][0] # FREE
+            # REMOVED: Automatic setting to COMPLETED and library addition
+            # This will now happen in a separate "confirm_payment" step
+            # order.status = Order.ORDER_STATUS_CHOICES[2][0] # COMPLETED
+            # order.payment_gateway_id = "simulated_payment_success_pending_confirmation" 
+            # order.save()
+            # Library addition logic will also move
 
-                        library_item, created = UserLibraryItem.objects.get_or_create(
-                            user=user,
-                            release=product_instance.release,
-                            defaults={'acquisition_type': acquisition_type}
-                        )
-                        if not created and library_item.acquisition_type != acquisition_type:
-                             library_item.acquisition_type = acquisition_type
-                             library_item.save(update_fields=['acquisition_type'])
-                        print(f"Added/Updated {product_instance.release.title} to {user.username}'s library (Type: {acquisition_type}).")
         return order
 
 class OrderItemSerializer(serializers.ModelSerializer):
-    product_name = serializers.CharField(source='product.name', read_only=True)
-    product = ProductSerializer(read_only=True) # Using the full ProductSerializer now
+    # product_name = serializers.CharField(source='product.name', read_only=True) # Redundant if using ProductSerializer
+    product = ProductSerializer(read_only=True)
 
     class Meta:
         model = OrderItem
-        fields = ['id', 'product', 'product_name', 'quantity', 'price_at_purchase', 'item_total']
+        fields = ['id', 'product', 'quantity', 'price_at_purchase', 'item_total']
 
 
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     user_username = serializers.CharField(source='user.username', read_only=True, allow_null=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
 
     class Meta:
         model = Order
         fields = [
             'id', 'user', 'user_username', 'email', 'total_amount', 
-            'currency', 'status', 'created_at', 'updated_at', 
+            'currency', 'status', 'status_display', 'created_at', 'updated_at', 
             'payment_gateway_id', 'items'
         ]

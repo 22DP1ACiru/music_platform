@@ -477,6 +477,7 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
     <button @click="router.back()" class="back-button">Go Back</button>
 
     <BuyModal
+      v-if="showBuyModal && release"
       :is-visible="showBuyModal"
       :release="release"
       @close="showBuyModal = false"
