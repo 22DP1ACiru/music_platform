@@ -1,7 +1,9 @@
+# backend/music/serializers.py
 from rest_framework import serializers
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload # Ensure Product is NOT imported here
 from rest_framework.reverse import reverse
 from decimal import Decimal
+# from shop.models import Product # DO NOT IMPORT Product here to avoid circularity if shop.models imports music.models
 
 class GenreSerializer(serializers.ModelSerializer):
     class Meta:
@@ -49,7 +51,7 @@ class TrackSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'release_title', 'artist_name', 'duration_in_seconds', 
-            'codec_name', 'bit_rate', 'sample_rate', 'channels', 'is_lossless', # New read-only
+            'codec_name', 'bit_rate', 'sample_rate', 'channels', 'is_lossless', 
             'genres_data', 'stream_url'
         ]
 
@@ -102,16 +104,21 @@ class ReleaseSerializer(serializers.ModelSerializer):
         required=False
     )
     
-    # Important: Ensure tracks are preloaded in the viewset for this to be efficient
     tracks = TrackSerializer(many=True, read_only=True) 
     release_type_display = serializers.CharField(source='get_release_type_display', read_only=True)
     pricing_model_display = serializers.CharField(source='get_pricing_model_display', read_only=True) 
-    available_download_formats = serializers.SerializerMethodField() 
+    available_download_formats = serializers.SerializerMethodField()
+    
+    # --- THIS IS THE IMPORTANT LINE ---
+    product_info_id = serializers.IntegerField(source='product_info.id', read_only=True, allow_null=True)
+    # --- END IMPORTANT LINE ---
 
     class Meta:
         model = Release
         fields = [
-            'id', 'title', 'artist', 'artist_id', 'release_type', 'release_type_display', 'release_date',
+            'id', 'title', 'artist', 'artist_id', 
+            'product_info_id', # <<< MAKE SURE IT'S IN fields
+            'release_type', 'release_type_display', 'release_date',
             'cover_art', 
             'genres_data', 
             'genre_names', 
@@ -125,76 +132,44 @@ class ReleaseSerializer(serializers.ModelSerializer):
             'minimum_price_nyp',
             'available_download_formats',
             'created_at', 'updated_at'
-         ]
-        read_only_fields = ['is_visible', 'release_type_display', 'genres_data', 'artist', 'pricing_model_display', 'available_download_formats'] 
+        ]
+        read_only_fields = [
+            'is_visible', 'release_type_display', 'genres_data', 'artist', 
+            'pricing_model_display', 'available_download_formats',
+            'product_info_id' # <<< MAKE SURE IT'S IN read_only_fields
+        ]
 
     def get_available_download_formats(self, obj: Release):
         formats = []
-        # The `obj.tracks` here will be instances of TrackSerializer output if context is a list view,
-        # or actual Track model instances if it's a detail view and tracks are prefetched.
-        # For ReleaseDetailView, `obj.tracks.all()` would be better to access model instances.
-        # However, since `tracks` is a field in this serializer, it should be populated with
-        # serialized track data, which includes the new metadata fields.
-        
-        # If `obj.tracks` is already serialized data (list of dicts from TrackSerializer):
         serialized_tracks = self.fields['tracks'].to_representation(obj.tracks.all()) if hasattr(obj.tracks, 'all') else obj.tracks
 
-
-        if not serialized_tracks:
-            return []
+        if not serialized_tracks: return []
 
         all_tracks_are_lossless_uploads = True
-        # Use a flag to see if any track is *not* marked as lossless or has unknown status
         for track_data in serialized_tracks:
             if track_data.get('is_lossless') is False or track_data.get('is_lossless') is None:
                 all_tracks_are_lossless_uploads = False
                 break
         
-        # Common original format (simple check for now: if all are mp3)
         all_mp3_original = True
         for track_data in serialized_tracks:
-            if track_data.get('codec_name') != 'mp3': # or check original_format if you had that
+            if track_data.get('codec_name') != 'mp3': 
                 all_mp3_original = False
                 break
 
-        # 1. ORIGINAL_ZIP - Always offer
-        formats.append({
-            'value': GeneratedDownload.DownloadFormatChoices.ORIGINAL_ZIP.value,
-            'label': GeneratedDownload.DownloadFormatChoices.ORIGINAL_ZIP.label
-        })
-
-        # 2. MP3 options
-        # Offer 320k unless all originals are already lower bitrate MP3s (e.g. all 192k)
-        # This is a simplified check. A more precise check would involve looking at actual bit_rate.
-        can_offer_mp3_320 = True # Assume yes initially
-        # if all_mp3_original: # if all are mp3s, check if offering 320 makes sense
-            # Example: if all tracks have bit_rate <= 192000, maybe don't offer 320k
-            # For now, let's always offer it and let Celery handle not up-converting quality.
+        formats.append({'value': GeneratedDownload.DownloadFormatChoices.ORIGINAL_ZIP.value, 'label': GeneratedDownload.DownloadFormatChoices.ORIGINAL_ZIP.label})
+        
+        can_offer_mp3_320 = True 
         if can_offer_mp3_320:
-            formats.append({
-                'value': GeneratedDownload.DownloadFormatChoices.MP3_320.value,
-                'label': GeneratedDownload.DownloadFormatChoices.MP3_320.label
-            })
-        formats.append({
-            'value': GeneratedDownload.DownloadFormatChoices.MP3_192.value,
-            'label': GeneratedDownload.DownloadFormatChoices.MP3_192.label
-        })
+            formats.append({'value': GeneratedDownload.DownloadFormatChoices.MP3_320.value, 'label': GeneratedDownload.DownloadFormatChoices.MP3_320.label})
+        formats.append({'value': GeneratedDownload.DownloadFormatChoices.MP3_192.value, 'label': GeneratedDownload.DownloadFormatChoices.MP3_192.label})
         
-        # 3. Lossless options (FLAC, WAV) - only if all original uploads were lossless
         if all_tracks_are_lossless_uploads:
-            formats.append({
-                'value': GeneratedDownload.DownloadFormatChoices.FLAC.value,
-                'label': GeneratedDownload.DownloadFormatChoices.FLAC.label
-            })
-            formats.append({
-                'value': GeneratedDownload.DownloadFormatChoices.WAV.value,
-                'label': GeneratedDownload.DownloadFormatChoices.WAV.label
-            })
+            formats.append({'value': GeneratedDownload.DownloadFormatChoices.FLAC.value, 'label': GeneratedDownload.DownloadFormatChoices.FLAC.label})
+            formats.append({'value': GeneratedDownload.DownloadFormatChoices.WAV.value, 'label': GeneratedDownload.DownloadFormatChoices.WAV.label})
         
-        # Deduplicate and order logic (optional, if above logic could create dupes)
         final_formats = []
         seen_values = set()
-        # Define preferred order
         preferred_order = [
             GeneratedDownload.DownloadFormatChoices.ORIGINAL_ZIP.value,
             GeneratedDownload.DownloadFormatChoices.FLAC.value,
@@ -202,20 +177,16 @@ class ReleaseSerializer(serializers.ModelSerializer):
             GeneratedDownload.DownloadFormatChoices.MP3_320.value,
             GeneratedDownload.DownloadFormatChoices.MP3_192.value,
         ]
-        # Add available formats in preferred order
         for p_val in preferred_order:
             for fmt in formats:
                 if fmt['value'] == p_val and p_val not in seen_values:
                     final_formats.append(fmt)
                     seen_values.add(p_val)
-        # Add any other formats not in preferred order (if any)
         for fmt in formats:
             if fmt['value'] not in seen_values:
                  final_formats.append(fmt)
                  seen_values.add(fmt['value'])
-
         return final_formats
-
 
     def validate(self, data):
         pricing_model = data.get('pricing_model', getattr(self.instance, 'pricing_model', None))
@@ -242,7 +213,6 @@ class ReleaseSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({"minimum_price_nyp": "Minimum 'Name Your Price' cannot be negative."})
                 elif not isinstance(minimum_price_nyp, Decimal) and float(minimum_price_nyp) < 0.00:
                     raise serializers.ValidationError({"minimum_price_nyp": "Minimum 'Name Your Price' cannot be negative."})
-        
         return data
 
     def create(self, validated_data):

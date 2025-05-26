@@ -1,17 +1,3 @@
-# Add this import at the top
-# from shop.views import ProductViewSet # If you create it
-
-# Modify the router section
-router.register(r'playlists', PlaylistViewSet, basename='playlist')
-# router.register(r'products', ProductViewSet, basename='product') # If you add ProductViewSet
-# For checking download status of ANY generated download for the user
-router.register(r'generated-download-status', GeneratedDownloadStatusViewSet, basename='generated-download-status')
-
-
-# Add this to urlpatterns list
-# Make sure it's within the /api/ path like other apps
-    path('api/shop/', include('shop.urls')),
-
 from django.contrib import admin
 from django.urls import path, include # Ensure include is imported
 from django.conf import settings
@@ -21,11 +7,10 @@ from users.views import UserViewSet, UserProfileViewSet, RegisterView
 from music.views import (
     GenreViewSet, ArtistViewSet, ReleaseViewSet,
     TrackViewSet, CommentViewSet, HighlightViewSet,
-    stream_track_audio, GeneratedDownloadStatusViewSet 
+    stream_track_audio, GeneratedDownloadStatusViewSet
 )
 from playlists.views import PlaylistViewSet
-# library.urls will be included below
-# from shop.views import ProductViewSet # Example if you add ProductViewSet
+# from shop.views import ProductViewSet # Example if you add ProductViewSet (currently not used)
 
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -33,7 +18,7 @@ from rest_framework_simplejwt.views import (
     TokenVerifyView,
 )
 
-router = DefaultRouter() # This is the main API router
+router = DefaultRouter() # This is the main API router - DEFINED HERE
 
 router.register(r'users', UserViewSet, basename='user')
 router.register(r'profiles', UserProfileViewSet, basename='userprofile')
@@ -41,7 +26,7 @@ router.register(r'profiles', UserProfileViewSet, basename='userprofile')
 router.register(r'genres', GenreViewSet)
 router.register(r'artists', ArtistViewSet)
 router.register(r'releases', ReleaseViewSet, basename='release') # For public release listings & details
-router.register(r'tracks', TrackViewSet, basename='track') 
+router.register(r'tracks', TrackViewSet, basename='track')
 router.register(r'comments', CommentViewSet)
 router.register(r'highlights', HighlightViewSet)
 
@@ -55,12 +40,12 @@ router.register(r'generated-download-status', GeneratedDownloadStatusViewSet, ba
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include(router.urls)), # Include all router-generated URLs under /api/
-    
-    path('api/library/', include('library.urls')), 
-    
+
+    path('api/library/', include('library.urls')),
+
     path('api/music/', include('music.urls')), # For specific non-router music paths like direct file serving
-    path('api/tracks/<int:track_id>/stream/', stream_track_audio, name='track-stream'), 
-    
+    path('api/tracks/<int:track_id>/stream/', stream_track_audio, name='track-stream'),
+
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')), # For browsable API login
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

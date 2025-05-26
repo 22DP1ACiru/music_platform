@@ -56,7 +56,8 @@ INSTALLED_APPS = [
     'playlists',
     'shop',
     'chat',
-    'library', # Add new library app
+    'library',
+    'vaultwave'
 ]
 
 MIDDLEWARE = [

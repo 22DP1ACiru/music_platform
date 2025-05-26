@@ -19,6 +19,7 @@ export interface ReleaseDetail {
   id: number;
   title: string;
   artist: ArtistInfo;
+  product_info_id: number | null;
   tracks: TrackInfoFromApi[];
   cover_art: string | null;
   release_type: string;
