@@ -47,13 +47,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
     releaseApiData.append("genre_names", genre);
   });
 
-  // Add new shop fields
-  if (submittedFormData.new_download_file_object) {
-    releaseApiData.append(
-      "download_file",
-      submittedFormData.new_download_file_object
-    );
-  }
+  // Pricing model fields
   releaseApiData.append("pricing_model", submittedFormData.pricing_model);
   if (submittedFormData.pricing_model === "PAID") {
     if (
@@ -76,11 +70,12 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
         submittedFormData.minimum_price_nyp.toString()
       );
     }
-    // Also send currency for NYP as backend might expect it
     if (submittedFormData.currency) {
+      // NYP also uses currency
       releaseApiData.append("currency", submittedFormData.currency);
     }
   }
+  // NOTE: The musician-uploaded 'download_file' is no longer sent from this form.
 
   try {
     const releaseResponse = await axios.post("/releases/", releaseApiData, {
@@ -89,11 +84,11 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
     const newReleaseId = releaseResponse.data.id;
 
     for (const track of submittedFormData.tracks) {
-      if (track._isRemoved) continue;
+      if (track._isRemoved) continue; // Should not happen for new release
 
       if (
         !track.title ||
-        !track.audio_file_object ||
+        !track.audio_file_object || // New tracks must have an audio file object
         track.track_number === null
       ) {
         console.warn(
@@ -157,7 +152,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
 };
 
 const handleCancel = () => {
-  router.push({ name: "releases" });
+  router.push({ name: "releases" }); // Or user's profile/dashboard
 };
 </script>
 

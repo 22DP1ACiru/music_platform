@@ -99,7 +99,13 @@ class ReleaseSerializer(serializers.ModelSerializer):
     tracks = TrackSerializer(many=True, read_only=True) 
     release_type_display = serializers.CharField(source='get_release_type_display', read_only=True)
     pricing_model_display = serializers.CharField(source='get_pricing_model_display', read_only=True) 
-    available_download_formats = serializers.SerializerMethodField() # New field
+    available_download_formats = serializers.SerializerMethodField() 
+
+    # The 'download_file' (FileField) is for musician-uploaded ZIPs.
+    # If we are fully replacing this with on-demand, we can remove it from fields for musician forms.
+    # However, keeping it in the model/serializer allows admins to manage it or for legacy data.
+    # For now, we'll keep it here but the frontend form will stop sending it.
+    # If frontend sends `null` or omits it, it will be handled by model's save/clean.
 
     class Meta:
         model = Release
@@ -110,21 +116,32 @@ class ReleaseSerializer(serializers.ModelSerializer):
             'genre_names', 
             'is_published', 'is_visible',
             'tracks', 
-            'download_file', # Musician-uploaded
+            'download_file', # Musician-uploaded ZIP (kept for legacy/admin, form will omit)
             'pricing_model', 
             'pricing_model_display',
             'price', 
             'currency', 
             'minimum_price_nyp',
-            'available_download_formats', # New field
+            'available_download_formats',
             'created_at', 'updated_at'
          ]
         read_only_fields = ['is_visible', 'release_type_display', 'genres_data', 'artist', 'pricing_model_display', 'available_download_formats'] 
+        # If 'download_file' is to be writeable by admin or specific scenarios, don't make it read_only.
+        # If musician form should NOT be able to set it, control this in the view/form handling.
 
     def get_available_download_formats(self, obj: Release):
-        # This is where you'd define logic based on uploaded track types
-        # For now, return a static list. In future, inspect obj.tracks.all()
-        # and their original formats to dynamically determine this.
+        # Logic to determine available formats based on uploaded track types
+        # For simplicity now, return all. Enhance later.
+        # This should check if all tracks are lossless to offer FLAC/WAV, etc.
+        # If any track is lossy, then offering WAV/FLAC from that lossy source is not ideal.
+
+        # Basic example:
+        # has_lossless_tracks = any(t.audio_file.name.lower().endswith(('.wav', '.flac')) for t in obj.tracks.all() if t.audio_file)
+        # formats = [{'value': GeneratedDownload.DownloadFormatChoices.MP3_320, 'label': GeneratedDownload.DownloadFormatChoices.MP3_320.label}]
+        # if has_lossless_tracks:
+        #     formats.append({'value': GeneratedDownload.DownloadFormatChoices.FLAC, 'label': GeneratedDownload.DownloadFormatChoices.FLAC.label})
+        # return formats
+        
         return [
             {'value': fmt.value, 'label': fmt.label}
             for fmt in GeneratedDownload.DownloadFormatChoices
@@ -136,7 +153,9 @@ class ReleaseSerializer(serializers.ModelSerializer):
         price = data.get('price', getattr(self.instance, 'price', None))
         currency = data.get('currency', getattr(self.instance, 'currency', None))
         minimum_price_nyp = data.get('minimum_price_nyp', getattr(self.instance, 'minimum_price_nyp', None))
-        download_file = data.get('download_file', getattr(self.instance, 'download_file', None))
+        
+        # download_file is the musician-uploaded one. This validation might be removed if the field is deprecated from forms.
+        # download_file = data.get('download_file', getattr(self.instance, 'download_file', None))
 
         if 'pricing_model' not in data and self.instance:
             pricing_model = self.instance.pricing_model
@@ -144,18 +163,26 @@ class ReleaseSerializer(serializers.ModelSerializer):
         if pricing_model == Release.PricingModel.PAID:
             if price is None: 
                 raise serializers.ValidationError({"price": "Price is required for 'Paid' model."})
-            if price < Decimal('0.00'):
-                raise serializers.ValidationError({"price": "Price cannot be negative."})
+            # Price can be 0.00 for PAID model (e.g. "pay what you want starting from $0, but it's a 'purchase'")
+            # Let's adjust to allow 0, but not negative.
+            if isinstance(price, Decimal) and price < Decimal('0.00'):
+                 raise serializers.ValidationError({"price": "Price cannot be negative."})
+            elif not isinstance(price, Decimal) and float(price) < 0.00: # Handle string input before conversion
+                 raise serializers.ValidationError({"price": "Price cannot be negative."})
+
             if not currency: 
                 raise serializers.ValidationError({"currency": "Currency is required for 'Paid' model."})
         elif pricing_model == Release.PricingModel.NAME_YOUR_PRICE:
-            if minimum_price_nyp is not None and minimum_price_nyp < Decimal('0.00'):
-                raise serializers.ValidationError({"minimum_price_nyp": "Minimum 'Name Your Price' cannot be negative."})
+            if minimum_price_nyp is not None:
+                if isinstance(minimum_price_nyp, Decimal) and minimum_price_nyp < Decimal('0.00'):
+                    raise serializers.ValidationError({"minimum_price_nyp": "Minimum 'Name Your Price' cannot be negative."})
+                elif not isinstance(minimum_price_nyp, Decimal) and float(minimum_price_nyp) < 0.00:
+                    raise serializers.ValidationError({"minimum_price_nyp": "Minimum 'Name Your Price' cannot be negative."})
         
-        # Validation for musician-uploaded download_file
-        if download_file and not pricing_model:
-             raise serializers.ValidationError({'pricing_model': "A pricing model must be selected if a musician-uploaded download file is provided."})
-
+        # If on-demand ZIPs are the primary way, this validation for musician-uploaded 'download_file' becomes less critical
+        # or might be removed if the field is removed from the forms.
+        # if download_file and not pricing_model:
+        #      raise serializers.ValidationError({'pricing_model': "A pricing model must be selected if a musician-uploaded download file is provided."})
 
         return data
 
@@ -186,13 +213,17 @@ class ReleaseSerializer(serializers.ModelSerializer):
              instance.cover_art = cover_art_data
              validated_data.pop('cover_art')
 
+        # Handle musician-uploaded download_file (if still part of the form/API)
+        # If we remove it from the form, this part might not receive 'download_file' in validated_data
         download_file_data = validated_data.get('download_file', Ellipsis)
-        if download_file_data is None: 
+        if download_file_data is None: # Explicitly passed as null
             instance.download_file = None
-            validated_data.pop('download_file')
-        elif download_file_data is not Ellipsis and download_file_data is not False :
+            if 'download_file' in validated_data: validated_data.pop('download_file')
+        elif download_file_data is not Ellipsis and download_file_data is not False:
             instance.download_file = download_file_data
-            validated_data.pop('download_file')
+            if 'download_file' in validated_data: validated_data.pop('download_file')
+        # If download_file_data is Ellipsis, it means it wasn't in the request, so no change to instance.download_file from here.
+
 
         pricing_model = validated_data.get('pricing_model', instance.pricing_model)
 
@@ -200,9 +231,11 @@ class ReleaseSerializer(serializers.ModelSerializer):
             validated_data['price'] = None 
         else: 
             if 'price' not in validated_data and instance.price is None:
-                raise serializers.ValidationError({"price": "Price is required for 'Paid' model."})
+                 # If switching to PAID and price isn't provided, it's an issue.
+                 # Backend model validation should catch this, but serializer can be more proactive.
+                raise serializers.ValidationError({"price": "Price is required when switching to 'Paid' model."})
             if 'currency' not in validated_data and instance.currency is None:
-                 validated_data['currency'] = 'USD' 
+                 validated_data['currency'] = 'USD' # Default currency if switching to PAID and not provided
         
         if pricing_model != Release.PricingModel.NAME_YOUR_PRICE:
             validated_data['minimum_price_nyp'] = None
@@ -243,20 +276,21 @@ class GeneratedDownloadRequestSerializer(serializers.Serializer):
 class GeneratedDownloadStatusSerializer(serializers.ModelSerializer):
     release_title = serializers.CharField(source='release.title', read_only=True)
     download_url = serializers.SerializerMethodField()
+    requested_format_display = serializers.CharField(source='get_requested_format_display', read_only=True)
+
 
     class Meta:
         model = GeneratedDownload
         fields = [
             'id', 'unique_identifier', 'release', 'release_title', 'user', 
-            'requested_format', 'status', 'celery_task_id',
-            'download_url', # Use this URL for actual download
+            'requested_format', 'requested_format_display', 'status', 'celery_task_id',
+            'download_url', 
             'created_at', 'updated_at', 'expires_at', 'failure_reason'
         ]
-        read_only_fields = fields # All fields are read-only from API perspective after creation
+        read_only_fields = fields 
 
     def get_download_url(self, obj: GeneratedDownload):
         request = self.context.get('request')
         if obj.status == GeneratedDownload.StatusChoices.READY and obj.download_file and request:
-            # Construct URL to the download view that serves the file
             return reverse('generated-download-file', kwargs={'download_uuid': str(obj.unique_identifier)}, request=request)
         return None

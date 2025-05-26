@@ -2,11 +2,11 @@ from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload # Ensure 'models' is imported
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload
 from .serializers import (
     GenreSerializer, ArtistSerializer, ReleaseSerializer,
     TrackSerializer, CommentSerializer, HighlightSerializer,
-    GeneratedDownloadRequestSerializer, GeneratedDownloadStatusSerializer # New serializers
+    GeneratedDownloadRequestSerializer, GeneratedDownloadStatusSerializer
 )
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser, IsAuthenticated
 from music.permissions import IsOwnerOrReadOnly, CanViewTrack, CanEditTrack
@@ -15,12 +15,16 @@ from rest_framework.exceptions import ValidationError, PermissionDenied, NotFoun
 from django.http import FileResponse, Http404, HttpResponseForbidden
 import os
 import mimetypes 
-from django.db import models as django_models # Explicit import for Q objects
-from rest_framework.decorators import action # For custom actions
+from django.db import models as django_models
+from rest_framework.decorators import action, api_view, permission_classes as drf_permission_classes # Import api_view and permission_classes
+from rest_framework.permissions import IsAuthenticated as DRFIsAuthenticated # Import DRF's IsAuthenticated
+import logging
 
-# Import the Celery task
 from .tasks import generate_release_download_zip
 
+logger = logging.getLogger(__name__)
+
+# ... (all your ViewSets remain the same) ...
 
 class GenreViewSet(viewsets.ModelViewSet):
     queryset = Genre.objects.all().order_by('name')
@@ -67,33 +71,24 @@ class ReleaseViewSet(viewsets.ModelViewSet):
         except Artist.DoesNotExist:
             raise PermissionDenied("You must have an artist profile to create releases.")
 
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated]) # DRF IsAuthenticated
     def request_download(self, request, pk=None):
-        release = self.get_object() # Checks IsOwnerOrReadOnly for SAFE_METHODS, but we need specific logic for download access
+        release = self.get_object() 
 
-        # --- Download Permission Logic (Placeholder - needs refinement) ---
-        # For now, allow if the release is FREE, or user is owner.
-        # TODO: Integrate with actual purchase/entitlement check later.
         can_download = False
         if release.pricing_model == Release.PricingModel.FREE:
             can_download = True
-        elif request.user.is_authenticated and release.artist.user == request.user: # Owner can download
+        # Ensure release.artist.user exists before accessing user_id
+        elif request.user.is_authenticated and hasattr(release.artist, 'user') and release.artist.user and release.artist.user.id == request.user.id: 
             can_download = True
-        # Add logic here for:
-        # - User has purchased this release (check OrderItem for this user and release).
-        # - User has an active subscription that grants download access.
         
         if not can_download:
-             # Simulate a purchase check for PAID or NYP for now
             if release.pricing_model in [Release.PricingModel.PAID, Release.PricingModel.NAME_YOUR_PRICE]:
-                # This is a placeholder. Real check would be against orders.
-                # For testing, let's allow if authenticated for now on priced items.
-                if not request.user.is_authenticated:
+                if not request.user.is_authenticated: 
                      return Response({"detail": "Authentication required to download priced items."}, status=status.HTTP_401_UNAUTHORIZED)
-                # Here, you'd check if request.user has bought it.
-                # If not, return something like:
-                # return Response({"detail": "You must purchase this release to download it."}, status=status.HTTP_403_FORBIDDEN)
-            else: # Should not happen if logic above is complete
+                # TODO: Actual purchase check logic here
+                pass 
+            else: 
                 return Response({"detail": "You do not have permission to download this release."}, status=status.HTTP_403_FORBIDDEN)
 
 
@@ -102,10 +97,7 @@ class ReleaseViewSet(viewsets.ModelViewSet):
             return Response(request_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         requested_format = request_serializer.validated_data['requested_format']
-        # quality_options = request_serializer.validated_data.get('quality_options') # If added
-
-        # Check for existing recent, non-expired, READY requests for this user, release, format
-        # to avoid re-generating too frequently.
+        
         existing_ready_download = GeneratedDownload.objects.filter(
             release=release,
             user=request.user,
@@ -118,16 +110,13 @@ class ReleaseViewSet(viewsets.ModelViewSet):
             status_serializer = GeneratedDownloadStatusSerializer(existing_ready_download, context={'request': request})
             return Response(status_serializer.data, status=status.HTTP_200_OK)
 
-        # Create a new download request record
         download_request = GeneratedDownload.objects.create(
             release=release,
             user=request.user,
             requested_format=requested_format,
-            # quality_options=quality_options, # If added
             status=GeneratedDownload.StatusChoices.PENDING
         )
 
-        # Trigger Celery task
         generate_release_download_zip.delay(download_request.id)
 
         status_serializer = GeneratedDownloadStatusSerializer(download_request, context={'request': request})
@@ -188,6 +177,7 @@ class HighlightViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 def stream_track_audio(request, track_id):
+    # Using print for debug here as logger might not be configured for console output by default
     print(f"--- stream_track_audio for track_id: {track_id} ---") 
     http_range = request.META.get('HTTP_RANGE')
     print(f"DEBUG: HTTP_RANGE header received: {http_range}") 
@@ -248,74 +238,74 @@ def stream_track_audio(request, track_id):
         traceback.print_exc()
         raise Http404("An error occurred while trying to serve the audio file.")
 
-# --- Views for Generated Downloads ---
 class GeneratedDownloadStatusViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    ViewSet to check the status of a generated download.
-    Users can only access their own download requests.
-    """
     serializer_class = GeneratedDownloadStatusSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated] # DRF IsAuthenticated
 
     def get_queryset(self):
-        # Ensure users can only see their own download requests
         return GeneratedDownload.objects.filter(user=self.request.user).select_related('release')
     
-    # Optional: retrieve by unique_identifier instead of pk
-    # lookup_field = 'unique_identifier' 
-    # lookup_url_kwarg = 'download_uuid'
 
-
+# --- View for serving the actual generated download file ---
+@api_view(['GET']) # Use DRF's api_view decorator
+@drf_permission_classes([DRFIsAuthenticated]) # Apply DRF's IsAuthenticated permission
 def serve_generated_download_file(request, download_uuid):
-    """
-    Serves the generated ZIP file.
-    Authenticates the user and checks if the download belongs to them and is ready/not expired.
-    """
-    if not request.user.is_authenticated:
-        return HttpResponseForbidden("Authentication required.")
+    # request.user is now populated by DRF's authentication classes (JWTAuthentication primarily)
+    
+    # Removed: if not request.user.is_authenticated: ... (handled by @drf_permission_classes)
+
+    logger.info(f"serve_generated_download_file: User {request.user.username} (ID: {request.user.id}) attempting to download UUID {download_uuid}")
 
     try:
-        download_request = GeneratedDownload.objects.get(
-            unique_identifier=download_uuid,
-            user=request.user
+        download_request = GeneratedDownload.objects.select_related('user').get(
+            unique_identifier=download_uuid
         )
+        if download_request.user_id != request.user.id:
+            logger.warning(f"serve_generated_download_file: User {request.user.username} (ID: {request.user.id}) "
+                           f"attempted to access download UUID {download_uuid} belonging to user ID {download_request.user_id}. Forbidden.")
+            # For DRF views, returning a Response is standard
+            return Response({"detail": "Download link not found or invalid (permission denied)."}, status=status.HTTP_403_FORBIDDEN)
+
     except GeneratedDownload.DoesNotExist:
-        raise Http404("Download link not found or invalid.")
+        logger.warning(f"serve_generated_download_file: Download UUID {download_uuid} not found in database.")
+        return Response({"detail": "Download link not found or invalid."}, status=status.HTTP_404_NOT_FOUND)
+
+    logger.info(f"serve_generated_download_file: Found DownloadRequest ID {download_request.id} for UUID {download_uuid}, status: {download_request.status}")
 
     if download_request.status != GeneratedDownload.StatusChoices.READY:
-        raise Http404("Download is not ready or has failed.")
+        logger.warning(f"serve_generated_download_file: Download ID {download_request.id} is not READY (status: {download_request.status}).")
+        return Response({"detail": "Download is not ready or has failed."}, status=status.HTTP_404_NOT_FOUND)
     
     if download_request.expires_at and download_request.expires_at < timezone.now():
+        logger.info(f"serve_generated_download_file: Download ID {download_request.id} has expired (expires_at: {download_request.expires_at}).")
         download_request.status = GeneratedDownload.StatusChoices.EXPIRED
         download_request.save(update_fields=['status'])
-        # Optionally delete the file here if desired upon expiry access attempt
-        # if download_request.download_file:
-        #     download_request.download_file.delete(save=False)
-        raise Http404("This download link has expired.")
+        return Response({"detail": "This download link has expired."}, status=status.HTTP_410_GONE) # 410 Gone is appropriate
 
     if not download_request.download_file or not download_request.download_file.name:
-        raise Http404("File not available for this download record.")
+        logger.error(f"serve_generated_download_file: No file associated with Download ID {download_request.id}.")
+        return Response({"detail": "File not available for this download record."}, status=status.HTTP_404_NOT_FOUND)
 
     if not download_request.download_file.storage.exists(download_request.download_file.name):
         logger.error(f"File for GeneratedDownload ID {download_request.id} not found in storage at {download_request.download_file.name}")
         download_request.status = GeneratedDownload.StatusChoices.FAILED
         download_request.failure_reason = "File missing from storage."
         download_request.save()
-        raise Http404("File is missing. Please try generating the download again.")
+        return Response({"detail": "File is missing. Please try generating the download again."}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        # Using FileResponse to serve the file
+        logger.info(f"serve_generated_download_file: Serving file {download_request.download_file.name} for Download ID {download_request.id}.")
+        # FileResponse is fine here, DRF handles wrapping it.
         response = FileResponse(download_request.download_file.open('rb'), as_attachment=True)
-        # Set content type if known, though browser might infer from extension
-        response['Content-Type'] = 'application/zip' 
-        # Content-Disposition is handled by as_attachment=True to suggest filename
+        # Content-Type for ZIP is usually set automatically by FileResponse based on filename or can be explicit.
+        # response['Content-Type'] = 'application/zip' 
         return response
-    except FileNotFoundError:
-        logger.error(f"FileNotFound (physical file) for GeneratedDownload ID {download_request.id} at {download_request.download_file.path if hasattr(download_request.download_file, 'path') else 'N/A'}")
+    except FileNotFoundError: 
+        logger.error(f"FileNotFound (physical file) for GeneratedDownload ID {download_request.id} at {getattr(download_request.download_file, 'path', 'N/A')}")
         download_request.status = GeneratedDownload.StatusChoices.FAILED
-        download_request.failure_reason = "File could not be opened from storage."
+        download_request.failure_reason = "File could not be opened from storage (FileNotFound)."
         download_request.save()
-        raise Http404("Error serving the file. Please try again.")
+        return Response({"detail": "Error serving the file. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except Exception as e:
         logger.exception(f"Unexpected error serving generated download {download_request.id}: {e}")
-        raise Http404("An unexpected error occurred while preparing your download.")
+        return Response({"detail": "An unexpected error occurred while preparing your download."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

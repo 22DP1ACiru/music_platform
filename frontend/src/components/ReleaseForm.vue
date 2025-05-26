@@ -27,13 +27,11 @@ export interface ReleaseFormData {
   is_published: boolean;
   tracks: TrackFormData[];
 
-  // New shop fields
-  download_file_url?: string | null; // URL for existing download file
-  new_download_file_object?: File | null; // New download file
+  // Shop fields (pricing) - Manual download_file fields are removed
   pricing_model: "FREE" | "PAID" | "NYP";
-  price?: number | string | null; // string for input, number for API
+  price?: number | string | null;
   currency?: string | null;
-  minimum_price_nyp?: number | string | null; // string for input, number for API
+  minimum_price_nyp?: number | string | null;
 }
 
 interface Genre {
@@ -92,12 +90,10 @@ const formState = reactive<ReleaseFormData>({
       : props.initialData.is_published,
   tracks: props.initialData?.tracks?.map((t) => ({ ...t })) || [],
 
-  // Initialize new shop fields
-  download_file_url: props.initialData?.download_file_url || null,
-  new_download_file_object: props.initialData?.new_download_file_object || null,
-  pricing_model: props.initialData?.pricing_model || "PAID", // Default to PAID
+  // Initialize pricing fields
+  pricing_model: props.initialData?.pricing_model || "PAID",
   price:
-    props.initialData?.price === undefined ? null : props.initialData.price, // Allow null, handle empty string from input
+    props.initialData?.price === undefined ? null : props.initialData.price,
   currency: props.initialData?.currency || "USD",
   minimum_price_nyp:
     props.initialData?.minimum_price_nyp === undefined
@@ -214,9 +210,10 @@ const handleTrackFileChange = (event: Event, trackIndex: number) => {
   const track = formState.tracks[trackIndex];
   if (target.files && target.files[0] && track) {
     track.audio_file_object = target.files[0];
-    track.audio_file_url = target.files[0].name;
+    track.audio_file_url = target.files[0].name; // For display consistency if needed
   } else if (track) {
     track.audio_file_object = null;
+    // track.audio_file_url = null; // Or revert to existing if edit mode
   }
 };
 
@@ -228,16 +225,13 @@ const handleCoverArtChange = (event: Event) => {
       alert("Animated GIFs are not allowed. Please use a JPG, PNG, or WEBP.");
       target.value = "";
       formState.new_cover_art_file = null;
-      if (props.isEditMode && props.initialData?.cover_art_url) {
-        formState.cover_art_url = props.initialData.cover_art_url;
-      } else if (
-        !props.isEditMode &&
+      if (
         formState.cover_art_url &&
         formState.cover_art_url.startsWith("blob:")
       ) {
         URL.revokeObjectURL(formState.cover_art_url);
-        formState.cover_art_url = null;
       }
+      formState.cover_art_url = props.initialData?.cover_art_url || null;
       return;
     }
     formState.new_cover_art_file = target.files[0];
@@ -256,27 +250,7 @@ const handleCoverArtChange = (event: Event) => {
     ) {
       URL.revokeObjectURL(formState.cover_art_url);
     }
-    if (props.isEditMode && props.initialData?.cover_art_url) {
-      formState.cover_art_url = props.initialData.cover_art_url;
-    } else {
-      formState.cover_art_url = null;
-    }
-  }
-};
-
-const handleDownloadFileChange = (event: Event) => {
-  const target = event.target as HTMLInputElement;
-  if (target.files && target.files[0]) {
-    formState.new_download_file_object = target.files[0];
-    formState.download_file_url = URL.createObjectURL(target.files[0]); // Preview for new file
-  } else {
-    formState.new_download_file_object = null;
-    // Revert to original if edit mode and clearing selection
-    if (props.isEditMode && props.initialData?.download_file_url) {
-      formState.download_file_url = props.initialData.download_file_url;
-    } else {
-      formState.download_file_url = null;
-    }
+    formState.cover_art_url = props.initialData?.cover_art_url || null;
   }
 };
 
@@ -294,7 +268,7 @@ const triggerSubmit = () => {
     formState.pricing_model === "PAID" &&
     (formState.price === null ||
       formState.price === "" ||
-      Number(formState.price) < 0)
+      Number(formState.price) < 0) // Price can be 0
   ) {
     alert("Price is required and cannot be negative for 'Paid' model.");
     return;
@@ -312,25 +286,33 @@ const triggerSubmit = () => {
     alert("Minimum 'Name Your Price' cannot be negative.");
     return;
   }
+
+  // Validation for at least one track for non-single releases might be good
   if (
-    !formState.new_download_file_object &&
-    !formState.download_file_url &&
-    props.isEditMode
+    formState.release_type !== "SINGLE" &&
+    formState.tracks.filter((t) => !t._isRemoved).length === 0
   ) {
-    // In edit mode, if there's no existing download file and no new one, it's okay if they intend to clear it.
-    // Or, if creating, and no download file provided. This could be allowed if pricing is FREE.
-  } else if (
-    !formState.new_download_file_object &&
-    !formState.download_file_url &&
-    !props.isEditMode
+    alert("Albums and EPs must have at least one track.");
+    return;
+  }
+  if (
+    formState.release_type === "SINGLE" &&
+    formState.tracks.filter((t) => !t._isRemoved).length !== 1
   ) {
-    // if creating and no download file, it implies it's not downloadable yet, unless it's free.
-    // The backend model requires pricing_model regardless.
-    // Let's assume for now a download file is generally expected if not FREE.
-    if (formState.pricing_model !== "FREE") {
-      // alert("A download file is required unless the pricing model is 'Free'.");
-      // return;
-      // This rule can be very strict. Let backend validate if file is truly mandatory.
+    alert("Singles must have exactly one track.");
+    return;
+  }
+  // Ensure all active tracks have files (especially new ones)
+  for (const track of formState.tracks) {
+    if (
+      !track._isRemoved &&
+      !track.audio_file_object &&
+      !track.audio_file_url
+    ) {
+      alert(
+        `Audio file is missing for track: "${track.title || "Untitled Track"}"`
+      );
+      return;
     }
   }
 
@@ -340,11 +322,6 @@ const triggerSubmit = () => {
       formState.new_cover_art_file instanceof File
         ? formState.new_cover_art_file
         : null,
-    // Pass the download file object
-    new_download_file_object:
-      formState.new_download_file_object instanceof File
-        ? formState.new_download_file_object
-        : null,
     tracks: formState.tracks.map((track) => ({
       ...track,
       audio_file_object:
@@ -353,7 +330,6 @@ const triggerSubmit = () => {
           : null,
     })),
     release_date_for_api: apiDate,
-    // Convert price strings to numbers or null
     price:
       formState.price === "" || formState.price === null
         ? null
@@ -413,10 +389,6 @@ watch(
           t.audio_file_object instanceof File ? t.audio_file_object : null,
       })) || [];
 
-    // Initialize new shop fields from props
-    formState.download_file_url = newData?.download_file_url || null;
-    formState.new_download_file_object =
-      newData?.new_download_file_object || null;
     formState.pricing_model = newData?.pricing_model || "PAID";
     formState.price = newData?.price === undefined ? null : newData.price;
     formState.currency = newData?.currency || "USD";
@@ -438,10 +410,13 @@ watch(
   (newModel) => {
     if (newModel !== "PAID") {
       formState.price = null;
-      // formState.currency = null; // Or keep default USD? Let's keep default for now.
     }
     if (newModel !== "NYP") {
       formState.minimum_price_nyp = null;
+    }
+    if (newModel === "FREE") {
+      // If free, also nullify currency perhaps
+      // formState.currency = null; // Or keep a default like USD
     }
   }
 );
@@ -558,36 +533,13 @@ watch(
       </div>
     </fieldset>
 
-    <!-- Download and Pricing Section -->
+    <!-- Pricing Section (Manual Download File section removed) -->
     <fieldset>
-      <legend>Download & Pricing</legend>
-      <div class="form-group">
-        <label for="download-file-form">Download File (e.g., ZIP):</label>
-        <div class="download-file-preview-container">
-          <span
-            v-if="
-              formState.download_file_url && !formState.new_download_file_object
-            "
-          >
-            Current:
-            {{
-              formState.download_file_url.substring(
-                formState.download_file_url.lastIndexOf("/") + 1
-              )
-            }}
-          </span>
-          <span v-else-if="formState.new_download_file_object">
-            New: {{ formState.new_download_file_object.name }}
-          </span>
-          <span v-else class="placeholder">No download file selected.</span>
-        </div>
-        <input
-          type="file"
-          id="download-file-form"
-          @change="handleDownloadFileChange"
-        />
-      </div>
-
+      <legend>Pricing for On-Demand Downloads</legend>
+      <p class="info-text">
+        Downloads will be automatically generated for users in various formats.
+        Set your pricing model here.
+      </p>
       <div class="form-group">
         <label for="pricing-model-form">Pricing Model:</label>
         <select id="pricing-model-form" v-model="formState.pricing_model">
@@ -618,7 +570,6 @@ watch(
             <option value="USD">USD</option>
             <option value="EUR">EUR</option>
             <option value="GBP">GBP</option>
-            <!-- Add more currencies as needed from shop.models.CURRENCY_CHOICES -->
           </select>
         </div>
       </div>
@@ -641,7 +592,6 @@ watch(
           />
         </div>
         <div class="form-group">
-          <!-- NYP also needs a currency for transactions -->
           <label for="nyp-currency-form">Currency for NYP Transactions:</label>
           <select id="nyp-currency-form" v-model="formState.currency">
             <option value="USD">USD</option>
@@ -654,6 +604,10 @@ watch(
 
     <fieldset>
       <legend>Tracks</legend>
+      <p class="info-text">
+        Upload the highest quality audio files you have (e.g., WAV, FLAC). Users
+        will be able to download these in various formats.
+      </p>
       <div
         v-for="(track, index) in formState.tracks"
         :key="track.id"
@@ -715,7 +669,7 @@ watch(
               :id="`track-file-form-${track.id}`"
               @change="handleTrackFileChange($event, index)"
               accept="audio/*"
-              :required="track._isNew && !track.audio_file_object"
+              :required="!track.audio_file_url && !track.audio_file_object"
             />
           </div>
           <div class="form-group">
@@ -825,6 +779,15 @@ watch(
   font-weight: bold;
   padding: 0 0.5em;
   color: var(--color-heading);
+}
+.info-text {
+  font-size: 0.9em;
+  color: var(--color-text-light);
+  margin-bottom: 1rem;
+  padding: 0.5em;
+  background-color: var(--color-background-mute);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 0 4px 4px 0;
 }
 .form-group {
   margin-bottom: 1rem;
@@ -984,19 +947,7 @@ watch(
   margin-bottom: 0.3em;
   font-style: italic;
 }
-.download-file-preview-container {
-  font-size: 0.9em;
-  font-style: italic;
-  color: var(--color-text-light);
-  margin-bottom: 0.5rem;
-  padding: 0.5rem;
-  background-color: var(--color-background-mute);
-  border-radius: 4px;
-  min-height: 1.5em; /* Ensure it has some height even if empty */
-}
-.download-file-preview-container .placeholder {
-  color: var(--color-text);
-}
+
 .conditional-pricing-fields {
   padding-left: 1rem;
   border-left: 2px solid var(--color-border);

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from "vue";
-import { useRouter, RouterLink } from "vue-router";
+import { useRouter, RouterLink, useRoute } from "vue-router"; // Added useRoute
 import axios from "axios";
 import { usePlayerStore, type PlayerTrackInfo } from "@/stores/player";
 import { useAuthStore } from "@/stores/auth";
@@ -16,8 +16,8 @@ interface TrackInfoFromApi {
   title: string;
   track_number: number | null;
   duration_in_seconds: number | null;
-  audio_file: string;
-  stream_url: string;
+  audio_file: string; // This is the original upload path, for reference
+  stream_url: string; // This is the streaming URL
   genres_data?: { id: number; name: string }[];
 }
 
@@ -33,23 +33,46 @@ interface ReleaseDetail {
   description?: string;
   genres_data?: { id: number; name: string }[];
   is_published: boolean;
-  // New shop fields
-  download_file: string | null; // URL to the download file
   pricing_model: "FREE" | "PAID" | "NYP";
   pricing_model_display: string;
-  price: string | null; // Comes as string from API (DecimalField)
+  price: string | null;
   currency: string | null;
-  minimum_price_nyp: string | null; // Comes as string
+  minimum_price_nyp: string | null;
+  available_download_formats: { value: string; label: string }[];
+}
+
+interface GeneratedDownloadStatus {
+  id: number;
+  unique_identifier: string;
+  release: number;
+  release_title: string;
+  user: number;
+  requested_format: string;
+  requested_format_display: string;
+  status: "PENDING" | "PROCESSING" | "READY" | "FAILED" | "EXPIRED";
+  celery_task_id: string | null;
+  download_url: string | null; // This is the API URL to fetch the file
+  created_at: string;
+  updated_at: string;
+  expires_at: string | null;
+  failure_reason: string | null;
 }
 
 const playerStore = usePlayerStore();
 const authStore = useAuthStore();
 const router = useRouter();
+const route = useRoute(); // Get current route for redirect query param
 const release = ref<ReleaseDetail | null>(null);
 const props = defineProps<{ id: string | string[] }>();
 const isLoading = ref(true);
 const error = ref<string | null>(null);
-const nypAmount = ref<string>(""); // For NYP input
+const nypAmount = ref<string>("");
+
+const selectedDownloadFormat = ref<string>("");
+const isRequestingDownload = ref(false);
+const downloadRequestStatus = ref<GeneratedDownloadStatus | null>(null);
+const downloadStatusError = ref<string | null>(null);
+let pollIntervalId: number | undefined;
 
 const isOwner = computed(() => {
   if (!authStore.isLoggedIn || !release.value || !authStore.authUser) {
@@ -103,6 +126,11 @@ const fetchReleaseDetail = async (id: string | string[]) => {
   isLoading.value = true;
   error.value = null;
   release.value = null;
+  selectedDownloadFormat.value = "";
+  stopPollingDownloadStatus();
+  downloadRequestStatus.value = null;
+  downloadStatusError.value = null;
+
   try {
     const response = await axios.get<ReleaseDetail>(`/releases/${releaseId}/`);
     release.value = response.data;
@@ -113,6 +141,13 @@ const fetchReleaseDetail = async (id: string | string[]) => {
       nypAmount.value = parseFloat(release.value.minimum_price_nyp).toFixed(2);
     } else if (release.value?.pricing_model === "NYP") {
       nypAmount.value = "0.00";
+    }
+    if (
+      release.value?.available_download_formats &&
+      release.value.available_download_formats.length > 0
+    ) {
+      selectedDownloadFormat.value =
+        release.value.available_download_formats[0].value;
     }
   } catch (err: any) {
     console.error(`Failed to fetch release ${releaseId}:`, err);
@@ -143,19 +178,15 @@ function mapToPlayerTrackInfo(
 
 const handlePlayTrack = (clickedTrack: TrackInfoFromApi) => {
   if (!release.value || !release.value.tracks) return;
-
   const allReleasePlayerTracks: PlayerTrackInfo[] = release.value.tracks.map(
     (apiTrack) => mapToPlayerTrackInfo(apiTrack, release.value!)
   );
-
   const clickedTrackIndex = allReleasePlayerTracks.findIndex(
     (pt) => pt.id === clickedTrack.id
   );
-
   if (clickedTrackIndex !== -1) {
     playerStore.setQueueAndPlay(allReleasePlayerTracks, clickedTrackIndex);
   } else {
-    console.error("Clicked track not found in mapped release tracks.");
     playerStore.playTrack(mapToPlayerTrackInfo(clickedTrack, release.value!));
   }
 };
@@ -167,7 +198,6 @@ const handlePlayAllFromRelease = () => {
     release.value.tracks.length === 0
   )
     return;
-
   const allReleasePlayerTracks: PlayerTrackInfo[] = release.value.tracks.map(
     (apiTrack) => mapToPlayerTrackInfo(apiTrack, release.value!)
   );
@@ -185,62 +215,207 @@ const goToEditRelease = () => {
   }
 };
 
-const handleDownload = () => {
-  if (release.value?.download_file) {
-    // For direct download, ensure the URL is correct.
-    // If it's a relative URL from the API (e.g., /media/downloads/file.zip),
-    // prepend the API base URL if not already handled by Axios default or browser.
-    let downloadUrl = release.value.download_file;
-    if (!downloadUrl.startsWith("http")) {
-      const apiUrl = axios.defaults.baseURL || window.location.origin;
-      downloadUrl = `${apiUrl.replace("/api", "")}${downloadUrl}`; // Adjust if /api is part of baseURL
+const handleRequestDownload = async () => {
+  if (!release.value || !selectedDownloadFormat.value) {
+    downloadStatusError.value = "Please select a download format.";
+    return;
+  }
+  if (!authStore.isLoggedIn) {
+    downloadStatusError.value = "Please log in to request a download.";
+    router.push({ name: "login", query: { redirect: route.fullPath } });
+    return;
+  }
+
+  isRequestingDownload.value = true;
+  downloadStatusError.value = null;
+  downloadRequestStatus.value = null;
+
+  try {
+    const response = await axios.post<GeneratedDownloadStatus>(
+      `/releases/${release.value.id}/request_download/`,
+      { requested_format: selectedDownloadFormat.value }
+    );
+    downloadRequestStatus.value = response.data;
+    if (
+      response.data.status === "PENDING" ||
+      response.data.status === "PROCESSING"
+    ) {
+      startPollingDownloadStatus(response.data.id);
     }
-    console.log("Attempting to download from:", downloadUrl);
-    window.open(downloadUrl, "_blank");
-  } else {
-    alert("No download file available.");
+  } catch (err: any) {
+    console.error("Failed to request download:", err);
+    if (axios.isAxiosError(err) && err.response) {
+      downloadStatusError.value =
+        err.response.data.detail || "Failed to start download preparation.";
+    } else {
+      downloadStatusError.value = "An unexpected error occurred.";
+    }
+  } finally {
+    isRequestingDownload.value = false;
   }
 };
 
-const handlePurchase = () => {
-  // This is where you'd initiate the payment flow.
-  // For "Paid", you know the price. For "NYP", use nypAmount.value.
-  // 1. Validate nypAmount if NYP.
-  // 2. Create an order on the backend.
-  // 3. Redirect to payment gateway.
-  // (This is a placeholder for a much larger feature)
-  let amountToPay: number | null = null;
-  let paymentCurrency = release.value?.currency;
-
-  if (release.value?.pricing_model === "PAID" && release.value.price) {
-    amountToPay = parseFloat(release.value.price);
-  } else if (release.value?.pricing_model === "NYP") {
-    const enteredAmount = parseFloat(nypAmount.value);
-    const minAmount = release.value.minimum_price_nyp
-      ? parseFloat(release.value.minimum_price_nyp)
-      : 0;
-    if (isNaN(enteredAmount) || enteredAmount < minAmount) {
-      alert(
-        `Please enter an amount of at least ${minAmount.toFixed(
-          2
-        )} ${paymentCurrency}.`
+const pollDownloadStatus = async (downloadId: number) => {
+  if (
+    !downloadRequestStatus.value ||
+    downloadRequestStatus.value.id !== downloadId
+  ) {
+    try {
+      const initialStatusResponse = await axios.get<GeneratedDownloadStatus>(
+        `/generated-download-status/${downloadId}/`
       );
+      downloadRequestStatus.value = initialStatusResponse.data;
+    } catch (err) {
+      console.error(
+        "Poll: Failed to fetch initial download status for ID:",
+        downloadId,
+        err
+      );
+      downloadStatusError.value = "Could not retrieve download status.";
+      stopPollingDownloadStatus();
       return;
     }
-    amountToPay = enteredAmount;
   }
 
-  if (amountToPay !== null && paymentCurrency) {
-    alert(
-      `Initiate purchase for ${release.value?.title} at ${amountToPay.toFixed(
-        2
-      )} ${paymentCurrency}. \n(Payment gateway integration needed)`
+  if (
+    !downloadRequestStatus.value ||
+    downloadRequestStatus.value.status === "READY" ||
+    downloadRequestStatus.value.status === "FAILED" ||
+    downloadRequestStatus.value.status === "EXPIRED"
+  ) {
+    stopPollingDownloadStatus();
+    return;
+  }
+
+  try {
+    const response = await axios.get<GeneratedDownloadStatus>(
+      `/generated-download-status/${downloadRequestStatus.value.id}/` // Use the ID from the status object
     );
-    // Example: Create an order then redirect
-    // const orderData = { release_id: release.value.id, amount: amountToPay, currency: paymentCurrency };
-    // axios.post('/shop/create-order/', orderData).then(response => { /* redirect to payment */ });
+    downloadRequestStatus.value = response.data;
+    if (
+      response.data.status === "READY" ||
+      response.data.status === "FAILED" ||
+      response.data.status === "EXPIRED"
+    ) {
+      stopPollingDownloadStatus();
+    }
+  } catch (err) {
+    console.error("Polling error:", err);
+    downloadStatusError.value = "Error checking download status.";
+  }
+};
+
+const startPollingDownloadStatus = (downloadId: number) => {
+  stopPollingDownloadStatus();
+  pollDownloadStatus(downloadId);
+  pollIntervalId = window.setInterval(
+    () => pollDownloadStatus(downloadId),
+    5000
+  );
+};
+
+const stopPollingDownloadStatus = () => {
+  if (pollIntervalId) {
+    clearInterval(pollIntervalId);
+    pollIntervalId = undefined;
+  }
+};
+
+const triggerActualDownload = async () => {
+  if (downloadRequestStatus.value?.download_url) {
+    isRequestingDownload.value = true; // Use this to show loading state on button
+    downloadStatusError.value = null;
+    try {
+      // The download_url is the API endpoint that serves the file
+      const response = await axios.get(
+        downloadRequestStatus.value.download_url,
+        {
+          responseType: "blob", // Important: Set responseType to 'blob'
+        }
+      );
+
+      const blob = new Blob([response.data], {
+        type: response.headers["content-type"] || "application/zip",
+      });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+
+      // Try to get filename from Content-Disposition header, fallback to constructing one
+      const contentDisposition = response.headers["content-disposition"];
+      let filename = `${release.value?.title || "download"}_${
+        downloadRequestStatus.value.requested_format_display
+      }.zip`; // Fallback
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i);
+        if (filenameMatch && filenameMatch.length > 1) {
+          filename = filenameMatch[1];
+        }
+      }
+
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      console.error("Failed to download file blob:", err);
+      downloadStatusError.value =
+        "Could not download the file. Please try again.";
+    } finally {
+      isRequestingDownload.value = false;
+    }
   } else {
-    alert("Pricing information is unclear for purchase.");
+    alert("Download URL not available.");
+  }
+};
+
+const handlePurchaseOrGetFree = () => {
+  if (release.value?.pricing_model === "FREE") {
+    if (
+      release.value.available_download_formats &&
+      release.value.available_download_formats.length > 0
+    ) {
+      if (!selectedDownloadFormat.value) {
+        selectedDownloadFormat.value =
+          release.value.available_download_formats[0].value;
+      }
+      handleRequestDownload();
+    } else {
+      alert("No download formats available for this free release.");
+    }
+  } else {
+    let amountToPay: number | null = null;
+    let paymentCurrency = release.value?.currency;
+
+    if (release.value?.pricing_model === "PAID" && release.value.price) {
+      amountToPay = parseFloat(release.value.price);
+    } else if (release.value?.pricing_model === "NYP") {
+      const enteredAmount = parseFloat(nypAmount.value);
+      const minAmount = release.value.minimum_price_nyp
+        ? parseFloat(release.value.minimum_price_nyp)
+        : 0;
+      if (isNaN(enteredAmount) || enteredAmount < minAmount) {
+        alert(
+          `Please enter an amount of at least ${minAmount.toFixed(
+            2
+          )} ${paymentCurrency}.`
+        );
+        return;
+      }
+      amountToPay = enteredAmount;
+    }
+
+    if (amountToPay !== null && paymentCurrency) {
+      alert(
+        `Initiate purchase for ${release.value?.title} at ${amountToPay.toFixed(
+          2
+        )} ${paymentCurrency}. \n(Payment gateway integration needed)\nAfter successful payment, the download preparation would start.`
+      );
+      // TODO: After successful payment in a real scenario:
+      // handleRequestDownload();
+    } else {
+      alert("Pricing information is unclear for purchase.");
+    }
   }
 };
 
@@ -256,6 +431,21 @@ watch(
     }
   }
 );
+
+watch(
+  () => authStore.isLoggedIn,
+  (loggedIn) => {
+    if (!loggedIn) {
+      stopPollingDownloadStatus();
+      downloadRequestStatus.value = null;
+    }
+  }
+);
+
+import { onUnmounted } from "vue";
+onUnmounted(() => {
+  stopPollingDownloadStatus();
+});
 
 const formatDuration = (totalSeconds: number | null | undefined): string => {
   if (
@@ -313,33 +503,26 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
           </p>
 
           <!-- Download/Purchase Section -->
-          <div class="shop-actions" v-if="release.download_file">
-            <div v-if="release.pricing_model === 'FREE'" class="price-display">
-              <button
-                @click="handleDownload"
-                class="action-button download-button"
+          <div class="shop-actions">
+            <div class="pricing-info">
+              <span v-if="release.pricing_model === 'PAID'" class="price-tag">{{
+                formattedPrice
+              }}</span>
+              <span
+                v-else-if="release.pricing_model === 'NYP'"
+                class="price-tag nyp-label"
+                >Name Your Price</span
               >
-                Download (Free)
-              </button>
-            </div>
-            <div
-              v-else-if="release.pricing_model === 'PAID'"
-              class="price-display"
-            >
-              <span>{{ formattedPrice }}</span>
-              <button
-                @click="handlePurchase"
-                class="action-button purchase-button"
+              <span
+                v-else-if="release.pricing_model === 'FREE'"
+                class="price-tag free-label"
+                >Free Download</span
               >
-                Buy Download
-              </button>
             </div>
-            <div
-              v-else-if="release.pricing_model === 'NYP'"
-              class="price-display nyp-section"
-            >
-              <label for="nyp-amount"
-                >Name Your Price {{ formattedMinNypPrice }}:</label
+
+            <div v-if="release.pricing_model === 'NYP'" class="nyp-input-area">
+              <label for="nyp-amount" class="nyp-amount-label"
+                >Enter amount {{ formattedMinNypPrice }}:</label
               >
               <div class="nyp-input-group">
                 <span class="currency-symbol">{{
@@ -356,21 +539,153 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
                   step="0.01"
                   min="0"
                 />
-                <!-- <span class="nyp-currency-label">{{ release.currency }}</span> -->
               </div>
-              <button
-                @click="handlePurchase"
-                class="action-button purchase-button"
-              >
-                Pay & Download
-              </button>
             </div>
+
+            <div
+              class="download-format-selector"
+              v-if="
+                release.available_download_formats &&
+                release.available_download_formats.length > 0 &&
+                authStore.isLoggedIn /* Show selector only if logged in or if it's a FREE item potentially */
+              "
+            >
+              <label for="download-format">Download format:</label>
+              <select id="download-format" v-model="selectedDownloadFormat">
+                <option
+                  v-for="format in release.available_download_formats"
+                  :key="format.value"
+                  :value="format.value"
+                >
+                  {{ format.label }}
+                </option>
+              </select>
+            </div>
+
+            <button
+              @click="handlePurchaseOrGetFree"
+              class="action-button main-action-button"
+              :disabled="
+                isRequestingDownload ||
+                (downloadRequestStatus &&
+                  (downloadRequestStatus.status === 'PENDING' ||
+                    downloadRequestStatus.status === 'PROCESSING')) ||
+                (!authStore.isLoggedIn &&
+                  release.pricing_model !==
+                    'FREE') /* Disable if not logged in and not free */
+              "
+            >
+              {{
+                !authStore.isLoggedIn && release.pricing_model !== "FREE"
+                  ? "Login to Purchase"
+                  : release.pricing_model === "FREE"
+                  ? "Get Download"
+                  : "Buy Now"
+              }}
+            </button>
             <p class="pricing-model-note">
-              Download Pricing: {{ release.pricing_model_display }}
+              Pricing: {{ release.pricing_model_display }}
             </p>
-          </div>
-          <div v-else class="shop-actions">
-            <p>Download not yet available for this release.</p>
+
+            <!-- Download Status/Link Area -->
+            <div v-if="authStore.isLoggedIn">
+              <div
+                v-if="
+                  isRequestingDownload &&
+                  !(
+                    downloadRequestStatus &&
+                    (downloadRequestStatus.status === 'PENDING' ||
+                      downloadRequestStatus.status === 'PROCESSING')
+                  )
+                "
+                class="download-status"
+              >
+                Requesting download preparation...
+              </div>
+              <div
+                v-if="downloadStatusError"
+                class="error-message download-error"
+              >
+                {{ downloadStatusError }}
+              </div>
+              <div v-if="downloadRequestStatus" class="download-status">
+                <p>
+                  Status ({{ downloadRequestStatus.requested_format_display }}):
+                  <strong>{{ downloadRequestStatus.status }}</strong>
+                </p>
+                <p
+                  v-if="
+                    downloadRequestStatus.status === 'PENDING' ||
+                    downloadRequestStatus.status === 'PROCESSING'
+                  "
+                >
+                  Your download is being prepared. This may take a few moments.
+                </p>
+                <p v-if="downloadRequestStatus.status === 'FAILED'">
+                  Reason:
+                  {{ downloadRequestStatus.failure_reason || "Unknown error" }}
+                  <button
+                    @click="handleRequestDownload"
+                    :disabled="isRequestingDownload"
+                    class="action-button retry-button"
+                  >
+                    Retry
+                  </button>
+                </p>
+                <button
+                  v-if="
+                    downloadRequestStatus.status === 'READY' &&
+                    downloadRequestStatus.download_url
+                  "
+                  @click="triggerActualDownload"
+                  class="action-button download-ready-button"
+                  :disabled="isRequestingDownload"
+                >
+                  {{
+                    isRequestingDownload
+                      ? "Downloading..."
+                      : `Download Now (${downloadRequestStatus.requested_format_display})`
+                  }}
+                </button>
+                <p
+                  v-if="
+                    downloadRequestStatus.status === 'READY' &&
+                    downloadRequestStatus.expires_at
+                  "
+                  class="expiry-note"
+                >
+                  Link expires:
+                  {{
+                    new Date(downloadRequestStatus.expires_at).toLocaleString()
+                  }}
+                </p>
+                <p
+                  v-if="downloadRequestStatus.status === 'EXPIRED'"
+                  class="expiry-note"
+                >
+                  This download link has expired.
+                  <button
+                    @click="handleRequestDownload"
+                    :disabled="isRequestingDownload"
+                    class="action-button retry-button"
+                  >
+                    Request New Link
+                  </button>
+                </p>
+              </div>
+            </div>
+            <p
+              v-else-if="release.pricing_model !== 'FREE'"
+              class="login-prompt"
+            >
+              Please
+              <RouterLink
+                :to="{ name: 'login', query: { redirect: route.fullPath } }"
+                >log in</RouterLink
+              >
+              or <RouterLink :to="{ name: 'register' }">register</RouterLink> to
+              purchase and download.
+            </p>
           </div>
 
           <div class="header-actions">
@@ -515,26 +830,38 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   background-color: var(--color-background-soft);
   border: 1px solid var(--color-border);
   border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
-.price-display {
+
+.pricing-info {
   display: flex;
   align-items: center;
   gap: 1rem;
   margin-bottom: 0.5rem;
 }
-.price-display span:first-child {
-  /* For fixed price display */
-  font-size: 1.2em;
+.price-tag {
+  font-size: 1.3em;
   font-weight: bold;
   color: var(--color-accent);
 }
-.nyp-section {
-  flex-direction: column;
-  align-items: flex-start;
+.price-tag.nyp-label {
+  color: var(--color-heading); /* Or a different accent */
 }
-.nyp-section label {
-  font-size: 0.95em;
-  margin-bottom: 0.3rem;
+.price-tag.free-label {
+  color: #34a853; /* Green for free */
+}
+
+.nyp-input-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.nyp-amount-label {
+  font-size: 0.9em;
+  color: var(--color-text-light);
 }
 .nyp-input-group {
   display: flex;
@@ -543,18 +870,35 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 }
 .nyp-input-group .currency-symbol {
   font-size: 1.1em;
+  padding-right: 0.1em;
 }
 .nyp-input-group input[type="number"] {
   padding: 0.4rem 0.6rem;
   border: 1px solid var(--color-border);
   border-radius: 4px;
-  width: 100px; /* Adjust as needed */
+  width: 100px;
   text-align: right;
+  background-color: var(--color-background);
+  color: var(--color-text);
 }
-/* .nyp-input-group .nyp-currency-label {
-    font-size: 0.9em;
-    color: var(--color-text-light);
-} */
+
+.download-format-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9em;
+}
+.download-format-selector label {
+  color: var(--color-text-light);
+}
+.download-format-selector select {
+  padding: 0.3em 0.5em;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-background);
+  color: var(--color-text);
+}
+
 .action-button {
   padding: 0.6em 1.2em;
   font-size: 0.95em;
@@ -563,25 +907,82 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   cursor: pointer;
   color: white;
 }
-.download-button {
-  background-color: var(
-    --color-accent-hover
-  ); /* A slightly different shade or distinct color */
+.retry-button {
+  /* Specific style for retry buttons */
+  background-color: var(--color-background-mute);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
 }
-.download-button:hover {
+.retry-button:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.main-action-button {
   background-color: var(--color-accent);
+  align-self: flex-start; /* Align button to the start of the flex container */
 }
-.purchase-button {
-  background-color: var(--color-accent);
-}
-.purchase-button:hover {
+.main-action-button:hover {
   background-color: var(--color-accent-hover);
 }
+.main-action-button:disabled {
+  background-color: var(--color-border);
+  cursor: not-allowed;
+}
+
 .pricing-model-note {
   font-size: 0.85em;
   font-style: italic;
   color: var(--color-text-light);
+  margin-top: 0.25rem;
+}
+.login-prompt {
+  font-size: 0.9em;
+  color: var(--color-text);
   margin-top: 0.5rem;
+}
+.login-prompt a {
+  color: var(--color-link);
+  text-decoration: underline;
+}
+
+.download-status {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--color-border-hover);
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.download-status p {
+  margin: 0.3rem 0;
+}
+.download-status strong {
+  color: var(--color-heading);
+}
+.download-status button {
+  /* Style for retry/download now buttons within status */
+  margin-left: 0.5rem;
+  font-size: 0.9em;
+  padding: 0.2em 0.5em;
+}
+.download-ready-button {
+  background-color: #28a745; /* Green for ready */
+}
+.download-ready-button:hover {
+  background-color: #218838;
+}
+.download-ready-button:disabled {
+  background-color: var(--color-border);
+  cursor: not-allowed;
+}
+.download-error {
+  background-color: var(--vt-c-red-soft);
+  border-color: var(--vt-c-red-dark);
+  color: var(--vt-c-red-dark);
+}
+.expiry-note {
+  font-size: 0.8em;
+  color: var(--color-text-light);
+  margin-top: 0.3rem;
 }
 
 .header-actions {

@@ -1,4 +1,3 @@
-// frontend/src/views/EditReleaseView.vue
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
@@ -23,12 +22,12 @@ interface ApiReleaseData {
   genres_data: { id: number; name: string }[];
   is_published: boolean;
   tracks: ApiReleaseTrack[];
-  // New fields from backend
-  download_file: string | null; // URL of existing download file
+  // Shop fields from backend
+  download_file: string | null; // Musician-uploaded (legacy)
   pricing_model: "FREE" | "PAID" | "NYP";
-  price: string | null; // Backend sends Decimal as string
+  price: string | null;
   currency: string | null;
-  minimum_price_nyp: string | null; // Backend sends Decimal as string
+  minimum_price_nyp: string | null;
 }
 
 const router = useRouter();
@@ -77,16 +76,15 @@ const fetchReleaseForEdit = async (releaseId: string) => {
         _isNew: false,
         _isRemoved: false,
       })),
-      // Populate new shop fields
-      download_file_url: apiData.download_file,
-      new_download_file_object: undefined,
       pricing_model: apiData.pricing_model,
-      price: apiData.price !== null ? parseFloat(apiData.price) : null, // Convert string to number
+      price: apiData.price !== null ? parseFloat(apiData.price) : null,
       currency: apiData.currency,
       minimum_price_nyp:
         apiData.minimum_price_nyp !== null
           ? parseFloat(apiData.minimum_price_nyp)
-          : null, // Convert
+          : null,
+      // Note: We don't set download_file_url or new_download_file_object here
+      // as that field is deprecated from the musician's form.
     };
   } catch (err: any) {
     console.error("EditReleaseView: Failed to fetch release data:", err);
@@ -132,30 +130,17 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
     );
   } else if (
     !submittedFormData.new_cover_art_file &&
-    !submittedFormData.cover_art_url
+    !submittedFormData.cover_art_url // If new is not set AND existing URL is cleared
   ) {
-    releaseUpdatePayload.append("cover_art", "");
+    releaseUpdatePayload.append("cover_art", ""); // Signal to clear
   }
 
   submittedFormData.genre_names.forEach((name) =>
     releaseUpdatePayload.append("genre_names", name)
   );
 
-  // Add/update shop fields
-  if (submittedFormData.new_download_file_object) {
-    releaseUpdatePayload.append(
-      "download_file",
-      submittedFormData.new_download_file_object
-    );
-  } else if (
-    !submittedFormData.new_download_file_object &&
-    !submittedFormData.download_file_url // If new is not set AND existing URL is cleared
-  ) {
-    releaseUpdatePayload.append("download_file", ""); // Signal to clear
-  }
-
+  // Pricing model fields
   releaseUpdatePayload.append("pricing_model", submittedFormData.pricing_model);
-
   if (submittedFormData.pricing_model === "PAID") {
     if (
       submittedFormData.price !== null &&
@@ -167,7 +152,6 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
       releaseUpdatePayload.append("currency", submittedFormData.currency);
     }
   } else {
-    // For FREE or NYP, explicitly send null for price if it was previously set for PAID
     releaseUpdatePayload.append("price", "");
   }
 
@@ -181,13 +165,17 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
         submittedFormData.minimum_price_nyp.toString()
       );
     }
-    // Also send currency for NYP
     if (submittedFormData.currency) {
+      // NYP also uses currency
       releaseUpdatePayload.append("currency", submittedFormData.currency);
     }
   } else {
     releaseUpdatePayload.append("minimum_price_nyp", "");
   }
+  // NOTE: The musician-uploaded 'download_file' is no longer sent from this form.
+  // If the backend requires it for PATCH and it's not nullable,
+  // this might need adjustment on the backend or to send an empty string if allowed.
+  // For now, assuming backend handles its absence gracefully for PATCH.
 
   try {
     await axios.patch(
@@ -213,7 +201,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
         await axios.delete(`/tracks/${track._originalId}/`);
       } else if (!track._isRemoved) {
         if (track._isNew) {
-          if (!track.title || !track.audio_file_object) continue;
+          if (!track.title || !track.audio_file_object) continue; // New tracks must have audio
           const newTrackPayload = new FormData();
           newTrackPayload.append("title", track.title);
           newTrackPayload.append("audio_file", track.audio_file_object);
@@ -234,15 +222,30 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
             trackNumberToSubmit.toString()
           );
           if (track.audio_file_object) {
+            // Only send audio if it's a new file
             updateTrackPayload.append("audio_file", track.audio_file_object);
           }
-
-          // Send genre_names. If track.genre_names is empty, this loop does nothing.
-          // This means 'genre_names' might not be part of FormData if the list is empty.
+          // Handle genres: if genre_names is empty, send it as such to clear them
+          // If genre_names has items, send them.
+          // If backend expects 'genre_names' key even if empty to clear, send empty array.
+          // If backend clears if key is absent, can conditionally add.
+          // For DRF, sending an empty list for a M2M usually clears it.
           track.genre_names.forEach((name) =>
             updateTrackPayload.append("genre_names", name)
           );
-          // The problematic block that explicitly sent genre_names="" if the array was empty has been removed.
+          // If track.genre_names is empty and you want to ensure genres are cleared:
+          if (track.genre_names.length === 0) {
+            // Depending on backend, you might need to send `genre_names: []`
+            // For FormData, if you want to signal an empty list for clearing,
+            // you might need a specific backend handling or send a special value.
+            // Often, not sending the key implies "no change" for M2M on PATCH.
+            // To clear, you often send an empty list in JSON, or handle lack of key as "clear".
+            // For now, if genre_names is empty, the loop doesn't add, backend might not clear.
+            // This line ensures an empty list is signaled if genres are empty
+            if (!updateTrackPayload.has("genre_names")) {
+              updateTrackPayload.append("genre_names", ""); // Or handle on backend to clear if key sent empty
+            }
+          }
 
           await axios.patch(
             `/tracks/${track._originalId}/`,
