@@ -1,4 +1,3 @@
-// frontend/src/router/index.ts
 import { createRouter, createWebHistory } from "vue-router";
 import HomeView from "../views/HomeView.vue";
 import { useAuthStore } from "@/stores/auth";
@@ -80,15 +79,21 @@ const router = createRouter({
       component: () => import("../views/OrderHistoryView.vue"),
       meta: { requiresAuth: true },
     },
+    // --- NEW CART ROUTE ---
+    {
+      path: "/cart",
+      name: "cart",
+      component: () => import("../views/CartView.vue"),
+      meta: { requiresAuth: true },
+    },
+    // --- END NEW CART ROUTE ---
   ],
 });
 
 router.beforeEach(async (to, _from, next) => {
-  // Changed from to _from
   const authStore = useAuthStore();
 
   if (!authStore.user && localStorage.getItem("accessToken")) {
-    // Use authLoading which is the correct name from the store
     if (!authStore.authLoading) {
       await authStore.tryAutoLogin();
     }
@@ -108,11 +113,13 @@ router.beforeEach(async (to, _from, next) => {
     if (!authStore.isLoggedIn) {
       next({ name: "login", query: { redirect: to.fullPath } });
     } else if (authStore.authLoading) {
-      // Use authLoading
       console.warn(
         "Navigation guard: User/profile data still loading for requiresArtist check."
       );
-      next({ name: "home" });
+      // Allow navigation but content might briefly show loading state or be incomplete
+      // Or redirect to a loading page, or wait for loading to finish.
+      // For now, let's let it proceed and rely on views to handle loading state.
+      next();
     } else if (!authStore.hasArtistProfile) {
       alert(
         "You need an artist profile to access this page. Please create one from your profile."
@@ -125,16 +132,14 @@ router.beforeEach(async (to, _from, next) => {
     if (!authStore.isLoggedIn) {
       next({ name: "login", query: { redirect: to.fullPath } });
     } else if (authStore.authLoading) {
-      // Use authLoading
       console.warn(
         "Navigation guard: User/profile data still loading for requiresArtistCreation check."
       );
-      next({ name: "home" });
+      next(); // Allow navigation, view should handle loading state
     } else if (authStore.hasArtistProfile) {
       alert("You already have an artist profile.");
       next({
         name: "artist-detail",
-        // Ensure artistProfileId is not null before using it
         params: { id: authStore.artistProfileId || "error" },
       });
     } else {

@@ -1,14 +1,19 @@
-// frontend/src/components/Navbar.vue
 <script setup lang="ts">
 import { RouterLink, useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
+import { useCartStore } from "@/stores/cart"; // Import cart store
+import { computed } from "vue"; // Import computed
 
 const authStore = useAuthStore();
+const cartStore = useCartStore(); // Initialize cart store
 const router = useRouter();
 
 const handleLogout = async () => {
   await authStore.logout(router);
+  cartStore.fetchCart(); // Fetch/clear cart on logout
 };
+
+const cartItemCount = computed(() => cartStore.itemCount);
 </script>
 
 <template>
@@ -24,7 +29,6 @@ const handleLogout = async () => {
       <RouterLink v-if="authStore.isLoggedIn" to="/orders"
         >My Orders</RouterLink
       >
-      <!-- ADDED THIS LINK -->
       <!-- <RouterLink to="/about">About</RouterLink> -->
 
       <template v-if="!authStore.isLoggedIn">
@@ -33,6 +37,12 @@ const handleLogout = async () => {
       </template>
 
       <template v-else>
+        <RouterLink to="/cart" class="cart-link" title="Shopping Cart">
+          🛒 Cart
+          <span v-if="cartItemCount > 0" class="cart-count"
+            >({{ cartItemCount }})</span
+          >
+        </RouterLink>
         <RouterLink
           to="/profile"
           v-if="authStore.authUser"
@@ -88,5 +98,15 @@ const handleLogout = async () => {
   margin-left: 1rem;
   color: var(--color-text);
   font-style: italic;
+}
+
+.cart-link {
+  position: relative; /* For positioning the count */
+}
+.cart-count {
+  font-size: 0.8em;
+  font-weight: bold;
+  color: var(--color-accent); /* Or your preferred color for count */
+  margin-left: 0.2em;
 }
 </style>

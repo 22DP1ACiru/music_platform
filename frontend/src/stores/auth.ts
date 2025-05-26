@@ -3,6 +3,7 @@ import { ref, computed } from "vue";
 import axios from "axios";
 import type { Router } from "vue-router";
 import { usePlayerStore } from "./player"; // Import the player store
+// import { useCartStore } from "./cart"; // Import cart store for logout action // This causes circular dependency
 
 // --- Interfaces to match backend serializers ---
 interface ArtistProfileForAuth {
@@ -34,6 +35,7 @@ export const useAuthStore = defineStore("auth", () => {
   const error = ref<string | null>(null);
 
   const playerStore = usePlayerStore(); // Initialize player store
+  // const cartStore = useCartStore(); // Avoid direct import here to prevent cycles
 
   const isLoggedIn = computed(() => !!accessToken.value);
   const authUser = computed(() => user.value);
@@ -71,7 +73,7 @@ export const useAuthStore = defineStore("auth", () => {
           console.warn(
             "Auth Store: Profile fetch failed with 401. Logging out."
           );
-          await logout(router);
+          await logout(router); // Pass router here
         }
       }
       user.value = {
@@ -87,7 +89,7 @@ export const useAuthStore = defineStore("auth", () => {
         console.warn(
           "Auth Store: Access token invalid/expired during fetchUser base. Logging out."
         );
-        await logout(router);
+        await logout(router); // Pass router here
       }
     } finally {
       isLoading.value = false;
@@ -108,7 +110,7 @@ export const useAuthStore = defineStore("auth", () => {
         accessToken.value = response.data.access;
         refreshToken.value = response.data.refresh;
         console.log("Auth Store: Login successful, tokens stored.");
-        await fetchUser(router);
+        await fetchUser(router); // Pass router
         if (user.value && router) {
           const redirectPath =
             (router.currentRoute.value.query.redirect as string) || "/";
@@ -146,9 +148,21 @@ export const useAuthStore = defineStore("auth", () => {
     refreshToken.value = null;
     user.value = null;
 
-    playerStore.resetPlayerState(); // Reset player state on logout
+    playerStore.resetPlayerState();
 
-    console.log("Auth Store: Logged Out, player state reset.");
+    // Dynamically import and use cartStore to break potential circular dependency
+    // This is a common pattern when stores depend on each other for actions like logout.
+    try {
+      const { useCartStore } = await import("./cart");
+      const cartStore = useCartStore();
+      cartStore.cart = null; // Directly reset cart or call a reset action if available
+    } catch (e) {
+      console.error("AuthStore: Error accessing cartStore during logout:", e);
+    }
+
+    console.log(
+      "Auth Store: Logged Out, player state reset, cart reset attempted."
+    );
     if (router) {
       try {
         if (
@@ -207,14 +221,13 @@ export const useAuthStore = defineStore("auth", () => {
         console.log("Auth Store: Verifying existing token...");
         await axios.post("/token/verify/", { token: accessToken.value });
         console.log("Auth Store: Token verified successfully.");
-        await fetchUser(router);
-        // Player state is loaded by playerStore itself
+        await fetchUser(router); // Pass router
       } catch (verificationError) {
         console.warn(
           "Auth Store: Token verification failed or token expired.",
           verificationError
         );
-        const refreshed = await refreshTokenAction(router);
+        const refreshed = await refreshTokenAction(router); // Pass router
         if (!refreshed) {
           console.warn(
             "Auth Store: Token refresh also failed during auto-login. User remains logged out."
@@ -237,7 +250,7 @@ export const useAuthStore = defineStore("auth", () => {
     const currentRefreshToken = refreshToken.value;
     if (!currentRefreshToken) {
       console.error("Auth Store: No refresh token to attempt refresh.");
-      await logout(router);
+      await logout(router); // Pass router
       return false;
     }
     try {
@@ -255,11 +268,11 @@ export const useAuthStore = defineStore("auth", () => {
         refreshToken.value = newRefresh;
       }
       console.log("Auth Store: Token refresh successful.");
-      await fetchUser(router);
+      await fetchUser(router); // Pass router
       return true;
     } catch (err) {
       console.error("Auth Store: Token refresh failed:", err);
-      await logout(router);
+      await logout(router); // Pass router
       return false;
     }
   }

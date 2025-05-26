@@ -1,3 +1,4 @@
+# backend/shop/serializers.py
 from rest_framework import serializers
 from .models import Order, OrderItem, Product
 from music.models import Release # For creating library item
@@ -5,10 +6,40 @@ from library.models import UserLibraryItem # For creating library item
 from django.db import transaction
 from decimal import Decimal # Import Decimal
 
+# ProductSerializer Updated
+class ProductSerializer(serializers.ModelSerializer):
+    release_title = serializers.CharField(source='release.title', read_only=True, allow_null=True)
+    track_title = serializers.CharField(source='track.title', read_only=True, allow_null=True)
+    product_type_display = serializers.CharField(source='get_product_type_display', read_only=True)
+    # Include the release ID directly
+    release_id = serializers.PrimaryKeyRelatedField(source='release', read_only=True, allow_null=True)
+
+
+    class Meta:
+        model = Product
+        fields = [
+            'id', 
+            'name', 
+            'description', 
+            'product_type', 
+            'product_type_display',
+            'price', 
+            'currency', 
+            'is_active',
+            'release', # This is the FK relation, will show ID by default in some contexts
+            'release_id', # Explicitly adding release ID
+            'track',   
+            'release_title',
+            'track_title',
+            'created_at', 
+            'updated_at'
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'product_type_display', 'release_title', 'track_title', 'release_id']
+
+
 class OrderItemCreateSerializer(serializers.Serializer):
     product_id = serializers.IntegerField(required=True)
     quantity = serializers.IntegerField(default=1, min_value=1)
-    # Add a field for frontend to optionally send the price for NYP
     price_override = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, min_value=Decimal('0.00'))
 
     def validate_product_id(self, value):
@@ -33,15 +64,8 @@ class OrderItemCreateSerializer(serializers.Serializer):
                     {"price_override": f"Entered price is below the minimum of {min_price} {product.currency}."}
                 )
         elif price_override is not None:
-            # If it's not NYP, frontend shouldn't send price_override.
-            # Or, you could ignore it, or validate it matches product.price.
-            # For simplicity, let's disallow it for non-NYP items if sent.
-            # (This part is optional, depends on how strict you want to be)
-            # if product.release and product.release.pricing_model != Release.PricingModel.NAME_YOUR_PRICE:
-            #     raise serializers.ValidationError(
-            #         {"price_override": "Price override is only for 'Name Your Price' items."}
-            #     )
-            pass # Allow price_override for now, will be ignored if not NYP in OrderCreateSerializer logic
+            if not (product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE):
+                 pass # Let's allow it but it will be ignored by cart item effective price
 
         return data
 
@@ -80,16 +104,15 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             for item_data in items_data:
                 product = Product.objects.get(pk=item_data['product_id'])
                 quantity = item_data['quantity']
-                price_for_this_item = product.price # Default to product's listed price
+                price_for_this_item = product.price 
 
                 if product.release and product.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE:
-                    # For NYP, the validated price_override from item_data is used
                     price_for_this_item = item_data['price_override'] 
                 
                 if order_currency is None:
                     order_currency = product.currency
                 elif order_currency != product.currency:
-                    order.delete() # Clean up partially created order
+                    order.delete() 
                     raise serializers.ValidationError(
                         {"currency": "All items in an order must have the same currency."}
                     )
@@ -105,21 +128,18 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             order.total_amount = current_total
             order.currency = order_currency or 'USD'
             
-            # SIMULATE SUCCESSFUL PAYMENT
             order.status = Order.ORDER_STATUS_CHOICES[2][0] # COMPLETED
             order.payment_gateway_id = "simulated_payment_success"
             order.save()
 
             if order.status == Order.ORDER_STATUS_CHOICES[2][0] and user.is_authenticated:
                 for item_data in items_data:
-                    product_instance = Product.objects.get(pk=item_data['product_id']) # Re-fetch for clarity
+                    product_instance = Product.objects.get(pk=item_data['product_id']) 
                     if product_instance.release:
                         acquisition_type = UserLibraryItem.ACQUISITION_CHOICES[1][0] # PURCHASED
                         if product_instance.release.pricing_model == Release.PricingModel.NAME_YOUR_PRICE:
                              acquisition_type = UserLibraryItem.ACQUISITION_CHOICES[2][0] # NYP
                         elif product_instance.release.pricing_model == Release.PricingModel.FREE:
-                             # This case shouldn't happen via order creation for FREE, 
-                             # but good to be defensive or handle it if a "free checkout" is implemented
                              acquisition_type = UserLibraryItem.ACQUISITION_CHOICES[0][0] # FREE
 
                         library_item, created = UserLibraryItem.objects.get_or_create(
@@ -135,9 +155,12 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 
 class OrderItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
+    product = ProductSerializer(read_only=True) # Using the full ProductSerializer now
+
     class Meta:
         model = OrderItem
         fields = ['id', 'product', 'product_name', 'quantity', 'price_at_purchase', 'item_total']
+
 
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)

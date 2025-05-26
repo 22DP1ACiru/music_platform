@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'shop',
     'chat',
     'library',
+    'cart', # Add the new cart app
     'vaultwave'
 ]
 

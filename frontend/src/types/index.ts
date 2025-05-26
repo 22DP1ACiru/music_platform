@@ -66,3 +66,34 @@ export interface PlayerTrackInfo {
   coverArtUrl?: string | null;
   duration?: number | null;
 }
+
+// --- NEW CART TYPES ---
+export interface ProductSummaryForCart {
+  id: number;
+  name: string;
+  price: string; // Assuming price is a string from backend (decimal)
+  currency: string;
+  cover_art?: string | null; // Assuming ProductSerializer might provide this via release
+  release_title?: string | null; // From ProductSerializer
+  artist_name?: string | null; // Assuming ProductSerializer might get this via release.artist
+  release_id?: number | null;
+}
+
+export interface CartItem {
+  id: number;
+  product: ProductSummaryForCart; // Nested Product details
+  price_override: string | null; // Decimal as string
+  added_at: string;
+  effective_price: string; // Decimal as string
+}
+
+export interface Cart {
+  id: number;
+  user: string; // Username
+  items: CartItem[];
+  total_price: string; // Decimal as string
+  currency: string;
+  created_at: string;
+  updated_at: string;
+}
+// --- END NEW CART TYPES ---
