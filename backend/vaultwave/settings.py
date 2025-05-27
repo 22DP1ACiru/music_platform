@@ -56,7 +56,7 @@ INSTALLED_APPS = [
     'music',
     'playlists',
     'shop',
-    'chat',
+    'chat', # Add chat app here
     'library',
     'cart',
     'vaultwave'
@@ -74,9 +74,11 @@ MIDDLEWARE = [
 ]
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5341",
+    "http://localhost:5341", # Frontend's default port from docker-compose
     "http://127.0.0.1:5341",
 ]
+# If you use credentials (like cookies or Authorization headers), set this:
+# CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = 'vaultwave.urls'
 
@@ -98,7 +100,9 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'vaultwave.wsgi.application'
 
-ASGI_APPLICATION = 'vaultwave.asgi.application'
+# ASGI application for Channels if you integrate WebSockets later
+# ASGI_APPLICATION = 'vaultwave.asgi.application'
+
 
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
@@ -142,9 +146,11 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
             'rest_framework_simplejwt.authentication.JWTAuthentication',
-            'rest_framework.authentication.SessionAuthentication',
+            'rest_framework.authentication.SessionAuthentication', # Optional: for browsable API
     ],
     'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 10 # Example page size
 }
 
 SIMPLE_JWT = {
@@ -197,6 +203,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = 'static/'
+# STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles_collected') # For collectstatic in production
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'mediafiles') # Store uploads inside the backend/mediafiles dir
@@ -212,15 +219,16 @@ CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'UTC' 
+CELERY_TIMEZONE = 'UTC' # Recommended to use UTC
 
 # Celery Beat Schedule
 CELERY_BEAT_SCHEDULE = {
     'cleanup-generated-downloads-daily': {
-        'task': 'cleanup_generated_downloads', # Name of the task as registered with Celery
+        'task': 'music.tasks.cleanup_generated_downloads_task', # Corrected task name
         'schedule': crontab(hour=3, minute=0),  # Run daily at 3:00 AM UTC
         # 'schedule': crontab(minute='*/5'), # For testing: run every 5 minutes
     },
+    # Add other scheduled tasks here
 }
 
 
@@ -245,3 +253,25 @@ CURRENCY_CHOICES = [
 ]
 
 DEFAULT_CURRENCY = 'USD'
+
+# Logging Configuration (Example)
+# LOGGING = {
+#     'version': 1,
+#     'disable_existing_loggers': False,
+#     'handlers': {
+#         'console': {
+#             'class': 'logging.StreamHandler',
+#         },
+#     },
+#     'root': {
+#         'handlers': ['console'],
+#         'level': 'INFO', # Change to DEBUG for more verbosity
+#     },
+#     'loggers': {
+#         'django': {
+#             'handlers': ['console'],
+#             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+#             'propagate': False,
+#         },
+#     },
+# }

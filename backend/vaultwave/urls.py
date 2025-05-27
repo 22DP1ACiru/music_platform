@@ -12,6 +12,7 @@ from music.views import (
 )
 from playlists.views import PlaylistViewSet
 # from cart.views import CartViewSet # We will include cart.urls directly
+# from chat.views import ConversationViewSet # Included via chat.urls
 
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -36,6 +37,9 @@ router.register(r'playlists', PlaylistViewSet, basename='playlist')
 
 router.register(r'generated-download-status', GeneratedDownloadStatusViewSet, basename='generated-download-status')
 
+# Chat app's router is included via 'chat.urls' now.
+# router.register(r'chat/conversations', ConversationViewSet, basename='conversation')
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -48,6 +52,9 @@ urlpatterns = [
     path('api/cart/', include('cart.urls')),
     path('api/music/', include('music.urls')), 
     path('api/tracks/<int:track_id>/stream/', stream_track_audio, name='track-stream'),
+    
+    # Add chat app urls
+    path('api/chat/', include('chat.urls')), # Ensure this line exists and is correct
 
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')), 
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
