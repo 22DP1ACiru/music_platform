@@ -27,7 +27,6 @@ export interface ReleaseFormData {
   is_published: boolean;
   tracks: TrackFormData[];
 
-  // Shop fields (pricing) - Manual download_file fields are removed
   pricing_model: "FREE" | "PAID" | "NYP";
   price?: number | string | null;
   currency?: string | null;
@@ -35,8 +34,8 @@ export interface ReleaseFormData {
 }
 
 interface Genre {
-  id: number;
-  name: string;
+  id: number; // Ensure id is not optional
+  name: string; // Ensure name is not optional
 }
 
 // --- Props ---
@@ -83,14 +82,19 @@ const formState = reactive<ReleaseFormData>({
     })(),
   cover_art_url: props.initialData?.cover_art_url || null,
   new_cover_art_file: props.initialData?.new_cover_art_file || null,
-  genre_names: [...(props.initialData?.genre_names || [])],
+  genre_names: Array.isArray(props.initialData?.genre_names)
+    ? [...props.initialData.genre_names]
+    : [],
   is_published:
     props.initialData?.is_published === undefined
       ? true
       : props.initialData.is_published,
-  tracks: props.initialData?.tracks?.map((t) => ({ ...t })) || [],
+  tracks:
+    props.initialData?.tracks?.map((t) => ({
+      ...t,
+      genre_names: Array.isArray(t.genre_names) ? [...t.genre_names] : [],
+    })) || [],
 
-  // Initialize pricing fields
   pricing_model: props.initialData?.pricing_model || "PAID",
   price:
     props.initialData?.price === undefined ? null : props.initialData.price,
@@ -125,11 +129,22 @@ const fullReleaseDateTimeForSubmission = computed(() => {
 // --- Methods ---
 const fetchGenres = async () => {
   try {
-    const response = await axios.get<Genre[]>("/genres/");
-    availableGenres.value = response.data;
+    const response = await axios.get<Array<Genre | null>>("/genres/"); // Expect it might contain nulls
+    if (Array.isArray(response.data)) {
+      // Filter out nulls and items without an id or name, just to be super safe
+      availableGenres.value = response.data.filter(
+        (genre): genre is Genre =>
+          genre !== null &&
+          typeof genre.id === "number" &&
+          typeof genre.name === "string"
+      );
+    } else {
+      availableGenres.value = []; // If response.data is not an array, default to empty
+    }
     newTrackGenreInputs.value = formState.tracks.map(() => "");
   } catch (err) {
     console.error("ReleaseForm: Failed to fetch genres:", err);
+    availableGenres.value = []; // Set to empty array on error
   }
 };
 
@@ -148,6 +163,7 @@ const addTrackGenreChip = (trackIndex: number) => {
   const genreToAdd = newTrackGenreInputs.value[trackIndex]?.trim();
   if (
     genreToAdd &&
+    formState.tracks[trackIndex] &&
     !formState.tracks[trackIndex].genre_names.includes(genreToAdd)
   ) {
     formState.tracks[trackIndex].genre_names.push(genreToAdd);
@@ -169,7 +185,7 @@ const addTrack = () => {
     track_number: newTrackNumber,
     audio_file_url: null,
     audio_file_object: null,
-    genre_names: [],
+    genre_names: [], // Initialize as empty array
     _isNew: true,
     _isRemoved: false,
   });
@@ -210,10 +226,9 @@ const handleTrackFileChange = (event: Event, trackIndex: number) => {
   const track = formState.tracks[trackIndex];
   if (target.files && target.files[0] && track) {
     track.audio_file_object = target.files[0];
-    track.audio_file_url = target.files[0].name; // For display consistency if needed
+    track.audio_file_url = target.files[0].name;
   } else if (track) {
     track.audio_file_object = null;
-    // track.audio_file_url = null; // Or revert to existing if edit mode
   }
 };
 
@@ -268,7 +283,7 @@ const triggerSubmit = () => {
     formState.pricing_model === "PAID" &&
     (formState.price === null ||
       formState.price === "" ||
-      Number(formState.price) < 0) // Price can be 0
+      Number(formState.price) < 0)
   ) {
     alert("Price is required and cannot be negative for 'Paid' model.");
     return;
@@ -287,7 +302,6 @@ const triggerSubmit = () => {
     return;
   }
 
-  // Validation for at least one track for non-single releases might be good
   if (
     formState.release_type !== "SINGLE" &&
     formState.tracks.filter((t) => !t._isRemoved).length === 0
@@ -302,7 +316,6 @@ const triggerSubmit = () => {
     alert("Singles must have exactly one track.");
     return;
   }
-  // Ensure all active tracks have files (especially new ones)
   for (const track of formState.tracks) {
     if (
       !track._isRemoved &&
@@ -349,13 +362,12 @@ const cancel = () => {
 
 // --- Lifecycle Hooks & Watchers ---
 onMounted(() => {
-  fetchGenres();
+  fetchGenres(); // Call fetchGenres
   if (formState.tracks.length === 0 && !props.isEditMode) {
     addTrack();
   }
-  if (props.initialData?.tracks) {
-    newTrackGenreInputs.value = props.initialData.tracks.map(() => "");
-  }
+  // Ensure newTrackGenreInputs is initialized based on current tracks
+  newTrackGenreInputs.value = formState.tracks.map(() => "");
 });
 
 watch(
@@ -377,13 +389,16 @@ watch(
       })();
     formState.cover_art_url = newData?.cover_art_url || null;
     formState.new_cover_art_file = newData?.new_cover_art_file || null;
-    formState.genre_names = [...(newData?.genre_names || [])];
+    formState.genre_names = Array.isArray(newData?.genre_names)
+      ? [...newData.genre_names]
+      : [];
     formState.is_published =
       newData?.is_published === undefined ? true : newData.is_published;
 
     formState.tracks =
       newData?.tracks?.map((t) => ({
         ...t,
+        genre_names: Array.isArray(t.genre_names) ? [...t.genre_names] : [], // Ensure genre_names is an array
         _isNew: t._isNew === undefined ? false : t._isNew,
         audio_file_object:
           t.audio_file_object instanceof File ? t.audio_file_object : null,
@@ -410,13 +425,11 @@ watch(
   (newModel) => {
     if (newModel !== "PAID") {
       formState.price = null;
+      // Keep currency for NYP if model is NYP
+      // if (newModel !== 'NYP') formState.currency = null;
     }
     if (newModel !== "NYP") {
       formState.minimum_price_nyp = null;
-    }
-    if (newModel === "FREE") {
-      // If free, also nullify currency perhaps
-      // formState.currency = null; // Or keep a default like USD
     }
   }
 );
@@ -533,7 +546,6 @@ watch(
       </div>
     </fieldset>
 
-    <!-- Pricing Section (Manual Download File section removed) -->
     <fieldset>
       <legend>Pricing for On-Demand Downloads</legend>
       <p class="info-text">

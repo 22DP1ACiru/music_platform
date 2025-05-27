@@ -5,6 +5,7 @@ import axios from "axios";
 import { useAuthStore } from "@/stores/auth";
 import ReleaseForm, {
   type ReleaseFormData as FormComponentState,
+  type TrackFormData,
 } from "@/components/ReleaseForm.vue";
 
 const authStore = useAuthStore();
@@ -12,10 +13,37 @@ const router = useRouter();
 
 const isLoading = ref(false);
 const error = ref<string | null>(null);
+const trackSpecificErrors = ref<Record<string, string>>({});
+
+const formatTrackError = (
+  trackId: string | number,
+  trackTitle: string | undefined,
+  trackErrors: any
+): string => {
+  let messages: string[] = [];
+  if (typeof trackErrors === "string") {
+    messages.push(trackErrors);
+  } else if (Array.isArray(trackErrors)) {
+    messages = messages.concat(trackErrors.map((e) => String(e)));
+  } else if (typeof trackErrors === "object" && trackErrors !== null) {
+    for (const field in trackErrors) {
+      const fieldErrors = trackErrors[field];
+      if (Array.isArray(fieldErrors)) {
+        messages.push(`${field}: ${fieldErrors.join(", ")}`);
+      } else {
+        messages.push(`${field}: ${String(fieldErrors)}`);
+      }
+    }
+  }
+  return `Track "${
+    trackTitle || `ID: ${trackId}` || "Untitled"
+  }": ${messages.join("; ")}`;
+};
 
 const handleFormSubmit = async (submittedFormData: FormComponentState) => {
   isLoading.value = true;
   error.value = null;
+  trackSpecificErrors.value = {};
 
   if (!authStore.hasArtistProfile) {
     error.value =
@@ -47,7 +75,6 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
     releaseApiData.append("genre_names", genre);
   });
 
-  // Pricing model fields
   releaseApiData.append("pricing_model", submittedFormData.pricing_model);
   if (submittedFormData.pricing_model === "PAID") {
     if (
@@ -71,24 +98,23 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
       );
     }
     if (submittedFormData.currency) {
-      // NYP also uses currency
       releaseApiData.append("currency", submittedFormData.currency);
     }
   }
-  // NOTE: The musician-uploaded 'download_file' is no longer sent from this form.
 
+  let newReleaseId: number | null = null;
   try {
     const releaseResponse = await axios.post("/releases/", releaseApiData, {
       headers: { "Content-Type": "multipart/form-data" },
     });
-    const newReleaseId = releaseResponse.data.id;
+    newReleaseId = releaseResponse.data.id;
 
     for (const track of submittedFormData.tracks) {
-      if (track._isRemoved) continue; // Should not happen for new release
+      if (track._isRemoved) continue;
 
       if (
         !track.title ||
-        !track.audio_file_object || // New tracks must have an audio file object
+        !track.audio_file_object ||
         track.track_number === null
       ) {
         console.warn(
@@ -96,6 +122,8 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
             track.title || "Untitled"
           } due to missing title, file, or track number.`
         );
+        trackSpecificErrors.value[String(track.id)] =
+          "Missing title, file, or track number.";
         continue;
       }
       const trackApiData = new FormData();
@@ -106,22 +134,46 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
       track.genre_names.forEach((genre) => {
         trackApiData.append("genre_names", genre);
       });
-      await axios.post("/tracks/", trackApiData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+
+      try {
+        await axios.post("/tracks/", trackApiData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      } catch (trackError: any) {
+        console.error(
+          `CreateReleaseView: Failed to create track "${track.title}":`,
+          trackError
+        );
+        const trackErrorMessage = formatTrackError(
+          track.id,
+          track.title,
+          trackError.response?.data
+        );
+        trackSpecificErrors.value[String(track.id)] = trackErrorMessage;
+        if (!error.value)
+          error.value =
+            "One or more tracks failed to upload. Please review track errors below.";
+      }
     }
-    alert("Release created successfully!");
-    router.push({ name: "release-detail", params: { id: newReleaseId } });
+
+    if (Object.keys(trackSpecificErrors.value).length > 0) {
+      console.warn(
+        "CreateReleaseView: Some tracks failed to save. Release might be partial."
+      );
+    } else {
+      alert("Release created successfully!");
+      router.push({ name: "release-detail", params: { id: newReleaseId } });
+    }
   } catch (err: any) {
     console.error(
-      "CreateReleaseView: Failed to create release or tracks:",
+      "CreateReleaseView: Failed to create release:", // Main error now focuses on release part
       err
     );
     if (axios.isAxiosError(err) && err.response) {
       const errors = err.response.data;
-      let detailedError = "";
+      let detailedError = "Failed to create release. ";
       if (typeof errors === "object" && errors !== null) {
-        detailedError = Object.entries(errors)
+        detailedError += Object.entries(errors)
           .map(
             ([field, messages]) =>
               `${field}: ${
@@ -130,9 +182,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
           )
           .join(" | ");
       }
-      error.value = `Error (${err.response.status}): ${
-        detailedError || "Failed to create release."
-      }`;
+      error.value = `Release Error (${err.response.status}): ${detailedError}`;
       if (
         err.response.data.cover_art &&
         Array.isArray(err.response.data.cover_art)
@@ -144,7 +194,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
         }
       }
     } else {
-      error.value = "An unexpected error occurred.";
+      error.value = "An unexpected error occurred while creating the release.";
     }
   } finally {
     isLoading.value = false;
@@ -152,7 +202,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
 };
 
 const handleCancel = () => {
-  router.push({ name: "releases" }); // Or user's profile/dashboard
+  router.push({ name: "releases" });
 };
 </script>
 
@@ -174,6 +224,21 @@ const handleCancel = () => {
     />
 
     <div v-if="error" class="error-message backend-error">{{ error }}</div>
+    <div
+      v-if="Object.keys(trackSpecificErrors).length > 0"
+      class="track-errors-summary"
+    >
+      <h4>Track Upload Issues:</h4>
+      <ul>
+        <li
+          v-for="(msg, trackIdKey) in trackSpecificErrors"
+          :key="trackIdKey"
+          class="error-message"
+        >
+          {{ msg }}
+        </li>
+      </ul>
+    </div>
   </div>
 </template>
 
@@ -192,7 +257,7 @@ const handleCancel = () => {
   text-align: center;
 }
 .error-message {
-  color: var(--vt-c-red);
+  color: var(--vt-c-red-dark);
   margin-bottom: 1rem;
   padding: 0.7rem;
   border: 1px solid var(--vt-c-red-dark);
@@ -202,5 +267,27 @@ const handleCancel = () => {
 }
 .backend-error {
   margin-top: 1rem;
+}
+.track-errors-summary {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--vt-c-red-dark);
+  border-radius: 4px;
+  background-color: var(--vt-c-red-soft);
+}
+.track-errors-summary h4 {
+  color: var(--vt-c-red-dark);
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+.track-errors-summary ul {
+  list-style: none;
+  padding-left: 0;
+}
+.track-errors-summary li.error-message {
+  background-color: transparent;
+  border: none;
+  padding: 0.2rem 0;
+  margin-bottom: 0.3rem;
 }
 </style>

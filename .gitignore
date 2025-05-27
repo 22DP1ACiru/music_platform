@@ -33,6 +33,7 @@ Thumbs.db      # Windows specific
 
 # Celery
 celerybeat-schedule # Celery Beat schedule file
+celerybeat.pid
 
 # Operating System files
 .DS_Store

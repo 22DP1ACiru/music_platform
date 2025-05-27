@@ -1,19 +1,30 @@
+// frontend/src/views/ReleaseListView.vue
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import axios from "axios";
-import { RouterLink } from "vue-router"; // For linking to detail pages later
+import { RouterLink } from "vue-router";
 
 interface ArtistInfo {
   id: number;
   name: string;
 }
+
+// This interface should match the structure of individual items in the "results" array
 interface Release {
   id: number;
   title: string;
-  artist: ArtistInfo;
+  artist: ArtistInfo | null; // Allow artist to be null as per previous fix
   cover_art: string | null;
   release_type: string;
-  release_type_display?: string; 
+  release_type_display?: string;
+}
+
+// This interface matches the paginated response from DRF
+interface PaginatedReleasesResponse {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: Release[];
 }
 
 const releases = ref<Release[]>([]);
@@ -24,8 +35,9 @@ const fetchReleases = async () => {
   isLoading.value = true;
   error.value = null;
   try {
-    const response = await axios.get<Release[]>("/releases/");
-    releases.value = response.data;
+    // Expect the paginated response structure
+    const response = await axios.get<PaginatedReleasesResponse>("/releases/");
+    releases.value = response.data.results; // Assign the 'results' array
   } catch (err) {
     console.error("Failed to fetch releases:", err);
     error.value = "Could not load releases.";
@@ -34,7 +46,6 @@ const fetchReleases = async () => {
   }
 };
 
-// Fetch data when the component is mounted
 onMounted(fetchReleases);
 </script>
 
@@ -44,13 +55,14 @@ onMounted(fetchReleases);
 
     <div v-if="isLoading">Loading releases...</div>
     <div v-else-if="error" class="error-message">{{ error }}</div>
-    <div v-else-if="releases.length === 0">No releases found.</div>
+    <div v-else-if="!releases || releases.length === 0">No releases found.</div>
+    <!-- Added !releases check -->
 
     <div v-else class="releases-grid">
       <div
         v-for="release in releases"
         :key="release.id"
-        class="release-card-wrapper" 
+        class="release-card-wrapper"
       >
         <RouterLink
           :to="{ name: 'release-detail', params: { id: release.id } }"
@@ -66,13 +78,18 @@ onMounted(fetchReleases);
           <h3>{{ release.title }}</h3>
         </RouterLink>
         <RouterLink
+          v-if="release.artist"
           :to="{ name: 'artist-detail', params: { id: release.artist.id } }"
           class="artist-link"
         >
           <p>{{ release.artist.name }}</p>
         </RouterLink>
-        <span class="release-type">{{ release.release_type }}</span> 
-        <!-- Or use release.release_type_display if available from serializer -->
+        <p v-else class="artist-link">
+          <em>Unknown Artist</em>
+        </p>
+        <span class="release-type">{{
+          release.release_type_display || release.release_type
+        }}</span>
       </div>
     </div>
   </div>
@@ -85,7 +102,6 @@ onMounted(fetchReleases);
   gap: 1.5rem;
   margin-top: 1rem;
 }
-/* .release-card-wrapper will act as the card now */
 .release-card-wrapper {
   border: 1px solid var(--color-border);
   padding: 1rem;
@@ -93,28 +109,26 @@ onMounted(fetchReleases);
   text-align: center;
   background-color: var(--color-background-soft);
   transition: transform 0.2s ease-in-out;
-  display: flex; /* For better internal layout */
-  flex-direction: column; /* Stack items vertically */
+  display: flex;
+  flex-direction: column;
 }
 .release-card-wrapper:hover {
   transform: translateY(-5px);
 }
-
 .release-card-main-link {
   text-decoration: none;
   color: inherit;
-  display: block; /* Make the link occupy space */
-  margin-bottom: 0.5rem; /* Space before artist link */
+  display: block;
+  margin-bottom: 0.5rem;
 }
-
 .cover-art,
 .cover-art-placeholder {
   width: 100%;
-  aspect-ratio: 1 / 1; /* Make cover art square */
+  aspect-ratio: 1 / 1;
   object-fit: cover;
   margin-bottom: 0.8rem;
-  background-color: var(--color-background-mute); /* BG for images that fail */
-  border-radius: 4px; /* Rounded corners for image/placeholder */
+  background-color: var(--color-background-mute);
+  border-radius: 4px;
 }
 .cover-art-placeholder {
   display: flex;
@@ -123,38 +137,35 @@ onMounted(fetchReleases);
   color: var(--color-text);
   font-size: 0.9em;
 }
-
 .release-card-wrapper h3 {
   font-size: 1.1em;
-  margin-bottom: 0.3rem; /* Adjust spacing */
+  margin-bottom: 0.3rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--color-heading); /* Ensure heading color */
+  color: var(--color-heading);
 }
-
 .artist-link {
   text-decoration: none;
 }
 .artist-link p {
   font-size: 0.95em;
   margin-bottom: 0.5rem;
-  color: var(--color-text-light); /* Slightly lighter color for artist */
+  color: var(--color-text-light);
   text-decoration: none;
 }
 .artist-link:hover p {
-  color: var(--color-link-hover); /* Hover effect for artist name */
+  color: var(--color-link-hover);
   text-decoration: underline;
 }
-
 .release-type {
   font-size: 0.8em;
   color: var(--color-text);
   background-color: var(--color-background-mute);
   padding: 0.1em 0.4em;
   border-radius: 4px;
-  align-self: center; /* Center the type badge if card is flex */
-  margin-top: auto; /* Pushes to bottom if card is flex column */
+  align-self: center;
+  margin-top: auto;
 }
 .error-message {
   color: red;

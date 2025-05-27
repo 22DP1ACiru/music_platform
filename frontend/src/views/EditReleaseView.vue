@@ -1,10 +1,10 @@
-// frontend/src/views/EditReleaseView.vue
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import axios from "axios";
 import ReleaseForm, {
   type ReleaseFormData as FormComponentState,
+  type TrackFormData,
 } from "@/components/ReleaseForm.vue";
 
 interface ApiReleaseTrack {
@@ -23,8 +23,7 @@ interface ApiReleaseData {
   genres_data: { id: number; name: string }[];
   is_published: boolean;
   tracks: ApiReleaseTrack[];
-  // Shop fields from backend
-  download_file: string | null; // Musician-uploaded (legacy)
+  download_file: string | null;
   pricing_model: "FREE" | "PAID" | "NYP";
   price: string | null;
   currency: string | null;
@@ -38,6 +37,32 @@ const initialReleaseData = ref<FormComponentState | null>(null);
 const isLoadingData = ref(true);
 const isSubmittingForm = ref(false);
 const error = ref<string | null>(null);
+const trackSpecificErrors = ref<Record<string, string>>({});
+
+const formatTrackError = (
+  trackId: string | number,
+  trackTitle: string | undefined,
+  trackErrors: any
+): string => {
+  let messages: string[] = [];
+  if (typeof trackErrors === "string") {
+    messages.push(trackErrors);
+  } else if (Array.isArray(trackErrors)) {
+    messages = messages.concat(trackErrors.map((e) => String(e)));
+  } else if (typeof trackErrors === "object" && trackErrors !== null) {
+    for (const field in trackErrors) {
+      const fieldErrors = trackErrors[field];
+      if (Array.isArray(fieldErrors)) {
+        messages.push(`${field}: ${fieldErrors.join(", ")}`);
+      } else {
+        messages.push(`${field}: ${String(fieldErrors)}`);
+      }
+    }
+  }
+  return `Track "${
+    trackTitle || `ID: ${trackId}` || "Untitled"
+  }": ${messages.join("; ")}`;
+};
 
 const fetchReleaseForEdit = async (releaseId: string) => {
   isLoadingData.value = true;
@@ -106,6 +131,7 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
   }
   isSubmittingForm.value = true;
   error.value = null;
+  trackSpecificErrors.value = {};
 
   const releaseDateForApi = (submittedFormData as any).release_date_for_api;
   if (!releaseDateForApi) {
@@ -134,67 +160,9 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
     releaseUpdatePayload.append("cover_art", "");
   }
 
-  // Handle release genres
-  if (submittedFormData.genre_names.length > 0) {
-    submittedFormData.genre_names.forEach((name) =>
-      releaseUpdatePayload.append("genre_names", name)
-    );
-  } else if (
-    submittedFormData.id &&
-    initialReleaseData.value &&
-    initialReleaseData.value.genre_names &&
-    initialReleaseData.value.genre_names.length > 0
-  ) {
-    // If editing, initial data had genres, and now submitted an empty list,
-    // send the key with no values to signal clearing M2M on backend.
-    // This relies on the backend ListField to interpret a present key with no values as []
-    // For FormData, this is a bit nuanced. DRF's default HTML forms would submit `genre_names=`
-    // We can try to achieve this by appending once if the list is empty.
-    // However, for `ListField(child=CharField)`, simply not sending items if the list is empty
-    // during a PATCH might be interpreted as "no change". To explicitly clear, this needs care.
-    // The ReleaseSerializer's `update` correctly handles `genre_names=[]` to clear.
-    // So we need to make sure that if `submittedFormData.genre_names` is [],
-    // the backend receives `genre_names` as an empty list in `validated_data`.
-    // `FormData` sends `genre_names` for each item. If no items, no `genre_names` key is sent by default.
-    // To force it, we can send an empty string FOR THE RELEASE (not track, which caused issues).
-    // This assumes the ReleaseSerializer's ListField for genre_names can handle an empty string as "clear list".
-    // A safer bet for ListField(child=CharField) is that if the key 'genre_names' is submitted
-    // but has no values, it becomes an empty list.
-    // Let's send an empty list explicitly if we want to clear.
-    // For FormData, to represent an empty list when the field is a ListField(child=CharField),
-    // you typically send the key name, and the backend ListField's `empty_value` (which is `[]`)
-    // should kick in if no items are provided for that key.
-    // If the key `genre_names` is sent (e.g. via a hidden input with that name but no value, or
-    // by `append("genre_names", [])` if `FormData` supported arrays directly which it doesn't for scalars),
-    // DRF should treat it as an intention to set it to an empty list.
-    // The most straightforward is to let the serializer handle "key not present" as "no change" for PATCH.
-    // If we want to clear, we MUST send the key and ensure it validates to [].
-    // The backend ReleaseSerializer does `instance.genres.set(genres_to_set)`. If genres_to_set is `[]`, it clears.
-    // This happens if `validated_data['genre_names']` is `[]`.
-    // We can ensure this by always sending `genre_names` if it was part of the initial form state,
-    // even if it's now empty.
-    submittedFormData.genre_names.forEach((name) =>
-      releaseUpdatePayload.append("genre_names", name)
-    );
-    // If submittedFormData.genre_names is [], the loop doesn't run.
-    // If we want to clear, the key 'genre_names' needs to be present in the form data.
-    // A common way is: if it's an update and the list is now empty, send 'genre_names='
-    // This can be done by `releaseUpdatePayload.append('genre_names', '');` but ONLY if the ListField expects this.
-    // For now, if `submittedFormData.genre_names` is empty, this loop won't append, and DRF's pop will result in `None`, leading to no change.
-    // This is fine for the 400 error but doesn't allow clearing.
-    // To allow clearing, we'd need to ensure an empty list is passed to `set`.
-    // This means validated_data['genre_names'] should be [].
-    // For this to happen from FormData, if genre_names is empty, we need to ensure it's part of the data submitted.
-    // A simple way is to always include it if it's an edit.
-    if (props.isEditMode && submittedFormData.genre_names.length === 0) {
-      // This ensures the key is sent. DRF might interpret a key with no values as an empty list.
-      // This is still a bit of a hack for FormData and ListField(child=CharField).
-      // The most robust is custom handling in serializer's update, or using JSON payload.
-      // Let's rely on the default behavior: if `genre_names` is empty, the loop doesn't run, key is not sent,
-      // serializer's `pop` yields `None`, and genres are NOT changed. This fixes the 400.
-      // Clearing genres will require a more specific approach later if this is insufficient.
-    }
-  }
+  submittedFormData.genre_names.forEach((name) =>
+    releaseUpdatePayload.append("genre_names", name)
+  );
 
   releaseUpdatePayload.append("pricing_model", submittedFormData.pricing_model);
   if (submittedFormData.pricing_model === "PAID") {
@@ -245,95 +213,94 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
             track.title || "Untitled"
           } due to invalid track number.`
         );
+        trackSpecificErrors.value[String(track.id)] = "Invalid track number.";
         continue;
       }
 
       if (track._isRemoved && track._originalId) {
         await axios.delete(`/tracks/${track._originalId}/`);
       } else if (!track._isRemoved) {
-        const updateTrackPayload = new FormData(); // Renamed to avoid conflict with outer scope
-        updateTrackPayload.append("title", track.title);
-        updateTrackPayload.append(
-          "track_number",
-          trackNumberToSubmit.toString()
-        );
+        const trackApiData = new FormData();
+        trackApiData.append("title", track.title);
+        trackApiData.append("track_number", trackNumberToSubmit.toString());
         if (track.audio_file_object) {
-          updateTrackPayload.append("audio_file", track.audio_file_object);
+          trackApiData.append("audio_file", track.audio_file_object);
         }
 
-        // Handle track genres: Only append if there are genres.
-        // If track.genre_names is empty, the key 'genre_names' will not be sent for this track.
-        // The backend TrackSerializer's update method will see genre_names as None,
-        // and thus will not modify the track's genres. This is correct for PATCH "no change".
-        if (track.genre_names && track.genre_names.length > 0) {
-          track.genre_names.forEach((name) =>
-            updateTrackPayload.append("genre_names", name)
-          );
-        } else if (track._originalId && initialReleaseData.value) {
-          // If it's an existing track and its genres are now empty,
-          // we need to signal to the backend to clear them.
-          // For DRF ListField(child=CharField), sending the key with an empty list of values.
-          // FormData doesn't directly support `[]`. Sending the key without values *might* work
-          // or sending the key with a single empty string if the serializer is configured for it.
-          // The TrackSerializer update logic `instance.genres.set(genres_to_set)` will clear
-          // if `genres_to_set` is an empty list. This means `validated_data['genre_names']` must be `[]`.
-          // To achieve this with FormData for a PATCH where you want to clear, you must send the key.
-          // The current behavior (not sending key if list is empty) means "no change".
-          // To explicitly clear, you would typically send `genre_names: []` in JSON.
-          // For FormData, if you want to clear, you'd send the field name, and the backend
-          // must interpret the lack of values for that name as an empty list.
-          // Let's assume for now that if track.genre_names is empty, we are not trying to clear,
-          // but rather making "no change" to this specific field.
-          // If clearing is desired, the backend serializer might need `allow_null=True` on the M2M field source
-          // and frontend send `null` (not possible with FormData for lists directly) or a specific signal.
-          // The simplest for now is: if genre_names is empty, no 'genre_names' key is added to FormData for the track.
-          // This means genres for that track are NOT MODIFIED. This avoids the 400.
-        }
+        track.genre_names.forEach((name) =>
+          trackApiData.append("genre_names", name)
+        );
 
-        if (track._isNew) {
-          if (!track.title || !track.audio_file_object) continue;
-          updateTrackPayload.append("release", submittedFormData.id.toString());
-          await axios.post("/tracks/", updateTrackPayload);
-        } else if (track._originalId) {
-          const hasScalarUpdates =
-            updateTrackPayload.has("title") ||
-            updateTrackPayload.has("track_number") ||
-            updateTrackPayload.has("audio_file");
-          const genresWereModified =
-            initialReleaseData.value?.tracks
-              .find((t) => t._originalId === track._originalId)
-              ?.genre_names.join(",") !== track.genre_names.join(",");
-
-          // Send payload only if there are actual changes for scalar fields or if genres were part of the submission (even if empty to clear)
-          // The key 'genre_names' is added to updateTrackPayload only if track.genre_names is not empty.
-          // So, if track.genre_names IS empty, the key isn't sent, and genres are not touched (no 400).
-          if (
-            hasScalarUpdates ||
-            (updateTrackPayload.has("genre_names") && genresWereModified)
-          ) {
-            await axios.patch(
-              `/tracks/${track._originalId}/`,
-              updateTrackPayload,
-              {
-                headers: { "Content-Type": "multipart/form-data" },
-              }
+        try {
+          if (track._isNew) {
+            if (!track.title || !track.audio_file_object) {
+              trackSpecificErrors.value[String(track.id)] =
+                "New track missing title or audio file.";
+              continue;
+            }
+            trackApiData.append("release", submittedFormData.id.toString());
+            await axios.post("/tracks/", trackApiData);
+          } else if (track._originalId) {
+            const originalTrack = initialReleaseData.value?.tracks.find(
+              (t) => t._originalId === track._originalId
             );
+            let hasChanges = false;
+            if (originalTrack) {
+              if (originalTrack.title !== track.title) hasChanges = true;
+              if (originalTrack.track_number !== track.track_number)
+                hasChanges = true;
+              if (track.audio_file_object) hasChanges = true;
+              if (
+                JSON.stringify((originalTrack.genre_names || []).sort()) !==
+                JSON.stringify((track.genre_names || []).sort())
+              )
+                hasChanges = true;
+            } else {
+              hasChanges = true;
+            }
+
+            if (hasChanges) {
+              await axios.patch(`/tracks/${track._originalId}/`, trackApiData, {
+                headers: { "Content-Type": "multipart/form-data" },
+              });
+            }
           }
+        } catch (trackError: any) {
+          console.error(
+            `EditReleaseView: Failed to update/create track "${track.title}":`,
+            trackError
+          );
+          const trackErrorMessage = formatTrackError(
+            track.id,
+            track.title,
+            trackError.response?.data
+          );
+          trackSpecificErrors.value[String(track.id)] = trackErrorMessage;
+          if (!error.value)
+            error.value =
+              "One or more tracks failed to save. Please review track errors below.";
         }
       }
     }
-    alert("Release updated successfully!");
-    router.push({
-      name: "release-detail",
-      params: { id: submittedFormData.id },
-    });
+
+    if (Object.keys(trackSpecificErrors.value).length > 0) {
+      console.warn(
+        "EditReleaseView: Some tracks failed to save. Release update might be partial."
+      );
+    } else {
+      alert("Release updated successfully!");
+      router.push({
+        name: "release-detail",
+        params: { id: submittedFormData.id },
+      });
+    }
   } catch (err: any) {
-    console.error("EditReleaseView: Failed to update release or tracks:", err);
+    console.error("EditReleaseView: Failed to update release:", err);
     if (axios.isAxiosError(err) && err.response) {
       const errors = err.response.data;
-      let detailedError = "";
+      let detailedError = "Failed to update release. ";
       if (typeof errors === "object" && errors !== null) {
-        detailedError = Object.entries(errors)
+        detailedError += Object.entries(errors)
           .map(
             ([field, messages]) =>
               `${field}: ${
@@ -342,16 +309,14 @@ const handleFormSubmit = async (submittedFormData: FormComponentState) => {
           )
           .join(" | ");
       }
-      error.value = `Error (${err.response.status}): ${
-        detailedError || "Failed to update."
-      }`;
+      error.value = `Release Update Error (${err.response.status}): ${detailedError}`;
       if (errors && errors.cover_art && Array.isArray(errors.cover_art)) {
         if (errors.cover_art.some((e: string) => e.includes("GIF"))) {
           error.value += " GIFs are not allowed for cover art.";
         }
       }
     } else {
-      error.value = "An unexpected error occurred during update.";
+      error.value = "An unexpected error occurred during release update.";
     }
   } finally {
     isSubmittingForm.value = false;
@@ -414,6 +379,21 @@ watch(
     <div v-if="error && initialReleaseData" class="error-message backend-error">
       {{ error }}
     </div>
+    <div
+      v-if="Object.keys(trackSpecificErrors).length > 0"
+      class="track-errors-summary"
+    >
+      <h4>Track Update Issues:</h4>
+      <ul>
+        <li
+          v-for="(msg, trackIdKey) in trackSpecificErrors"
+          :key="trackIdKey"
+          class="error-message"
+        >
+          {{ msg }}
+        </li>
+      </ul>
+    </div>
   </div>
 </template>
 
@@ -437,7 +417,7 @@ watch(
   font-style: italic;
 }
 .error-message {
-  color: var(--vt-c-red);
+  color: var(--vt-c-red-dark);
   margin-bottom: 1rem;
   padding: 0.7rem;
   border: 1px solid var(--vt-c-red-dark);
@@ -450,5 +430,28 @@ watch(
 }
 .backend-error {
   margin-top: 1rem;
+}
+
+.track-errors-summary {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--vt-c-red-dark);
+  border-radius: 4px;
+  background-color: var(--vt-c-red-soft);
+}
+.track-errors-summary h4 {
+  color: var(--vt-c-red-dark);
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+.track-errors-summary ul {
+  list-style: none;
+  padding-left: 0;
+}
+.track-errors-summary li.error-message {
+  background-color: transparent;
+  border: none;
+  padding: 0.2rem 0;
+  margin-bottom: 0.3rem;
 }
 </style>

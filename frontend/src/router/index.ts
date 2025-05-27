@@ -98,11 +98,29 @@ const router = createRouter({
 router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore();
 
-  if (!authStore.user && localStorage.getItem("accessToken")) {
+  // If not logged in but a token exists, try to log in.
+  // Also, if user data is not loaded yet, tryAutoLogin will attempt to fetch it.
+  if (
+    (!authStore.isLoggedIn && localStorage.getItem("accessToken")) ||
+    (authStore.isLoggedIn && !authStore.user)
+  ) {
     if (!authStore.authLoading) {
-      await authStore.tryAutoLogin();
+      // Avoid multiple concurrent calls
+      console.log("Router Guard: Attempting auto-login or user data fetch.");
+      await authStore.tryAutoLogin(router); // Pass router for potential logout redirects
     }
   }
+
+  // Wait for any ongoing authentication process to complete.
+  // This is crucial for guards that depend on the auth state.
+  while (authStore.authLoading) {
+    console.log(
+      "Router Guard: Waiting for authentication/user data loading to complete..."
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100)); // Poll briefly
+  }
+
+  const isLoggedIn = authStore.isLoggedIn; // Re-evaluate after potential loading
 
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth);
   const requiresArtist = to.matched.some(
@@ -112,36 +130,38 @@ router.beforeEach(async (to, _from, next) => {
     (record) => record.meta.requiresArtistCreation
   );
 
-  if (requiresAuth && !authStore.isLoggedIn) {
+  if (requiresAuth && !isLoggedIn) {
+    console.log(
+      "Router Guard: requiresAuth=true, not logged in. Redirecting to login."
+    );
     next({ name: "login", query: { redirect: to.fullPath } });
   } else if (requiresArtist) {
-    if (!authStore.isLoggedIn) {
-      next({ name: "login", query: { redirect: to.fullPath } });
-    } else if (authStore.authLoading) {
-      console.warn(
-        "Navigation guard: User/profile data still loading for requiresArtist check."
+    if (!isLoggedIn) {
+      console.log(
+        "Router Guard: requiresArtist=true, not logged in. Redirecting to login."
       );
-      // Allow navigation but content might briefly show loading state or be incomplete
-      // Or redirect to a loading page, or wait for loading to finish.
-      // For now, let's let it proceed and rely on views to handle loading state.
-      next();
+      next({ name: "login", query: { redirect: to.fullPath } });
     } else if (!authStore.hasArtistProfile) {
+      console.log(
+        "Router Guard: requiresArtist=true, logged in, but no artist profile. Redirecting to profile."
+      );
       alert(
-        "You need an artist profile to access this page. Please create one from your profile."
+        "You need an artist profile to access this page. Please create one from your profile page."
       );
       next({ name: "profile" });
     } else {
       next();
     }
   } else if (requiresArtistCreation) {
-    if (!authStore.isLoggedIn) {
-      next({ name: "login", query: { redirect: to.fullPath } });
-    } else if (authStore.authLoading) {
-      console.warn(
-        "Navigation guard: User/profile data still loading for requiresArtistCreation check."
+    if (!isLoggedIn) {
+      console.log(
+        "Router Guard: requiresArtistCreation=true, not logged in. Redirecting to login."
       );
-      next(); // Allow navigation, view should handle loading state
+      next({ name: "login", query: { redirect: to.fullPath } });
     } else if (authStore.hasArtistProfile) {
+      console.log(
+        "Router Guard: requiresArtistCreation=true, but already has artist profile. Redirecting to artist detail."
+      );
       alert("You already have an artist profile.");
       next({
         name: "artist-detail",

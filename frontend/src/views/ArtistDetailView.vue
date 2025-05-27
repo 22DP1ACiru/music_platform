@@ -1,3 +1,4 @@
+// frontend/src/views/ArtistDetailView.vue
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from "vue";
 import { RouterLink, useRouter } from "vue-router";
@@ -16,11 +17,23 @@ interface ArtistDetail {
   user: string; // Username (from StringRelatedField)
   user_id: number; // User ID (from ReadOnlyField)
 }
+
+// Interface for individual release items within the paginated response
 interface ReleaseSummary {
   id: number;
   title: string;
   cover_art: string | null;
   release_type: string;
+  // Add release_type_display if your backend serializer for this view includes it
+  release_type_display?: string;
+}
+
+// Interface for the paginated response from /releases/?artist=ID
+interface PaginatedArtistReleasesResponse {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: ReleaseSummary[];
 }
 
 // --- Props ---
@@ -31,7 +44,7 @@ const props = defineProps<{
 const authStore = useAuthStore();
 const router = useRouter();
 const artist = ref<ArtistDetail | null>(null);
-const releases = ref<ReleaseSummary[]>([]);
+const releases = ref<ReleaseSummary[]>([]); // This will hold the array of ReleaseSummary
 const isLoadingArtist = ref(true);
 const isLoadingReleases = ref(true);
 const error = ref<string | null>(null);
@@ -43,14 +56,13 @@ const isOwner = computed(() => {
     authStore.isLoggedIn &&
     authStore.authUser &&
     artist.value &&
-    artist.value.user_id === authStore.authUser.id // Compare user IDs
+    artist.value.user_id === authStore.authUser.id
   );
 });
 
-// --- Fetch Artist Details ---
 const fetchArtistDetail = async (artistId: string) => {
   isLoadingArtist.value = true;
-  error.value = null; // Clear previous errors
+  error.value = null;
   artist.value = null;
   try {
     console.log(`Fetching artist details for ID: ${artistId}`);
@@ -68,28 +80,23 @@ const fetchArtistDetail = async (artistId: string) => {
   }
 };
 
-// --- Fetch Artist Releases ---
 const fetchArtistReleases = async (artistId: string) => {
   isLoadingReleases.value = true;
-  // Keep artist error separate if needed, or reuse 'error' ref
-  // error.value = null;
-  releases.value = [];
+  releases.value = []; // Initialize as empty array
   try {
     console.log(`Fetching releases for artist ID: ${artistId}`);
-    // Use the filter parameter enabled on the backend
-    const response = await axios.get<ReleaseSummary[]>(
+    // Expect the paginated response
+    const response = await axios.get<PaginatedArtistReleasesResponse>(
       `/releases/?artist=${artistId}`
     );
-    releases.value = response.data;
+    releases.value = response.data.results; // Correctly assign the results array
   } catch (err) {
     console.error(`Failed to fetch releases for artist ${artistId}:`, err);
-    // Don't overwrite artist fetch error, maybe log separately
   } finally {
     isLoadingReleases.value = false;
   }
 };
 
-// --- Fetch data on mount and when ID prop changes ---
 const loadData = (artistId: string) => {
   if (artistId) {
     fetchArtistDetail(artistId);
@@ -102,9 +109,9 @@ const loadData = (artistId: string) => {
 };
 
 const onArtistUpdate = (updatedArtistData: ArtistDetail) => {
-  artist.value = { ...artist.value, ...updatedArtistData }; // Merge updates
-  isEditing.value = false; // Exit edit mode
-  editError.value = null; // Clear edit errors
+  artist.value = { ...artist.value, ...updatedArtistData };
+  isEditing.value = false;
+  editError.value = null;
   alert("Artist profile updated successfully!");
 };
 
@@ -126,11 +133,9 @@ watch(
 
 <template>
   <div class="artist-detail-page">
-    <!-- Loading/Error states -->
     <div v-if="isLoadingArtist">Loading artist info...</div>
     <div v-else-if="error" class="error-message">{{ error }}</div>
 
-    <!-- Artist Info Display -->
     <div v-else-if="artist && !isEditing" class="artist-header">
       <img
         v-if="artist.artist_picture"
@@ -145,7 +150,6 @@ watch(
           <span v-if="artist.location"
             ><i class="fas fa-map-marker-alt"></i> {{ artist.location }}</span
           >
-          <!-- Add icons later if desired -->
           <a
             v-if="artist.website_url"
             :href="artist.website_url"
@@ -170,16 +174,12 @@ watch(
       </div>
     </div>
 
-    <!-- Edit Mode -->
     <div v-else-if="artist && isEditing && isOwner">
-      <!-- Double check owner for safety -->
       <h2>Edit Artist Profile</h2>
-      <!-- Display edit errors -->
       <p v-if="editError" class="error-message">{{ editError }}</p>
-      <!-- === Use the ArtistEditForm component === -->
       <ArtistEditForm
         :artist-id="props.id"
-        :initial-data="artist" 
+        :initial-data="artist"
         @artist-updated="onArtistUpdate"
         @cancel-edit="
           isEditing = false;
@@ -187,19 +187,16 @@ watch(
         "
         @update-error="handleUpdateError"
       />
-      <!-- ======================================= -->
     </div>
 
-    <!-- Releases Section -->
     <div class="artist-releases">
       <h2>Releases by {{ artist?.name || "this artist" }}</h2>
       <div v-if="isLoadingReleases">Loading releases...</div>
-      <!-- Add error state for releases loading if needed -->
-      <div v-else-if="releases.length === 0">
+      <div v-else-if="!releases || releases.length === 0">
+        <!-- Added !releases check -->
         No releases found for this artist.
       </div>
       <div v-else class="releases-grid">
-        <!-- Re-use release card structure/styling -->
         <RouterLink
           v-for="release in releases"
           :key="release.id"
@@ -214,7 +211,9 @@ watch(
           />
           <div v-else class="cover-art-placeholder">No Cover</div>
           <h3>{{ release.title }}</h3>
-          <span class="release-type">{{ release.release_type }}</span>
+          <span class="release-type">{{
+            release.release_type_display || release.release_type
+          }}</span>
         </RouterLink>
       </div>
     </div>
@@ -239,7 +238,7 @@ watch(
   flex-shrink: 0;
   width: 150px;
   height: 150px;
-  border-radius: 50%; /* Make it round */
+  border-radius: 50%;
   object-fit: cover;
   background-color: var(--color-background-mute);
   display: flex;
@@ -269,7 +268,6 @@ watch(
 .artist-bio {
   line-height: 1.6;
 }
-
 .artist-releases {
   margin-top: 3rem;
 }
@@ -278,8 +276,6 @@ watch(
   border-bottom: 1px solid var(--color-border);
   padding-bottom: 0.5rem;
 }
-
-/* Re-use or import styles for releases-grid and release-card from ReleasesListView */
 .releases-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -287,7 +283,7 @@ watch(
 }
 .release-card {
   border: 1px solid var(--color-border);
-  padding: 0.8rem; /* Slightly smaller padding */
+  padding: 0.8rem;
   border-radius: 8px;
   text-align: center;
   background-color: var(--color-background-soft);
@@ -327,7 +323,6 @@ watch(
   padding: 0.1em 0.4em;
   border-radius: 4px;
 }
-
 .error-message {
   color: red;
 }

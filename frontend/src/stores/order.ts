@@ -1,32 +1,41 @@
+// frontend/src/stores/order.ts
 import { defineStore } from "pinia";
-import { ref, computed } from "vue"; // Removed watch as it's not used here
+import { ref, computed } from "vue";
 import axios from "axios";
 import type { OrderDetail } from "@/types"; // Assuming OrderDetail is in types/index.ts
 import { useAuthStore } from "./auth";
-import { useCartStore } from "./cart"; // For clearing cart after successful confirmation
-import { useLibraryStore } from "./library"; // For refreshing library after successful confirmation
+import { useCartStore } from "./cart";
+import { useLibraryStore } from "./library";
+
+// Interface for the paginated response structure from DRF
+interface PaginatedOrdersResponse {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: OrderDetail[];
+}
 
 export const useOrderStore = defineStore("order", () => {
   const orders = ref<OrderDetail[]>([]);
-  const currentOrder = ref<OrderDetail | null>(null); // For single order view
+  const currentOrder = ref<OrderDetail | null>(null);
   const isLoading = ref(false);
-  const isLoadingSingle = ref(false); // For single order loading
+  const isLoadingSingle = ref(false);
   const error = ref<string | null>(null);
-  const singleOrderError = ref<string | null>(null); // For single order error
+  const singleOrderError = ref<string | null>(null);
 
   const authStore = useAuthStore();
-  // Note: To avoid potential circular dependencies if cartStore imports orderStore later,
-  // it's sometimes safer to get store instances inside actions if only used there.
-  // For now, this should be fine.
 
   async function fetchOrders() {
     if (!authStore.isLoggedIn) return;
     isLoading.value = true;
     error.value = null;
-    orders.value = [];
+    orders.value = []; // Clear previous orders before fetching
     try {
-      const response = await axios.get<OrderDetail[]>("/shop/orders/");
-      orders.value = response.data;
+      // Expect the paginated response structure
+      const response = await axios.get<PaginatedOrdersResponse>(
+        "/shop/orders/"
+      );
+      orders.value = response.data.results; // Assign the 'results' array
     } catch (err) {
       console.error("Order Store: Failed to fetch orders:", err);
       if (axios.isAxiosError(err) && err.response?.status === 403) {
@@ -63,32 +72,26 @@ export const useOrderStore = defineStore("order", () => {
     orderId: number | string
   ): Promise<boolean> {
     if (!authStore.isLoggedIn) return false;
-    isLoadingSingle.value = true; // Reuse loading state or have a specific one
+    isLoadingSingle.value = true;
     singleOrderError.value = null;
     try {
       const response = await axios.post<OrderDetail>(
         `/shop/orders/${orderId}/confirm-payment/`
       );
-      currentOrder.value = response.data; // Update current order with confirmed details
+      currentOrder.value = response.data;
 
-      // Refresh relevant stores after successful confirmation
-      const cartStore = useCartStore(); // Get instance here
-      cartStore.fetchCart(); // To reflect cleared cart (backend clears it)
+      const cartStore = useCartStore();
+      cartStore.fetchCart();
 
-      const libraryStore = useLibraryStore(); // Get instance here
-      libraryStore.fetchLibraryItems(); // To reflect new items in library
+      const libraryStore = useLibraryStore();
+      libraryStore.fetchLibraryItems();
 
-      // Optionally, refresh the full order list if needed, or update the specific order in the list
       const orderIndex = orders.value.findIndex(
         (o) => o.id === response.data.id
       );
       if (orderIndex !== -1) {
         orders.value[orderIndex] = response.data;
-      } else {
-        // If not in list, fetch all (or just add it if that's preferred)
-        // fetchOrders(); // Could be heavy, but ensures consistency
       }
-
       return true;
     } catch (err) {
       console.error(

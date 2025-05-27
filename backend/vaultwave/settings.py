@@ -56,7 +56,7 @@ INSTALLED_APPS = [
     'music',
     'playlists',
     'shop',
-    'chat', # Add chat app here
+    'chat',
     'library',
     'cart',
     'vaultwave'
