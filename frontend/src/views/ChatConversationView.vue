@@ -16,6 +16,7 @@ const newMessageFile = ref<File | null>(null);
 const fileInputKey = ref(0);
 const messageContainerRef = ref<HTMLElement | null>(null);
 const localError = ref<string | null>(null);
+const MAX_MESSAGE_LENGTH = 1000; // Define character limit
 
 const conversationId = computed(() => {
   const idParam = route.params.conversationId;
@@ -27,6 +28,10 @@ const conversationId = computed(() => {
 const activeConversation = computed<Conversation | undefined>(() => {
   if (isNaN(conversationId.value)) return undefined;
   return chatStore.conversations.find((c) => c.id === conversationId.value);
+});
+
+const remainingChars = computed(() => {
+  return MAX_MESSAGE_LENGTH - newMessageText.value.length;
 });
 
 const canInteract = computed(() => {
@@ -65,7 +70,6 @@ const loadConversationAndMessages = async () => {
     return;
   }
 
-  // Ensure conversations are loaded first
   if (
     chatStore.conversations.length === 0 &&
     authStore.isLoggedIn &&
@@ -74,31 +78,24 @@ const loadConversationAndMessages = async () => {
     await chatStore.fetchConversations();
   }
 
-  // After attempting to fetch conversations, check if the active one exists
   if (!activeConversation.value) {
-    // If still not found, it might be an access issue or genuinely not exist
-    // Or the fetchConversations failed.
     if (!chatStore.error) {
-      // If there wasn't a general error fetching conversations
       localError.value = "Conversation not found or you do not have access.";
     } else {
-      localError.value = chatStore.error; // Show the error from fetching conversations
+      localError.value = chatStore.error;
     }
-    chatStore.clearActiveConversation(); // Clear any stale messages
-    return; // Stop further execution if conversation is not found
+    chatStore.clearActiveConversation();
+    return;
   }
 
-  // If conversation is found, load its messages
   await chatStore.fetchMessagesForConversation(conversationId.value);
   if (chatStore.error && !localError.value) {
-    // if fetchMessages had an error
     localError.value = chatStore.error;
   }
   scrollToBottom();
 };
 
 onMounted(() => {
-  // Clear any previously active conversation data first
   chatStore.clearActiveConversation();
   loadConversationAndMessages();
 });
@@ -113,7 +110,6 @@ watch(
       loadConversationAndMessages();
     }
   }
-  // No immediate: true here, onMounted handles initial load.
 );
 
 watch(
@@ -139,6 +135,10 @@ const clearFileInput = () => {
 };
 
 const handleSendMessage = async () => {
+  if (newMessageText.value.length > MAX_MESSAGE_LENGTH) {
+    localError.value = `Message cannot exceed ${MAX_MESSAGE_LENGTH} characters.`;
+    return;
+  }
   if (!newMessageText.value.trim() && !newMessageFile.value) {
     localError.value = "Message text or attachment is required.";
     return;
@@ -186,9 +186,6 @@ const handleAcceptRequest = async () => {
   );
   if (!success) {
     localError.value = chatStore.error || "Failed to accept DM request.";
-  } else {
-    // Optionally, re-fetch messages or update UI to show it's accepted
-    // The conversation object in the store is updated, so computed properties should react.
   }
 };
 
@@ -288,13 +285,22 @@ const conversationPartnerName = computed(() => {
     </div>
 
     <div class="message-input-area" v-if="canInteract && activeConversation">
-      <textarea
-        v-model="newMessageText"
-        placeholder="Type your message..."
-        rows="2"
-        @keyup.enter.exact="handleSendMessage"
-        :disabled="chatStore.isSendingMessage"
-      ></textarea>
+      <div class="textarea-wrapper">
+        <textarea
+          v-model="newMessageText"
+          placeholder="Type your message..."
+          rows="2"
+          @keyup.enter.exact="handleSendMessage"
+          :disabled="chatStore.isSendingMessage"
+          :maxlength="MAX_MESSAGE_LENGTH"
+        ></textarea>
+        <div
+          class="char-counter"
+          :class="{ 'limit-exceeded': remainingChars < 0 }"
+        >
+          {{ remainingChars }}
+        </div>
+      </div>
       <div class="file-input-controls">
         <label
           for="file-upload"
@@ -325,7 +331,7 @@ const conversationPartnerName = computed(() => {
       </div>
       <button
         @click="handleSendMessage"
-        :disabled="chatStore.isSendingMessage"
+        :disabled="chatStore.isSendingMessage || remainingChars < 0"
         class="send-button"
       >
         {{ chatStore.isSendingMessage ? "Sending..." : "Send" }}
@@ -425,7 +431,7 @@ const conversationPartnerName = computed(() => {
   padding: 2rem;
   color: var(--color-text-light);
   font-style: italic;
-  margin: auto; /* Center it vertically too */
+  margin: auto;
 }
 .empty-chat p {
   margin-bottom: 0.5rem;
@@ -439,9 +445,16 @@ const conversationPartnerName = computed(() => {
   align-items: flex-end;
   gap: 0.75rem;
 }
-.message-input-area textarea {
+
+.textarea-wrapper {
   flex-grow: 1;
+  position: relative;
+}
+
+.message-input-area textarea {
+  width: 100%; /* Take full width of its wrapper */
   padding: 0.6rem;
+  padding-bottom: 1.8em; /* Space for char counter */
   border: 1px solid var(--color-border);
   border-radius: 6px;
   resize: none;
@@ -452,6 +465,17 @@ const conversationPartnerName = computed(() => {
 }
 .message-input-area textarea:disabled {
   background-color: var(--color-background-soft);
+}
+.char-counter {
+  position: absolute;
+  bottom: 5px;
+  right: 8px;
+  font-size: 0.75em;
+  color: var(--color-text-light);
+}
+.char-counter.limit-exceeded {
+  color: var(--vt-c-red-dark);
+  font-weight: bold;
 }
 
 .file-input-controls {
@@ -468,6 +492,7 @@ const conversationPartnerName = computed(() => {
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9em;
+  white-space: nowrap; /* Prevent button text from wrapping */
 }
 .file-upload-button:hover {
   border-color: var(--color-border-hover);
@@ -486,6 +511,10 @@ input[type="file"] {
   display: flex;
   align-items: center;
   gap: 0.3em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px; /* Adjust as needed */
 }
 .clear-file-btn {
   background: none;

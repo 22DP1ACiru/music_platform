@@ -3,15 +3,65 @@ from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes as drf_permission_classes
+from django.http import FileResponse, Http404, HttpResponseForbidden
+import os
+import mimetypes 
+import logging # Added logging
+
 from .models import Conversation, Message
-from music.models import Artist # Import Artist model
+from music.models import Artist 
 from .serializers import (
     ConversationSerializer, MessageSerializer, CreateMessageSerializer
 )
 from .permissions import IsConversationParticipant, IsMessageSenderOrParticipantReadOnly 
 
 User = get_user_model()
+logger = logging.getLogger(__name__) # Added logger
+
+@api_view(['GET'])
+@drf_permission_classes([permissions.IsAuthenticated]) # Keep IsAuthenticated
+def serve_chat_attachment(request, message_pk):
+    message = get_object_or_404(Message, pk=message_pk)
+    conversation = message.conversation
+
+    if not request.user in conversation.participants.all():
+        # Using DRF Response for API consistency
+        return Response({"detail": "You do not have permission to access this file."}, status=status.HTTP_403_FORBIDDEN)
+
+    if not message.attachment or not message.attachment.name:
+        # Using DRF Response
+        return Response({"detail": "Attachment not found for this message."}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        filename_for_download = message.original_attachment_filename or os.path.basename(message.attachment.name)
+        
+        content_type, encoding = mimetypes.guess_type(filename_for_download)
+        if content_type is None:
+            content_type = 'application/octet-stream'
+
+        response = FileResponse(message.attachment.open('rb'), content_type=content_type)
+        # Content-Disposition for download should ideally be set here for the download action,
+        # but for the <audio> tag, we don't want to force download.
+        # For the blob approach, the FE controls the "download" part.
+        # So, we can make this conditional or have two endpoints.
+        # For now, let's assume the FE will handle download triggering.
+        # If the 'download' query param is present, force download.
+        if request.query_params.get('download') == 'true':
+            response['Content-Disposition'] = f'attachment; filename="{filename_for_download}"'
+        else:
+            # For streaming to <audio> tag, 'inline' or no disposition is better.
+            # However, since FE will fetch as blob, this might not be strictly necessary.
+            # For safety, let's make it inline if not explicitly downloading.
+            response['Content-Disposition'] = f'inline; filename="{filename_for_download}"'
+
+        return response
+    except FileNotFoundError:
+        return Response({"detail": "File not found in storage."}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error serving chat attachment for message {message_pk}: {e}") 
+        return Response({"detail": "Error serving file."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class ConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
@@ -19,8 +69,6 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        # Annotate conversations with the subquery for last message time.
-        # Also fetch related artist information.
         return Conversation.objects.filter(
             participants=user
         ).select_related('initiator', 'related_artist').prefetch_related(
@@ -28,7 +76,6 @@ class ConversationViewSet(viewsets.ModelViewSet):
         ).annotate(
             last_message_time=Max('messages__timestamp')
         ).order_by('-last_message_time', '-updated_at')
-
 
     def get_permissions(self):
         if self.action in ['list_messages', 'send_reply', 'accept_request', 'retrieve', 'partial_update', 'update', 'destroy']:
@@ -54,28 +101,21 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 target_recipient_user = User.objects.get(id=recipient_user_id)
             except User.DoesNotExist:
                 return Response({"error": "Recipient user not found."}, status=status.HTTP_404_NOT_FOUND)
-            if sender.id == target_recipient_user.id: # Self-check already in serializer, but good to have defense
+            if sender.id == target_recipient_user.id: 
                  return Response({"error": "You cannot send a message to yourself as a user."}, status=status.HTTP_400_BAD_REQUEST)
 
         elif recipient_artist_id:
             try:
                 target_related_artist = Artist.objects.select_related('user').get(id=recipient_artist_id)
                 target_recipient_user = target_related_artist.user
-                if sender.id == target_recipient_user.id : # Check if user is trying to send message to their own artist profile
+                if sender.id == target_recipient_user.id : 
                      return Response({"error": "You cannot send a message to your own artist profile."}, status=status.HTTP_400_BAD_REQUEST)
             except Artist.DoesNotExist:
                 return Response({"error": "Recipient artist not found."}, status=status.HTTP_404_NOT_FOUND)
-            except User.DoesNotExist: # Should not happen if artist.user is mandatory
+            except User.DoesNotExist: 
                 return Response({"error": "Artist owner not found."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         else:
-            # This case should be caught by serializer validation, but as a safeguard:
             return Response({"error": "No recipient specified."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Find existing conversation between sender and target_recipient_user,
-        # considering the target_related_artist context.
-        # For a 1-on-1 DM, there should be exactly two participants.
-        # If target_related_artist is specified, the conversation must match that context.
-        # If target_related_artist is None, the conversation must also have related_artist=None.
         
         conversation_query = Conversation.objects.filter(
             participants=sender
@@ -98,46 +138,36 @@ class ConversationViewSet(viewsets.ModelViewSet):
             conversation = Conversation.objects.create(
                 initiator=sender, 
                 is_accepted=False,
-                related_artist=target_related_artist # Set related_artist here
+                related_artist=target_related_artist 
             )
             conversation.participants.add(sender, target_recipient_user)
-        else:
-            # Conversation exists. Logic in Message.save() handles acceptance if applicable.
-            pass
-
-        message_data = {
+        
+        message_payload = {
             'text': validated_data.get('text'),
             'message_type': validated_data.get('message_type', Message.MessageType.TEXT),
-            'attachment': validated_data.get('attachment'),
+            'attachment': validated_data.get('attachment'), 
+            'conversation': conversation.id, 
         }
-        
-        message = Message(
-            sender=sender,
-            conversation=conversation,
-            text=message_data['text'],
-            message_type=message_data['message_type'],
-            attachment=message_data['attachment']
-        )
-        
-        try:
-            message.full_clean() 
-        except Exception as e: 
-             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        message_serializer_context = {'request': request, 'sender': sender, 'conversation': conversation}
+        message_serializer = MessageSerializer(data=message_payload, context=message_serializer_context)
 
-        message.save() 
+        if not message_serializer.is_valid():
+             return Response(message_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        message = message_serializer.save(sender=sender, conversation=conversation)
 
         conv_serializer = ConversationSerializer(conversation, context={'request': request})
         return Response(conv_serializer.data, status=status.HTTP_201_CREATED)
-
 
     @action(detail=True, methods=['post'], url_path='reply', serializer_class=MessageSerializer)
     def send_reply(self, request, pk=None):
         conversation = self.get_object() 
         
-        message_serializer = MessageSerializer(data=request.data, context={'request': request})
+        message_serializer_context = {'request': request, 'sender': request.user, 'conversation': conversation}
+        message_serializer = MessageSerializer(data=request.data, context=message_serializer_context)
+        
         if message_serializer.is_valid():
             message_serializer.save(sender=request.user, conversation=conversation)
-            
             conv_serializer = ConversationSerializer(conversation, context={'request': request})
             return Response(conv_serializer.data, status=status.HTTP_201_CREATED)
         return Response(message_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -153,15 +183,8 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
         if can_mark_read:
             messages_to_mark_read = messages.filter(is_read=False).exclude(sender=request.user)
-            # Only mark as read if there are messages to mark and the conversation is accepted,
-            # OR if the current user is the initiator (they can "read" their own pending messages in terms of UI state),
-            # OR if the current user is the recipient of a pending request (they can see the first messages from initiator).
-            # Actual "unread" status for notifications should primarily depend on `is_accepted`.
-            if messages_to_mark_read.exists(): # Check if there's anything to update
+            if messages_to_mark_read.exists(): 
                  messages_to_mark_read.update(is_read=True)
-                 # Refresh conversation object to get latest unread count if it's used later
-                 # For now, just updating is fine.
-
         page = self.paginate_queryset(messages)
         if page is not None:
             serializer = MessageSerializer(page, many=True, context={'request': request})
@@ -186,13 +209,4 @@ class ConversationViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
     
     def perform_create(self, serializer):
-        # This method is part of ModelViewSet. For DMs, use 'send_initial_message'.
-        # If direct conversation creation is allowed (e.g. for group chats later),
-        # this is where you'd set the initiator.
-        # For now, we can prevent direct POST to /conversations/
         return Response({"detail": "Use 'send-initial-message' or 'reply' actions."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
-
-    # perform_update and perform_destroy can remain as they are if you don't need specific logic for them yet.
-    # For now, updating a conversation's core fields (other than acceptance) isn't a primary user action.
-    # Deleting a conversation should be handled carefully (soft delete? what happens to messages?).
-    # Standard destroy will hard delete the conversation and cascade to messages.

@@ -113,11 +113,12 @@ export interface ArtistChatInfo {
 
 export interface ChatMessage {
   id: number;
-  conversation: number; // Conversation ID
+  conversation: number;
   sender: UserChatInfo;
   text: string | null;
-  attachment?: string | null; // Path to attachment (use attachment_url for display)
-  attachment_url?: string | null; // Full URL for attachment
+  attachment?: string | null;
+  attachment_url?: string | null;
+  original_attachment_filename?: string | null;
   message_type: "TEXT" | "AUDIO" | "VOICE" | "TRACK_SHARE";
   timestamp: string;
   is_read: boolean;

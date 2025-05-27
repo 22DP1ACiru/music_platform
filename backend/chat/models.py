@@ -5,6 +5,7 @@ import uuid # For unique attachment filenames
 from django.db.models.signals import pre_save, post_delete # For file deletion signals
 from django.dispatch import receiver # For file deletion signals
 import logging
+import os # Import os for original filename
 
 # Import utility functions for file deletion
 from vaultwave.utils import delete_file_if_changed, delete_file_on_instance_delete
@@ -12,8 +13,11 @@ from vaultwave.utils import delete_file_if_changed, delete_file_on_instance_dele
 logger = logging.getLogger(__name__)
 
 def chat_attachment_path(instance, filename):
-    ext = filename.split('.')[-1]
-    random_filename = f"{uuid.uuid4()}.{ext}"
+    # The filename passed here is the original filename
+    # We'll store the original filename separately on the model instance
+    # For storage, we use a UUID-based name to avoid conflicts and sanitization issues.
+    ext = os.path.splitext(filename)[1] # Gets extension like .mp3
+    random_filename = f"{uuid.uuid4()}{ext}"
     conversation_id_for_path = instance.conversation.id if instance.conversation and instance.conversation.id else "temp_conv"
     return f'chat_attachments/{conversation_id_for_path}/{random_filename}'
 
@@ -30,9 +34,8 @@ class Conversation(models.Model):
         on_delete=models.SET_NULL,
         null=True, blank=True
     )
-    # New field to link conversation to an artist context if applicable
     related_artist = models.ForeignKey(
-        'music.Artist', # Use string reference to avoid circular import
+        'music.Artist', 
         on_delete=models.SET_NULL,
         null=True, blank=True,
         related_name='artist_context_conversations',
@@ -78,17 +81,16 @@ class Message(models.Model):
         on_delete=models.CASCADE,
         related_name='sent_messages'
     )
-    text = models.TextField(blank=True, null=True)
+    text = models.TextField(blank=True, null=True) # Max length enforced by serializer
     
     attachment = models.FileField(upload_to=chat_attachment_path, blank=True, null=True)
+    original_attachment_filename = models.CharField(max_length=255, blank=True, null=True, help_text="The original uploaded filename for the attachment.")
     message_type = models.CharField(
         max_length=20,
         choices=MessageType.choices,
         default=MessageType.TEXT
     )
     
-    # shared_track = models.ForeignKey('music.Track', on_delete=models.SET_NULL, null=True, blank=True)
-
     timestamp = models.DateTimeField(auto_now_add=True)
     is_read = models.BooleanField(default=False, help_text="Has the recipient(s) read this message?")
 
@@ -100,11 +102,36 @@ class Message(models.Model):
 
     def save(self, *args, **kwargs):
         is_new = self._state.adding
+        file_changed = False
 
+        if self.pk: # If instance exists, check if attachment changed
+            try:
+                old_instance = Message.objects.get(pk=self.pk)
+                if old_instance.attachment != self.attachment:
+                    file_changed = True
+            except Message.DoesNotExist:
+                pass # Should not happen if self.pk is set
+        elif self.attachment and self.attachment.name: # New instance with an attachment
+            file_changed = True
+
+        # If attachment is being set or changed, store its original name
+        if self.attachment and self.attachment.name and (is_new or file_changed):
+            if not self.original_attachment_filename: # Only set if not already set or if file changed
+                self.original_attachment_filename = os.path.basename(self.attachment.name)
+        elif not self.attachment and self.original_attachment_filename: # If attachment is cleared
+            self.original_attachment_filename = None
+
+
+        # Basic validation (can be enhanced in clean method or serializers)
         if self.message_type == self.MessageType.TEXT and not self.text:
-            raise ValueError("Text message cannot be empty if message type is TEXT.")
+            if not self.attachment: # A TEXT message requires text if there's no attachment
+                raise ValueError("Text message cannot be empty if message type is TEXT and no attachment is present.")
+        
         if (self.message_type == self.MessageType.AUDIO or self.message_type == self.MessageType.VOICE) and not self.attachment:
-            raise ValueError(f"{self.get_message_type_display()} message must have an attachment.")
+            # This check is tricky for updates where attachment isn't changed.
+            # Rely on serializer for creation, and model's state for updates.
+            if is_new: # Only enforce strictly for new messages
+                raise ValueError(f"{self.get_message_type_display()} message must have an attachment.")
         
         super().save(*args, **kwargs)
 
@@ -114,21 +141,16 @@ class Message(models.Model):
                self.sender != self.conversation.initiator:
                 if not self.conversation.messages.filter(sender=self.sender).exclude(pk=self.pk).exists():
                     self.conversation.is_accepted = True
-                    # When accepting, also make sure related_artist is preserved if it was set
-                    # No specific change needed here for related_artist, just that save() includes it if it has a value.
                     self.conversation.save(update_fields=['is_accepted', 'updated_at'])
                 else:
                     self.conversation.update_timestamp()
             else:
                 self.conversation.update_timestamp()
 
-# --- Signal Receivers for Message Attachments ---
 @receiver(pre_save, sender=Message)
 def message_pre_save_delete_old_attachment(sender, instance, **kwargs):
-    """ Deletes old file from storage when Message.attachment is changed """
     delete_file_if_changed(sender, instance, 'attachment')
 
 @receiver(post_delete, sender=Message)
 def message_post_delete_cleanup_attachment(sender, instance, **kwargs):
-    """ Deletes file from storage when Message instance is deleted """
     delete_file_on_instance_delete(instance.attachment)
