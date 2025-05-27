@@ -12,11 +12,25 @@ const authStore = useAuthStore();
 const audioSrc = ref<string | null>(null);
 const isLoadingAudio = ref(false);
 const audioError = ref<string | null>(null);
-const isDownloading = ref(false); // New state for download button
+const isDownloading = ref(false);
 let objectUrlPlayback: string | null = null;
 
 const isMyMessage = computed(() => {
-  return props.message.sender.id === authStore.authUser?.id;
+  return props.message.sender_user.id === authStore.authUser?.id;
+});
+
+// This computed property for display name should be correct as it uses message-level identity
+const senderDisplayName = computed(() => {
+  if (
+    props.message.sender_identity_type === "ARTIST" &&
+    props.message.sending_artist_details
+  ) {
+    return `${props.message.sending_artist_details.name} [Artist]`;
+  }
+  // Fallback to user, ensure sender_user exists
+  return props.message.sender_user
+    ? `${props.message.sender_user.username} [User]`
+    : "Unknown User";
 });
 
 const formattedTimestamp = computed(() => {
@@ -43,9 +57,8 @@ const displayFilename = computed(() => {
   return "attachment";
 });
 
-// This URL is for the API endpoint, not directly for href
 const baseAttachmentApiUrl = computed(() => {
-  return props.message.attachment_url; // This is already /api/chat/messages/<id>/download/
+  return props.message.attachment_url;
 });
 
 const downloadAttributeFilename = computed(() => {
@@ -73,7 +86,7 @@ const fetchAudioForPlayback = async () => {
 
   isLoadingAudio.value = true;
   audioError.value = null;
-  const blob = await fetchAudioAsBlob(baseAttachmentApiUrl.value); // No query param needed for playback
+  const blob = await fetchAudioAsBlob(baseAttachmentApiUrl.value);
   if (blob) {
     if (objectUrlPlayback) {
       URL.revokeObjectURL(objectUrlPlayback);
@@ -91,9 +104,8 @@ const handleDownloadAttachment = async () => {
   if (!baseAttachmentApiUrl.value || isDownloading.value) return;
 
   isDownloading.value = true;
-  audioError.value = null; // Clear previous errors
+  audioError.value = null;
 
-  // Construct the URL that tells the backend to force download
   const downloadUrlWithParam = `${baseAttachmentApiUrl.value}${
     baseAttachmentApiUrl.value.includes("?") ? "&" : "?"
   }download=true`;
@@ -107,7 +119,7 @@ const handleDownloadAttachment = async () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(objectUrlDownload); // Clean up the download object URL
+    URL.revokeObjectURL(objectUrlDownload);
   } else {
     audioError.value = "Could not download the attachment.";
   }
@@ -158,7 +170,8 @@ onUnmounted(() => {
   >
     <div class="message-bubble">
       <div v-if="!isMyMessage" class="sender-name">
-        {{ message.sender.username }}
+        {{ senderDisplayName }}
+        <!-- Using the computed property -->
       </div>
 
       <div v-if="message.text" class="message-text">
@@ -179,7 +192,6 @@ onUnmounted(() => {
         <div v-else-if="audioError && !audioSrc" class="audio-error">
           {{ audioError }}
         </div>
-        <!-- Show general audio error if src is also null -->
         <audio
           v-else-if="audioSrc"
           controls
@@ -192,7 +204,6 @@ onUnmounted(() => {
           [Audio attachment processing or unavailable]
         </p>
 
-        <!-- Use a button to trigger JS download -->
         <button
           v-if="message.attachment_url"
           @click="handleDownloadAttachment"
@@ -314,7 +325,6 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.8);
 }
 
-/* Changed from <a> to <button> */
 .download-button {
   font-size: 0.8em;
   margin-top: 0.3rem;

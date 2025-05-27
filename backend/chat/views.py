@@ -7,9 +7,9 @@ from rest_framework.decorators import action, api_view, permission_classes as dr
 from django.http import FileResponse, Http404, HttpResponseForbidden
 import os
 import mimetypes 
-import logging # Added logging
+import logging 
 
-from .models import Conversation, Message
+from .models import Conversation, Message # Message model has new fields
 from music.models import Artist 
 from .serializers import (
     ConversationSerializer, MessageSerializer, CreateMessageSerializer
@@ -17,20 +17,18 @@ from .serializers import (
 from .permissions import IsConversationParticipant, IsMessageSenderOrParticipantReadOnly 
 
 User = get_user_model()
-logger = logging.getLogger(__name__) # Added logger
+logger = logging.getLogger(__name__) 
 
 @api_view(['GET'])
-@drf_permission_classes([permissions.IsAuthenticated]) # Keep IsAuthenticated
+@drf_permission_classes([permissions.IsAuthenticated]) 
 def serve_chat_attachment(request, message_pk):
     message = get_object_or_404(Message, pk=message_pk)
     conversation = message.conversation
 
     if not request.user in conversation.participants.all():
-        # Using DRF Response for API consistency
         return Response({"detail": "You do not have permission to access this file."}, status=status.HTTP_403_FORBIDDEN)
 
     if not message.attachment or not message.attachment.name:
-        # Using DRF Response
         return Response({"detail": "Attachment not found for this message."}, status=status.HTTP_404_NOT_FOUND)
 
     try:
@@ -41,18 +39,10 @@ def serve_chat_attachment(request, message_pk):
             content_type = 'application/octet-stream'
 
         response = FileResponse(message.attachment.open('rb'), content_type=content_type)
-        # Content-Disposition for download should ideally be set here for the download action,
-        # but for the <audio> tag, we don't want to force download.
-        # For the blob approach, the FE controls the "download" part.
-        # So, we can make this conditional or have two endpoints.
-        # For now, let's assume the FE will handle download triggering.
-        # If the 'download' query param is present, force download.
+        
         if request.query_params.get('download') == 'true':
             response['Content-Disposition'] = f'attachment; filename="{filename_for_download}"'
         else:
-            # For streaming to <audio> tag, 'inline' or no disposition is better.
-            # However, since FE will fetch as blob, this might not be strictly necessary.
-            # For safety, let's make it inline if not explicitly downloading.
             response['Content-Disposition'] = f'inline; filename="{filename_for_download}"'
 
         return response
@@ -69,13 +59,21 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        # Updated prefetch for Conversation model changes
         return Conversation.objects.filter(
             participants=user
-        ).select_related('initiator', 'related_artist').prefetch_related(
-            'participants', 'messages__sender'
+        ).select_related(
+            'initiator_user', 
+            'initiator_artist_profile',
+            'related_artist_recipient' # Updated field name
+        ).prefetch_related(
+            'participants', 
+            'messages__sender_user', 
+            'messages__sending_artist' 
         ).annotate(
             last_message_time=Max('messages__timestamp')
         ).order_by('-last_message_time', '-updated_at')
+
 
     def get_permissions(self):
         if self.action in ['list_messages', 'send_reply', 'accept_request', 'retrieve', 'partial_update', 'update', 'destroy']:
@@ -89,85 +87,155 @@ class ConversationViewSet(viewsets.ModelViewSet):
             return Response(create_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         validated_data = create_serializer.validated_data
-        recipient_user_id = validated_data.get('recipient_user_id')
-        recipient_artist_id = validated_data.get('recipient_artist_id')
-        sender = request.user
+        requesting_user = request.user # This is the actual Django user sending
         
-        target_recipient_user = None
-        target_related_artist = None
+        # Initiator's chosen identity for this new conversation
+        initiator_identity_type = validated_data.get('initiator_identity_type', Conversation.IdentityType.USER)
+        initiator_artist_profile_instance = validated_data.get('initiator_artist_profile_instance', None)
+
+        # Recipient details
+        recipient_user_id = validated_data.get('recipient_user_id')
+        recipient_artist_id = validated_data.get('recipient_artist_id') # This is related_artist_recipient ID
+        
+        target_recipient_user_model = None # The User model of the recipient
+        target_related_artist_recipient_instance = None # The Artist model if DMing an artist
 
         if recipient_user_id:
             try:
-                target_recipient_user = User.objects.get(id=recipient_user_id)
+                target_recipient_user_model = User.objects.get(id=recipient_user_id)
+                if requesting_user.id == target_recipient_user_model.id:
+                     return Response({"error": "You cannot send a message to yourself as a user."}, status=status.HTTP_400_BAD_REQUEST)
             except User.DoesNotExist:
                 return Response({"error": "Recipient user not found."}, status=status.HTTP_404_NOT_FOUND)
-            if sender.id == target_recipient_user.id: 
-                 return Response({"error": "You cannot send a message to yourself as a user."}, status=status.HTTP_400_BAD_REQUEST)
 
         elif recipient_artist_id:
             try:
-                target_related_artist = Artist.objects.select_related('user').get(id=recipient_artist_id)
-                target_recipient_user = target_related_artist.user
-                if sender.id == target_recipient_user.id : 
-                     return Response({"error": "You cannot send a message to your own artist profile."}, status=status.HTTP_400_BAD_REQUEST)
+                target_related_artist_recipient_instance = Artist.objects.select_related('user').get(id=recipient_artist_id)
+                target_recipient_user_model = target_related_artist_recipient_instance.user
+                if requesting_user.id == target_recipient_user_model.id : 
+                     # This check is slightly different: you can't DM your own artist profile *as a recipient from your user account*
+                     # The serializer already checks if initiator_artist_profile_id == recipient_artist_id if both are artists.
+                     # Here, we prevent User X from DMing Artist X (owned by User X).
+                     if initiator_identity_type == Conversation.IdentityType.USER:
+                        return Response({"error": "You cannot send a message from your user account to your own artist profile."}, status=status.HTTP_400_BAD_REQUEST)
             except Artist.DoesNotExist:
                 return Response({"error": "Recipient artist not found."}, status=status.HTTP_404_NOT_FOUND)
             except User.DoesNotExist: 
-                return Response({"error": "Artist owner not found."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return Response({"error": "Artist owner user not found."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         else:
             return Response({"error": "No recipient specified."}, status=status.HTTP_400_BAD_REQUEST)
         
+        # Prevent User X sending as Artist X to User X
+        if initiator_identity_type == Conversation.IdentityType.ARTIST and \
+           initiator_artist_profile_instance and \
+           target_recipient_user_model == requesting_user and \
+           not target_related_artist_recipient_instance: # i.e. recipient is a plain user
+            return Response({"error": "You cannot send a message from your artist profile to your own user account."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+        # Find existing conversation
+        # A conversation is unique by its participants AND its initiator context (User/Artist)
+        # AND its recipient context (User/Artist).
+        # For now, a simpler model: participant pair + related_artist_recipient.
+        # The initiator identity is a property OF the conversation.
+
         conversation_query = Conversation.objects.filter(
-            participants=sender
+            participants=requesting_user
         ).filter(
-            participants=target_recipient_user
+            participants=target_recipient_user_model
         ).annotate(
             num_participants=Count('participants')
         ).filter(
             num_participants=2 
         )
 
-        if target_related_artist:
-            conversation_query = conversation_query.filter(related_artist=target_related_artist)
+        # Filter based on who the conversation is TO
+        if target_related_artist_recipient_instance:
+            conversation_query = conversation_query.filter(related_artist_recipient=target_related_artist_recipient_instance)
         else:
-            conversation_query = conversation_query.filter(related_artist__isnull=True)
+            conversation_query = conversation_query.filter(related_artist_recipient__isnull=True)
         
+        # Filter based on how the conversation was INITIATED
+        # This makes conversations distinct if UserA DMs UserB vs ArtistA (owned by UserA) DMs UserB
+        conversation_query = conversation_query.filter(initiator_identity_type=initiator_identity_type)
+        if initiator_identity_type == Conversation.IdentityType.ARTIST:
+            conversation_query = conversation_query.filter(initiator_artist_profile=initiator_artist_profile_instance)
+        else:
+            conversation_query = conversation_query.filter(initiator_artist_profile__isnull=True)
+            
         conversation = conversation_query.first()
             
         if not conversation:
             conversation = Conversation.objects.create(
-                initiator=sender, 
+                initiator_user=requesting_user, 
+                initiator_identity_type=initiator_identity_type,
+                initiator_artist_profile=initiator_artist_profile_instance if initiator_identity_type == Conversation.IdentityType.ARTIST else None,
                 is_accepted=False,
-                related_artist=target_related_artist 
+                related_artist_recipient=target_related_artist_recipient_instance 
             )
-            conversation.participants.add(sender, target_recipient_user)
+            conversation.participants.add(requesting_user, target_recipient_user_model)
         
-        message_payload = {
-            'text': validated_data.get('text'),
-            'message_type': validated_data.get('message_type', Message.MessageType.TEXT),
-            'attachment': validated_data.get('attachment'), 
-            'conversation': conversation.id, 
-        }
-        message_serializer_context = {'request': request, 'sender': sender, 'conversation': conversation}
-        message_serializer = MessageSerializer(data=message_payload, context=message_serializer_context)
-
-        if not message_serializer.is_valid():
-             return Response(message_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
-        message = message_serializer.save(sender=sender, conversation=conversation)
+        # Create the first message
+        # The message's identity will match the conversation's initiator identity
+        new_message = Message.objects.create(
+            conversation=conversation,
+            sender_user=requesting_user,
+            sender_identity_type=initiator_identity_type, # Use conversation's initiator type
+            sending_artist=initiator_artist_profile_instance if initiator_identity_type == Conversation.IdentityType.ARTIST else None,
+            text=validated_data.get('text'),
+            attachment=validated_data.get('attachment'),
+            message_type=validated_data.get('message_type', Message.MessageType.TEXT),
+            original_attachment_filename=validated_data.get('attachment').name if validated_data.get('attachment') else None
+        )
+        # Message.save() will handle acceptance logic if applicable
 
         conv_serializer = ConversationSerializer(conversation, context={'request': request})
         return Response(conv_serializer.data, status=status.HTTP_201_CREATED)
 
+
     @action(detail=True, methods=['post'], url_path='reply', serializer_class=MessageSerializer)
     def send_reply(self, request, pk=None):
-        conversation = self.get_object() 
+        conversation = self.get_object() # This is Conversation instance
+        requesting_user = request.user
         
-        message_serializer_context = {'request': request, 'sender': request.user, 'conversation': conversation}
-        message_serializer = MessageSerializer(data=request.data, context=message_serializer_context)
+        # Determine sender identity for this reply message
+        message_sender_identity_type = Message.SenderIdentity.USER # Default for replies
+        message_sending_artist_instance = None
+
+        # If the replier is the original initiator of the conversation, they reply with their original identity
+        if conversation.initiator_user == requesting_user:
+            message_sender_identity_type = conversation.initiator_identity_type # This is Conversation.IdentityType
+            if message_sender_identity_type == Conversation.IdentityType.ARTIST:
+                message_sending_artist_instance = conversation.initiator_artist_profile
+        # Else (replier is not the original initiator), they reply as 'USER' (already default)
+
+        # Data for MessageSerializer - note: attachment handling might need refinement if using write_only in serializer
+        # For simplicity, we construct the message object directly here if MessageSerializer becomes too complex for this.
+        # However, using the serializer is good for validation.
+        
+        message_data_for_serializer = {
+            'text': request.data.get('text'),
+            'attachment': request.data.get('attachment'), # This would be an InMemoryUploadedFile
+            'message_type': request.data.get('message_type', Message.MessageType.TEXT),
+            # These are NOT part of request.data for replies anymore, they are derived
+            # 'sender_identity_type': ...,
+            # 'sending_artist_id': ...,
+        }
+        
+        message_serializer_context = {'request': request} # For any context needed by serializer's validate
+        message_serializer = MessageSerializer(data=message_data_for_serializer, context=message_serializer_context)
         
         if message_serializer.is_valid():
-            message_serializer.save(sender=request.user, conversation=conversation)
+            # Pass derived/determined fields directly to save method of the serializer instance
+            # The serializer's .save() will then pass them to Message.objects.create() or instance.save()
+            message = message_serializer.save(
+                sender_user=requesting_user, 
+                conversation=conversation,
+                sender_identity_type=message_sender_identity_type, # Explicitly pass determined identity
+                sending_artist=message_sending_artist_instance     # Explicitly pass determined artist
+            )
+            # Message.save() handles acceptance and timestamp updates
+            
             conv_serializer = ConversationSerializer(conversation, context={'request': request})
             return Response(conv_serializer.data, status=status.HTTP_201_CREATED)
         return Response(message_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -175,14 +243,14 @@ class ConversationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='messages')
     def list_messages(self, request, pk=None):
         conversation = self.get_object() 
-        messages = conversation.messages.all().order_by('timestamp')
+        messages = conversation.messages.select_related('sender_user', 'sending_artist').all().order_by('timestamp')
         
         can_mark_read = conversation.is_accepted or \
-                        (conversation.initiator == request.user) or \
-                        (not conversation.is_accepted and conversation.get_other_participant(conversation.initiator) == request.user)
+                        (conversation.initiator_user == request.user) or \
+                        (not conversation.is_accepted and conversation.get_other_participant(conversation.initiator_user) == request.user)
 
         if can_mark_read:
-            messages_to_mark_read = messages.filter(is_read=False).exclude(sender=request.user)
+            messages_to_mark_read = messages.filter(is_read=False).exclude(sender_user=request.user)
             if messages_to_mark_read.exists(): 
                  messages_to_mark_read.update(is_read=True)
         page = self.paginate_queryset(messages)
@@ -197,7 +265,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
     def accept_request(self, request, pk=None):
         conversation = self.get_object() 
         
-        if conversation.initiator == request.user:
+        if conversation.initiator_user == request.user: # Check against initiator_user
             return Response({"error": "You cannot accept a conversation you initiated."}, status=status.HTTP_400_BAD_REQUEST)
         if conversation.is_accepted:
             return Response({"message": "Conversation already accepted."}, status=status.HTTP_200_OK)
@@ -208,5 +276,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(conversation)
         return Response(serializer.data)
     
-    def perform_create(self, serializer):
-        return Response({"detail": "Use 'send-initial-message' or 'reply' actions."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+    def perform_create(self, serializer): # This is for POST /conversations/ (standard ModelViewSet)
+        # This method should NOT be used for creating conversations directly anymore.
+        # All conversation creation is handled by 'send_initial_message'.
+        return Response({"detail": "Use 'send-initial-message' action to start a conversation."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)

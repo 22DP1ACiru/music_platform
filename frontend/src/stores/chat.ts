@@ -2,7 +2,12 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import axios from "axios";
 import { useAuthStore } from "./auth";
-import type { Conversation, ChatMessage, CreateMessagePayload } from "@/types";
+import type {
+  Conversation,
+  ChatMessage,
+  CreateMessagePayload, // For initiating
+  ReplyMessagePayload, // For replies
+} from "@/types";
 
 interface PaginatedResponse<T> {
   count: number;
@@ -24,14 +29,55 @@ export const useChatStore = defineStore("chat", () => {
   const error = ref<string | null>(null);
 
   const userDirectMessages = computed(() => {
-    return conversations.value.filter((conv) => !conv.related_artist);
+    // User DMs:
+    // 1. No related_artist_recipient (standard user-to-user)
+    // 2. OR, related_artist_recipient IS NOT ME, and I initiated as USER
+    // 3. OR, related_artist_recipient IS ME, and other user initiated as USER (or Artist, but displayed in my User DMs)
+    // This logic can get complex for presentation.
+    // A simpler approach for "My DMs" tab:
+    // - Initiated by me as USER
+    // - Initiated towards me as USER (related_artist_recipient is null, and initiator is not me)
+    return conversations.value.filter((conv) => {
+      // Standard User-to-User DM (no artist involved as recipient)
+      if (!conv.related_artist_recipient_details) return true;
+      // If I initiated it as USER towards an ARTIST, it's still from "My User DM" perspective
+      if (
+        conv.initiator_user?.id === authStore.authUser?.id &&
+        conv.initiator_identity_type === "USER" &&
+        conv.related_artist_recipient_details
+      ) {
+        return true;
+      }
+      return false;
+    });
   });
 
   const artistDirectMessages = computed(() => {
-    if (!authStore.isLoggedIn || !authStore.hasArtistProfile) {
+    if (
+      !authStore.isLoggedIn ||
+      !authStore.hasArtistProfile ||
+      !authStore.artistProfileId
+    ) {
       return [];
     }
-    return conversations.value.filter((conv) => conv.related_artist);
+    // Artist DMs:
+    // 1. Initiated by me as ARTIST
+    // 2. Initiated towards my ARTIST profile
+    return conversations.value.filter((conv) => {
+      if (
+        conv.initiator_user?.id === authStore.authUser?.id &&
+        conv.initiator_identity_type === "ARTIST" &&
+        conv.initiator_artist_profile_details?.id === authStore.artistProfileId
+      ) {
+        return true; // I initiated as this artist
+      }
+      if (
+        conv.related_artist_recipient_details?.id === authStore.artistProfileId
+      ) {
+        return true; // DM is to my artist profile
+      }
+      return false;
+    });
   });
 
   async function fetchConversations() {
@@ -39,11 +85,9 @@ export const useChatStore = defineStore("chat", () => {
     isLoadingConversations.value = true;
     error.value = null;
     try {
-      // Expect a paginated response for conversations
-      const response = await axios.get<PaginatedResponse<Conversation>>( // Adjusted type here
+      const response = await axios.get<PaginatedResponse<Conversation>>(
         "/chat/conversations/"
       );
-      // Access the .results array for sorting and assignment
       conversations.value = response.data.results.sort(
         (a, b) =>
           new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
@@ -95,6 +139,7 @@ export const useChatStore = defineStore("chat", () => {
     isSendingMessage.value = true;
     error.value = null;
     const formData = new FormData();
+
     if (payload.recipient_user_id) {
       formData.append("recipient_user_id", String(payload.recipient_user_id));
     }
@@ -104,13 +149,24 @@ export const useChatStore = defineStore("chat", () => {
         String(payload.recipient_artist_id)
       );
     }
-    if (payload.text) {
-      formData.append("text", payload.text);
-    }
-    if (payload.attachment) {
-      formData.append("attachment", payload.attachment);
-    }
+    if (payload.text) formData.append("text", payload.text);
+    if (payload.attachment) formData.append("attachment", payload.attachment);
     formData.append("message_type", payload.message_type || "TEXT");
+
+    // Use updated field names for initiator identity
+    formData.append(
+      "initiator_identity_type",
+      payload.initiator_identity_type || "USER"
+    );
+    if (
+      payload.initiator_identity_type === "ARTIST" &&
+      payload.initiator_artist_profile_id
+    ) {
+      formData.append(
+        "initiator_artist_profile_id",
+        String(payload.initiator_artist_profile_id)
+      );
+    }
 
     try {
       const response = await axios.post<Conversation>(
@@ -122,11 +178,9 @@ export const useChatStore = defineStore("chat", () => {
       const index = conversations.value.findIndex(
         (c) => c.id === newOrUpdatedConversation.id
       );
-      if (index !== -1) {
-        conversations.value[index] = newOrUpdatedConversation;
-      } else {
-        conversations.value.unshift(newOrUpdatedConversation);
-      }
+      if (index !== -1) conversations.value[index] = newOrUpdatedConversation;
+      else conversations.value.unshift(newOrUpdatedConversation);
+
       conversations.value.sort(
         (a, b) =>
           new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
@@ -148,12 +202,10 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  // sendReply now uses ReplyMessagePayload (simpler)
   async function sendReply(
     conversationId: number,
-    payload: Omit<
-      CreateMessagePayload,
-      "recipient_user_id" | "recipient_artist_id"
-    >
+    payload: ReplyMessagePayload // Does not include sender identity fields
   ): Promise<boolean> {
     if (!authStore.isLoggedIn) {
       error.value = "You must be logged in to send messages.";
@@ -162,13 +214,11 @@ export const useChatStore = defineStore("chat", () => {
     isSendingMessage.value = true;
     error.value = null;
     const formData = new FormData();
-    if (payload.text) {
-      formData.append("text", payload.text);
-    }
-    if (payload.attachment) {
-      formData.append("attachment", payload.attachment);
-    }
+    if (payload.text) formData.append("text", payload.text);
+    if (payload.attachment) formData.append("attachment", payload.attachment);
     formData.append("message_type", payload.message_type || "TEXT");
+
+    // Sender identity is NOT sent from client for replies; backend determines it.
 
     try {
       const response = await axios.post<Conversation>(
@@ -180,16 +230,21 @@ export const useChatStore = defineStore("chat", () => {
       const convIndex = conversations.value.findIndex(
         (c) => c.id === conversationId
       );
-      if (convIndex !== -1) {
+      if (convIndex !== -1)
         conversations.value[convIndex] = updatedConversation;
-      }
+
       if (
         activeConversationId.value === conversationId &&
         updatedConversation.latest_message
       ) {
-        activeConversationMessages.value.push(
-          updatedConversation.latest_message
+        const existingMsgIndex = activeConversationMessages.value.findIndex(
+          (m) => m.id === updatedConversation.latest_message!.id
         );
+        if (existingMsgIndex === -1) {
+          activeConversationMessages.value.push(
+            updatedConversation.latest_message
+          );
+        }
       }
       conversations.value.sort(
         (a, b) =>
@@ -226,15 +281,7 @@ export const useChatStore = defineStore("chat", () => {
       const index = conversations.value.findIndex(
         (c) => c.id === conversationId
       );
-      if (index !== -1) {
-        conversations.value[index] = updatedConversation;
-      }
-      // If this is the currently active conversation, refresh its messages or state
-      if (activeConversationId.value === conversationId) {
-        // Potentially re-fetch messages or update local state to reflect acceptance
-        // For now, just updating the conversation in the list is fine.
-        // If messages view depends on `activeConversation.value.is_accepted`, it will update.
-      }
+      if (index !== -1) conversations.value[index] = updatedConversation;
       return true;
     } catch (err: any) {
       console.error(

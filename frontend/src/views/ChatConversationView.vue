@@ -3,7 +3,7 @@ import { ref, onMounted, watch, nextTick, computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
-import type { ChatMessage, Conversation } from "@/types";
+import type { ChatMessage, Conversation, ReplyMessagePayload } from "@/types"; // Use ReplyMessagePayload
 import ChatMessageItem from "@/components/chat/ChatMessageItem.vue";
 
 const route = useRoute();
@@ -16,7 +16,9 @@ const newMessageFile = ref<File | null>(null);
 const fileInputKey = ref(0);
 const messageContainerRef = ref<HTMLElement | null>(null);
 const localError = ref<string | null>(null);
-const MAX_MESSAGE_LENGTH = 1000; // Define character limit
+const MAX_MESSAGE_LENGTH = 1000;
+
+// REMOVED: selectedReplyIdentity ref, as it's no longer needed for replies
 
 const conversationId = computed(() => {
   const idParam = route.params.conversationId;
@@ -39,7 +41,7 @@ const canInteract = computed(() => {
   return (
     activeConversation.value.is_accepted ||
     (authStore.authUser &&
-      activeConversation.value.initiator?.id !== authStore.authUser.id)
+      activeConversation.value.initiator_user?.id !== authStore.authUser.id) // Check against initiator_user
   );
 });
 
@@ -48,7 +50,7 @@ const showAcceptButton = computed(() => {
     activeConversation.value &&
     !activeConversation.value.is_accepted &&
     authStore.authUser &&
-    activeConversation.value.initiator?.id !== authStore.authUser.id
+    activeConversation.value.initiator_user?.id !== authStore.authUser.id // Check against initiator_user
   );
 });
 
@@ -163,11 +165,14 @@ const handleSendMessage = async () => {
     }
   }
 
-  const success = await chatStore.sendReply(conversationId.value, {
+  // Use ReplyMessagePayload - identity fields are NOT sent for replies
+  const payload: ReplyMessagePayload = {
     text: newMessageText.value.trim() || null,
     attachment: newMessageFile.value,
     message_type: messageType,
-  });
+  };
+
+  const success = await chatStore.sendReply(conversationId.value, payload);
 
   if (success) {
     newMessageText.value = "";
@@ -191,23 +196,51 @@ const handleAcceptRequest = async () => {
 
 const conversationPartnerName = computed(() => {
   if (!activeConversation.value || !authStore.authUser) return "Conversation";
-  if (activeConversation.value.related_artist) {
-    if (activeConversation.value.initiator?.id === authStore.authUser.id) {
-      return activeConversation.value.related_artist.name + " (Artist)";
-    } else {
-      const otherUser = activeConversation.value.participants.find(
-        (p) => p.id !== authStore.authUser?.id
-      );
-      return otherUser
-        ? otherUser.username
-        : activeConversation.value.related_artist.name + " (Artist)";
+
+  const conv = activeConversation.value;
+  const currentUser = authStore.authUser;
+
+  // Case 1: Conversation is TO an artist profile
+  if (conv.related_artist_recipient_details) {
+    // If the current user is NOT the owner of this artist profile, then the partner is the artist.
+    if (
+      conv.related_artist_recipient_details.id !== authStore.artistProfileId
+    ) {
+      return `${conv.related_artist_recipient_details.name} [Artist]`;
+    }
+    // If the current user IS the owner of this artist profile, the partner is the initiator.
+    // Display the initiator's identity.
+    if (conv.initiator_user) {
+      if (
+        conv.initiator_identity_type === "ARTIST" &&
+        conv.initiator_artist_profile_details
+      ) {
+        return `${conv.initiator_artist_profile_details.name} [Artist]`;
+      }
+      return `${conv.initiator_user.username} [User]`;
     }
   } else {
-    const otherUser = activeConversation.value.participants.find(
-      (p) => p.id !== authStore.authUser?.id
+    // Case 2: Standard User-to-User DM (no artist recipient)
+    // Find the other participant who is not the current user.
+    const otherParticipant = conv.participants.find(
+      (p) => p.id !== currentUser.id
     );
-    return otherUser ? otherUser.username : "User";
+    if (otherParticipant) {
+      // Check how the other user (who is the initiator in this simple 2-party context if not me) initiated.
+      // This assumes in a 2-party non-artist-recipient DM, the other person is the initiator if I am not.
+      if (conv.initiator_user?.id === otherParticipant.id) {
+        if (
+          conv.initiator_identity_type === "ARTIST" &&
+          conv.initiator_artist_profile_details
+        ) {
+          return `${conv.initiator_artist_profile_details.name} [Artist]`;
+        }
+        return `${otherParticipant.username} [User]`;
+      }
+      return `${otherParticipant.username} [User]`; // Fallback
+    }
   }
+  return "User"; // Fallback
 });
 </script>
 
@@ -219,10 +252,10 @@ const conversationPartnerName = computed(() => {
       </button>
       <h3>{{ conversationPartnerName }}</h3>
       <div
-        v-if="activeConversation?.related_artist"
+        v-if="activeConversation?.related_artist_recipient_details"
         class="artist-context-badge"
       >
-        Artist DM
+        Artist DM Context
       </div>
     </div>
 
@@ -270,7 +303,7 @@ const conversationPartnerName = computed(() => {
         </p>
         <p
           v-else-if="
-            activeConversation?.initiator?.id === authStore.authUser?.id
+            activeConversation?.initiator_user?.id === authStore.authUser?.id
           "
         >
           Your message request has been sent.
@@ -285,49 +318,67 @@ const conversationPartnerName = computed(() => {
     </div>
 
     <div class="message-input-area" v-if="canInteract && activeConversation">
-      <div class="textarea-wrapper">
-        <textarea
-          v-model="newMessageText"
-          placeholder="Type your message..."
-          rows="2"
-          @keyup.enter.exact="handleSendMessage"
-          :disabled="chatStore.isSendingMessage"
-          :maxlength="MAX_MESSAGE_LENGTH"
-        ></textarea>
-        <div
-          class="char-counter"
-          :class="{ 'limit-exceeded': remainingChars < 0 }"
-        >
-          {{ remainingChars }}
-        </div>
-      </div>
-      <div class="file-input-controls">
-        <label
-          for="file-upload"
-          class="file-upload-button"
-          :class="{ disabled: chatStore.isSendingMessage }"
-        >
-          📎 Attach Audio
-        </label>
-        <input
-          type="file"
-          id="file-upload"
-          :key="fileInputKey"
-          @change="handleFileChange"
-          accept="audio/*"
-          :disabled="chatStore.isSendingMessage"
-        />
-        <span v-if="newMessageFile" class="file-name-display">
-          {{ newMessageFile.name }}
-          <button
-            @click="clearFileInput"
-            class="clear-file-btn"
+      <div class="input-controls-wrapper">
+        <div class="textarea-wrapper">
+          <textarea
+            v-model="newMessageText"
+            placeholder="Type your message..."
+            rows="2"
+            @keyup.enter.exact="
+              !chatStore.isSendingMessage &&
+                remainingChars >= 0 &&
+                handleSendMessage()
+            "
             :disabled="chatStore.isSendingMessage"
-            title="Remove file"
+            :maxlength="MAX_MESSAGE_LENGTH"
+          ></textarea>
+          <div
+            class="char-counter"
+            :class="{ 'limit-exceeded': remainingChars < 0 }"
           >
-            ×
-          </button>
-        </span>
+            {{ remainingChars }}
+          </div>
+        </div>
+        <div class="actions-row">
+          <div class="file-input-controls">
+            <label
+              for="file-upload"
+              class="file-upload-button"
+              :class="{ disabled: chatStore.isSendingMessage }"
+            >
+              📎 Attach Audio
+            </label>
+            <input
+              type="file"
+              id="file-upload"
+              :key="fileInputKey"
+              @change="handleFileChange"
+              accept="audio/*"
+              :disabled="chatStore.isSendingMessage"
+            />
+            <span v-if="newMessageFile" class="file-name-display">
+              {{ newMessageFile.name }}
+              <button
+                @click="clearFileInput"
+                class="clear-file-btn"
+                :disabled="chatStore.isSendingMessage"
+                title="Remove file"
+              >
+                ×
+              </button>
+            </span>
+          </div>
+          <!-- REMOVED Identity Selector for replies -->
+          <!-- 
+            <div v-if="authStore.hasArtistProfile" class="identity-selector">
+                <label for="reply-identity">Send as:</label>
+                <select id="reply-identity" v-model="selectedReplyIdentity" :disabled="chatStore.isSendingMessage">
+                    <option value="USER">{{ authStore.authUser?.username }} (User)</option>
+                    <option value="ARTIST">{{ authStore.authUser?.profile?.artist_profile_data?.name }} (Artist)</option>
+                </select>
+            </div>
+             -->
+        </div>
       </div>
       <button
         @click="handleSendMessage"
@@ -341,7 +392,7 @@ const conversationPartnerName = computed(() => {
       v-else-if="
         activeConversation &&
         !activeConversation.is_accepted &&
-        activeConversation.initiator?.id === authStore.authUser?.id
+        activeConversation.initiator_user?.id === authStore.authUser?.id
       "
       class="info-banner"
     >
@@ -360,9 +411,7 @@ const conversationPartnerName = computed(() => {
 .chat-conversation-view {
   display: flex;
   flex-direction: column;
-  height: calc(
-    100vh - 120px
-  ); /* Adjust based on your header/footer/player height */
+  height: calc(100vh - 120px);
   max-width: 800px;
   margin: 0 auto;
   border: 1px solid var(--color-border);
@@ -446,15 +495,23 @@ const conversationPartnerName = computed(() => {
   gap: 0.75rem;
 }
 
+.input-controls-wrapper {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .textarea-wrapper {
   flex-grow: 1;
   position: relative;
+  width: 100%;
 }
 
 .message-input-area textarea {
-  width: 100%; /* Take full width of its wrapper */
+  width: 100%;
   padding: 0.6rem;
-  padding-bottom: 1.8em; /* Space for char counter */
+  padding-bottom: 1.8em;
   border: 1px solid var(--color-border);
   border-radius: 6px;
   resize: none;
@@ -462,6 +519,7 @@ const conversationPartnerName = computed(() => {
   line-height: 1.4;
   max-height: 100px;
   overflow-y: auto;
+  box-sizing: border-box;
 }
 .message-input-area textarea:disabled {
   background-color: var(--color-background-soft);
@@ -478,12 +536,20 @@ const conversationPartnerName = computed(() => {
   font-weight: bold;
 }
 
+.actions-row {
+  display: flex;
+  justify-content: space-between; /* This will push file input left and identity selector (if present) right */
+  align-items: center;
+  width: 100%;
+}
+
 .file-input-controls {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.3rem;
+  align-items: center;
+  gap: 0.5rem;
 }
+
+/* Removed .identity-selector styles as it's removed from this component */
 
 .file-upload-button {
   padding: 0.5em 0.8em;
@@ -492,7 +558,7 @@ const conversationPartnerName = computed(() => {
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9em;
-  white-space: nowrap; /* Prevent button text from wrapping */
+  white-space: nowrap;
 }
 .file-upload-button:hover {
   border-color: var(--color-border-hover);
@@ -514,7 +580,7 @@ input[type="file"] {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 120px; /* Adjust as needed */
+  max-width: 120px;
 }
 .clear-file-btn {
   background: none;
@@ -533,7 +599,8 @@ input[type="file"] {
 .send-button {
   padding: 0.6rem 1rem;
   font-size: 1em;
-  min-height: calc(0.6rem * 2 + 1.4em);
+  align-self: flex-end;
+  height: fit-content;
 }
 .send-button:disabled {
   opacity: 0.6;

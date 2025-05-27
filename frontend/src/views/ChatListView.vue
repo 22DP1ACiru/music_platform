@@ -3,8 +3,8 @@ import { onMounted, computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
-import type { Conversation, CreateMessagePayload } from "@/types"; // Assuming User type is also in types
-import ConversationListItem from "@/components/chat/ConversationListItem.vue"; // Path to be created
+import type { Conversation, CreateMessagePayload } from "@/types";
+import ConversationListItem from "@/components/chat/ConversationListItem.vue";
 
 const chatStore = useChatStore();
 const authStore = useAuthStore();
@@ -12,9 +12,11 @@ const router = useRouter();
 
 const showNewMessageModal = ref(false);
 const newMessageRecipientType = ref<"user" | "artist">("user");
-const newMessageRecipientId = ref<number | null>(null); // For user or artist ID
+const newMessageRecipientId = ref<number | null>(null);
 const newMessageText = ref("");
 const newMessageError = ref<string | null>(null);
+// Renamed to reflect it's for the INITIATOR of a NEW conversation
+const newConversationInitiatorIdentity = ref<"USER" | "ARTIST">("USER");
 
 const activeTab = ref<"user" | "artist">("user");
 
@@ -27,6 +29,8 @@ onMounted(() => {
 });
 
 const sortedUserDMs = computed(() =>
+  // The filtering logic for userDirectMessages in the store should handle this.
+  // This component just consumes it.
   [...chatStore.userDirectMessages].sort(
     (a, b) =>
       new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
@@ -34,6 +38,7 @@ const sortedUserDMs = computed(() =>
 );
 
 const sortedArtistDMs = computed(() =>
+  // The filtering logic for artistDirectMessages in the store should handle this.
   [...chatStore.artistDirectMessages].sort(
     (a, b) =>
       new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
@@ -45,6 +50,7 @@ const handleOpenNewMessageModal = (type: "user" | "artist") => {
   newMessageRecipientId.value = null;
   newMessageText.value = "";
   newMessageError.value = null;
+  newConversationInitiatorIdentity.value = "USER"; // Default to USER when opening modal
   showNewMessageModal.value = true;
 };
 
@@ -55,10 +61,21 @@ const handleSendNewMessage = async () => {
   }
   newMessageError.value = null;
 
+  // Construct payload using the new field names from CreateMessagePayload
   const payload: CreateMessagePayload = {
     text: newMessageText.value.trim(),
-    message_type: "TEXT", // Default to text for this simple modal
+    message_type: "TEXT",
+    initiator_identity_type: newConversationInitiatorIdentity.value,
   };
+
+  if (newConversationInitiatorIdentity.value === "ARTIST") {
+    if (!authStore.artistProfileId) {
+      newMessageError.value =
+        "Cannot send as artist: Your artist profile ID not found.";
+      return;
+    }
+    payload.initiator_artist_profile_id = authStore.artistProfileId;
+  }
 
   if (newMessageRecipientType.value === "user") {
     payload.recipient_user_id = newMessageRecipientId.value;
@@ -94,10 +111,7 @@ const navigateToConversation = (conversationId: number) => {
       <button @click="handleOpenNewMessageModal('user')">
         New Message to User
       </button>
-      <button
-        v-if="authStore.hasArtistProfile"
-        @click="handleOpenNewMessageModal('artist')"
-      >
+      <button @click="handleOpenNewMessageModal('artist')">
         New Message to Artist
       </button>
     </div>
@@ -107,13 +121,14 @@ const navigateToConversation = (conversationId: number) => {
         :class="{ active: activeTab === 'user' }"
         @click="activeTab = 'user'"
       >
-        My DMs
+        My DMs (as {{ authStore.authUser?.username }})
       </button>
       <button
         :class="{ active: activeTab === 'artist' }"
         @click="activeTab = 'artist'"
       >
-        Artist DMs ({{
+        Artist DMs (for
+        {{
           authStore.authUser?.profile?.artist_profile_data?.name ||
           "Your Artist"
         }})
@@ -132,12 +147,14 @@ const navigateToConversation = (conversationId: number) => {
         v-show="activeTab === 'user' || !authStore.hasArtistProfile"
         class="conversation-list user-dms"
       >
-        <h3 v-if="authStore.hasArtistProfile">My Direct Messages</h3>
+        <h3 v-if="authStore.hasArtistProfile && sortedUserDMs.length > 0">
+          Messages as {{ authStore.authUser?.username }}
+        </h3>
         <div
           v-if="sortedUserDMs.length === 0 && !chatStore.isLoadingConversations"
           class="empty-list"
         >
-          No direct messages yet.
+          No direct messages as {{ authStore.authUser?.username }}.
         </div>
         <ConversationListItem
           v-for="convo in sortedUserDMs"
@@ -152,14 +169,17 @@ const navigateToConversation = (conversationId: number) => {
         v-show="activeTab === 'artist'"
         class="conversation-list artist-dms"
       >
-        <h3>Artist Direct Messages</h3>
+        <h3>
+          Messages for
+          {{ authStore.authUser?.profile?.artist_profile_data?.name }} [Artist]
+        </h3>
         <div
           v-if="
             sortedArtistDMs.length === 0 && !chatStore.isLoadingConversations
           "
           class="empty-list"
         >
-          No artist messages yet.
+          No messages for your artist profile yet.
         </div>
         <ConversationListItem
           v-for="convo in sortedArtistDMs"
@@ -171,12 +191,36 @@ const navigateToConversation = (conversationId: number) => {
     </div>
 
     <!-- New Message Modal -->
-    <div v-if="showNewMessageModal" class="modal-overlay">
-      <div class="modal-content">
+    <div
+      v-if="showNewMessageModal"
+      class="modal-overlay"
+      @click.self="showNewMessageModal = false"
+    >
+      <div class="modal-content" @click.stop>
         <h3>
           New Message to
           {{ newMessageRecipientType === "user" ? "User" : "Artist" }}
         </h3>
+
+        <!-- Initiator Identity Selector -->
+        <div class="form-group" v-if="authStore.hasArtistProfile">
+          <label for="new-message-initiator-identity">Send as:</label>
+          <select
+            id="new-message-initiator-identity"
+            v-model="newConversationInitiatorIdentity"
+          >
+            <option value="USER">
+              {{ authStore.authUser?.username }} (User)
+            </option>
+            <option
+              value="ARTIST"
+              v-if="authStore.authUser?.profile?.artist_profile_data"
+            >
+              {{ authStore.authUser.profile.artist_profile_data.name }} (Artist)
+            </option>
+          </select>
+        </div>
+
         <div class="form-group">
           <label :for="`recipient-${newMessageRecipientType}-id`">
             Recipient
@@ -186,6 +230,7 @@ const navigateToConversation = (conversationId: number) => {
             type="number"
             :id="`recipient-${newMessageRecipientType}-id`"
             v-model.number="newMessageRecipientId"
+            placeholder="Enter ID"
             required
           />
         </div>
@@ -279,7 +324,6 @@ const navigateToConversation = (conversationId: number) => {
   color: var(--vt-c-red-dark);
 }
 
-/* Modal Styles */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -312,11 +356,14 @@ const navigateToConversation = (conversationId: number) => {
   margin-bottom: 0.3rem;
 }
 .modal-content input,
-.modal-content textarea {
+.modal-content textarea,
+.modal-content select {
   width: 100%;
   padding: 0.5rem;
   border: 1px solid var(--color-border);
   border-radius: 4px;
+  background-color: var(--color-background);
+  color: var(--color-text);
 }
 .modal-actions {
   margin-top: 1.5rem;
@@ -327,5 +374,6 @@ const navigateToConversation = (conversationId: number) => {
 .modal-error {
   font-size: 0.9em;
   margin-top: 0.5rem;
+  color: var(--vt-c-red-dark);
 }
 </style>

@@ -1,8 +1,7 @@
-// From ReleaseDetailView.vue
 export interface ArtistInfo {
   id: number;
   name: string;
-  user_id: number; // Assuming user_id is part of artist info for ownership checks
+  user_id: number;
 }
 
 export interface TrackInfoFromApi {
@@ -10,8 +9,8 @@ export interface TrackInfoFromApi {
   title: string;
   track_number: number | null;
   duration_in_seconds: number | null;
-  audio_file: string; // Original upload path
-  stream_url: string; // Streaming URL
+  audio_file: string;
+  stream_url: string;
   genres_data?: { id: number; name: string }[];
 }
 
@@ -39,7 +38,7 @@ export interface ReleaseDetail {
 export interface GeneratedDownloadStatus {
   id: number;
   unique_identifier: string;
-  release: number; // Release ID
+  release: number;
   release_title: string;
   user: number;
   requested_format: string;
@@ -53,7 +52,6 @@ export interface GeneratedDownloadStatus {
   failure_reason: string | null;
 }
 
-// Player related types if they become complex and shared
 export interface PlayerTrackInfo {
   id: number;
   title: string;
@@ -64,7 +62,6 @@ export interface PlayerTrackInfo {
   duration?: number | null;
 }
 
-// --- CART TYPES ---
 export interface ProductSummaryForCart {
   id: number;
   name: string;
@@ -96,16 +93,12 @@ export interface Cart {
   updated_at: string;
 }
 
-// --- CHAT TYPES ---
 export interface UserChatInfo {
-  // Basic user info for chat
   id: number;
   username: string;
-  // profile?: { profile_picture: string | null }; // Optional: if you want to show profile pics
 }
 
 export interface ArtistChatInfo {
-  // Info for an artist context in chat
   id: number;
   name: string;
   artist_picture: string | null;
@@ -114,7 +107,9 @@ export interface ArtistChatInfo {
 export interface ChatMessage {
   id: number;
   conversation: number;
-  sender: UserChatInfo;
+  sender_user: UserChatInfo;
+  sender_identity_type: "USER" | "ARTIST";
+  sending_artist_details: ArtistChatInfo | null;
   text: string | null;
   attachment?: string | null;
   attachment_url?: string | null;
@@ -124,45 +119,54 @@ export interface ChatMessage {
   is_read: boolean;
 }
 
+// For Conversation, add initiator identity fields
 export interface Conversation {
   id: number;
   participants: UserChatInfo[];
   is_accepted: boolean;
-  initiator: UserChatInfo | null;
-  related_artist: ArtistChatInfo | null; // New field
+  initiator_user: UserChatInfo | null; // Changed from initiator
+  initiator_identity_type: "USER" | "ARTIST"; // Added
+  initiator_artist_profile_details: ArtistChatInfo | null; // Added
+  related_artist_recipient_details: ArtistChatInfo | null; // Changed from related_artist
   created_at: string;
   updated_at: string;
   latest_message: ChatMessage | null;
   unread_count: number;
-  other_participant_username: string | null; // Helper from backend
+  other_participant_username: string | null; // This will need careful re-evaluation based on new identity model
 }
 
+// Updated CreateMessagePayload for INITIATING conversations
 export interface CreateMessagePayload {
   recipient_user_id?: number | null;
-  recipient_artist_id?: number | null;
+  recipient_artist_id?: number | null; // This refers to the ID of the Artist being targeted
   text?: string | null;
   attachment?: File | null;
   message_type?: "TEXT" | "AUDIO" | "VOICE";
+  // Fields for the INITIATOR's identity
+  initiator_identity_type?: "USER" | "ARTIST"; // Changed from sender_identity_type
+  initiator_artist_profile_id?: number | null; // Changed from sending_artist_id (ID of user's own artist profile)
 }
 
-// Type for OrderDetail, assuming it's used in OrderHistoryView etc.
-// This should match the structure your backend's OrderSerializer provides.
+// Payload for REPLIES will be simpler, not needing recipient or initiator identity fields
+export type ReplyMessagePayload = Pick<
+  CreateMessagePayload,
+  "text" | "attachment" | "message_type"
+>;
+
 export interface OrderItemDetail {
   id: number;
   product_name: string;
   quantity: number;
-  price_at_purchase: string; // Decimal as string
-  // any other fields for order item...
+  price_at_purchase: string;
 }
 
 export interface OrderDetail {
   id: number;
-  user: string; // Username or ID
+  user: string;
   status: string;
-  total_amount: string; // Decimal as string
+  total_amount: string;
   currency: string;
   created_at: string;
   updated_at: string;
-  items: OrderItemDetail[]; // Array of order items
-  // any other fields for order...
+  items: OrderItemDetail[];
 }

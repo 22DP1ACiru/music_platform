@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Conversation } from "@/types";
+import type { Conversation, ChatMessage } from "@/types";
 import { computed } from "vue";
 import { useAuthStore } from "@/stores/auth";
 
@@ -9,63 +9,189 @@ const props = defineProps<{
 
 const authStore = useAuthStore();
 
-const displayParticipant = computed(() => {
-  if (!authStore.authUser) return "Loading...";
-
-  if (props.conversation.related_artist) {
-    // It's an artist context conversation
-    if (props.conversation.initiator?.id === authStore.authUser.id) {
-      // Current user initiated it to an artist
-      return props.conversation.related_artist.name + " (Artist)";
-    } else {
-      // Current user (as artist owner) received it from another user
-      // Find the other user who is not the artist's owner
-      const otherUser = props.conversation.participants.find(
-        (p) => p.id !== authStore.authUser?.id
-      );
-      return otherUser
-        ? otherUser.username
-        : props.conversation.related_artist.name + " (Artist)";
-    }
-  } else {
-    // It's a direct user-to-user DM
-    const otherUser = props.conversation.participants.find(
-      (p) => p.id !== authStore.authUser?.id
-    );
-    return otherUser ? otherUser.username : "Unknown User";
+// Helper to get display name for a message's sender
+const getMessageSenderDisplay = (message: ChatMessage | null): string => {
+  if (!message) return "";
+  if (
+    message.sender_identity_type === "ARTIST" &&
+    message.sending_artist_details
+  ) {
+    return message.sending_artist_details.name; // For snippet, just artist name is fine
   }
+  return message.sender_user.username;
+};
+
+// Determines who the conversation is "with" from the current user's perspective
+const displayParticipant = computed(() => {
+  if (!authStore.authUser || !props.conversation.participants.length)
+    return "Conversation";
+
+  const conv = props.conversation;
+  const currentUser = authStore.authUser;
+
+  // Find the other User model among participants
+  const otherUserModel = conv.participants.find((p) => p.id !== currentUser.id);
+
+  // Case 1: Conversation is directed TO an artist profile (related_artist_recipient is set)
+  if (conv.related_artist_recipient_details) {
+    // If the current user is the owner of this target artist profile (i.e., DM is TO ME as Artist)
+    if (
+      authStore.artistProfileId &&
+      conv.related_artist_recipient_details.id === authStore.artistProfileId
+    ) {
+      // The "other party" is the initiator of the conversation. Display their initiating identity.
+      if (conv.initiator_user) {
+        if (
+          conv.initiator_identity_type === "ARTIST" &&
+          conv.initiator_artist_profile_details
+        ) {
+          return `${conv.initiator_artist_profile_details.name} [Artist]`;
+        }
+        return `${conv.initiator_user.username} [User]`;
+      }
+    } else {
+      // The DM is to an artist, and I am not that artist (i.e., I am DMing an Artist)
+      // The "other party" is the target artist.
+      return `${conv.related_artist_recipient_details.name} [Artist]`;
+    }
+  }
+  // Case 2: Standard User-to-User DM (related_artist_recipient is null)
+  // OR an Artist initiated a DM to me (as a User).
+  else if (otherUserModel) {
+    // otherUserModel must exist in a 2-party DM
+    // If the other user is the initiator and they initiated as an Artist
+    if (
+      conv.initiator_user?.id === otherUserModel.id &&
+      conv.initiator_identity_type === "ARTIST" &&
+      conv.initiator_artist_profile_details
+    ) {
+      return `${conv.initiator_artist_profile_details.name} [Artist]`;
+    }
+    // Otherwise, it's the other user (as a User)
+    return `${otherUserModel.username} [User]`;
+  }
+
+  return "Unknown Contact"; // Fallback
 });
 
 const lastMessageSnippet = computed(() => {
   const msg = props.conversation.latest_message;
   if (!msg) return "No messages yet.";
-  let snippet = "";
-  if (msg.sender.id === authStore.authUser?.id) {
-    snippet += "You: ";
-  }
-  if (msg.message_type === "AUDIO" || msg.message_type === "VOICE") {
-    snippet += "[Audio File]";
-  } else if (msg.message_type === "TRACK_SHARE") {
-    snippet += "[Shared Track]";
+
+  let prefix = "";
+  // Check if the sender_user of the last message is the current authenticated user
+  if (msg.sender_user.id === authStore.authUser?.id) {
+    prefix = "You: ";
   } else {
-    snippet += msg.text || "[Attachment]";
+    // Optional: If you want to show who sent the last message in the snippet when it's not you.
+    // This might make the snippet too long. Consider if needed.
+    // const senderName = getMessageSenderDisplay(msg);
+    // prefix = senderName ? `${senderName}: ` : "";
   }
-  return snippet.length > 50 ? snippet.substring(0, 47) + "..." : snippet;
+
+  let snippetContent = "";
+  if (msg.message_type === "AUDIO" || msg.message_type === "VOICE") {
+    snippetContent = `Sent an audio file`; // More descriptive than just [Audio File]
+    if (msg.original_attachment_filename) {
+      snippetContent = `Audio: ${msg.original_attachment_filename}`;
+    }
+  } else if (msg.message_type === "TRACK_SHARE") {
+    snippetContent = "[Shared Track]"; // Placeholder
+  } else {
+    snippetContent = msg.text || "[Attachment without text]";
+  }
+
+  const fullSnippet = prefix + snippetContent;
+  const maxLength = 45;
+  return fullSnippet.length > maxLength
+    ? fullSnippet.substring(0, maxLength - 3) + "..."
+    : fullSnippet;
 });
 
 const formattedTimestamp = computed(() => {
-  if (!props.conversation.latest_message)
-    return new Date(props.conversation.updated_at).toLocaleDateString();
-  const date = new Date(props.conversation.latest_message.timestamp);
+  const dateToFormat = props.conversation.latest_message
+    ? new Date(props.conversation.latest_message.timestamp)
+    : new Date(props.conversation.updated_at); // Fallback to conversation update if no message
+
   const today = new Date();
-  if (date.toDateString() === today.toDateString()) {
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (dateToFormat.toDateString() === today.toDateString()) {
+    return dateToFormat.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
-  return date.toLocaleDateString();
+  return dateToFormat.toLocaleDateString();
 });
 
 const isUnread = computed(() => {
-  return props.conversation.unread_count > 0;
+  return props.conversation.unread_count > 0 && props.conversation.is_accepted;
+});
+
+const avatarDisplay = computed(() => {
+  if (!authStore.authUser) return { type: "initials", value: "?" };
+
+  const conv = props.conversation;
+  const currentUser = authStore.authUser;
+
+  // If DM is to an artist, and I am NOT that artist. Avatar is the target artist.
+  if (
+    conv.related_artist_recipient_details &&
+    conv.related_artist_recipient_details.id !== authStore.artistProfileId
+  ) {
+    return {
+      type: "image",
+      value: conv.related_artist_recipient_details.artist_picture,
+      alt: conv.related_artist_recipient_details.name,
+    };
+  }
+
+  // If DM is to MY artist profile. Avatar is the initiator.
+  if (
+    conv.related_artist_recipient_details &&
+    conv.related_artist_recipient_details.id === authStore.artistProfileId
+  ) {
+    if (
+      conv.initiator_identity_type === "ARTIST" &&
+      conv.initiator_artist_profile_details
+    ) {
+      return {
+        type: "image",
+        value: conv.initiator_artist_profile_details.artist_picture,
+        alt: conv.initiator_artist_profile_details.name,
+      };
+    } else if (conv.initiator_user) {
+      // Later: fetch UserProfile picture for conv.initiator_user.id
+      return {
+        type: "initials",
+        value: conv.initiator_user.username.charAt(0).toUpperCase(),
+      };
+    }
+  }
+
+  // Standard User-to-User DM, or Artist initiated to me (as User). Avatar is the other party.
+  const otherUserModel = conv.participants.find((p) => p.id !== currentUser.id);
+  if (otherUserModel) {
+    // If this other user is the initiator and initiated as Artist
+    if (
+      conv.initiator_user?.id === otherUserModel.id &&
+      conv.initiator_identity_type === "ARTIST" &&
+      conv.initiator_artist_profile_details
+    ) {
+      return {
+        type: "image",
+        value: conv.initiator_artist_profile_details.artist_picture,
+        alt: conv.initiator_artist_profile_details.name,
+      };
+    }
+    // Otherwise, it's the other user (as User)
+    // Later: fetch UserProfile picture for otherUserModel.id
+    return {
+      type: "initials",
+      value: otherUserModel.username.charAt(0).toUpperCase(),
+    };
+  }
+
+  return { type: "initials", value: "?" }; // Fallback
 });
 </script>
 
@@ -75,17 +201,19 @@ const isUnread = computed(() => {
     :class="{ unread: isUnread, pending: !conversation.is_accepted }"
   >
     <div class="avatar-placeholder">
-      <!-- TODO: Add user/artist avatar here -->
       <img
-        v-if="conversation.related_artist?.artist_picture"
-        :src="conversation.related_artist.artist_picture"
-        alt="Artist Avatar"
+        v-if="avatarDisplay.type === 'image' && avatarDisplay.value"
+        :src="avatarDisplay.value"
+        :alt="avatarDisplay.alt || 'Avatar'"
         class="avatar-img"
       />
-      <!-- Add logic for user avatars if available -->
-      <div v-else class="avatar-initials">
-        {{ displayParticipant?.charAt(0).toUpperCase() }}
+      <div
+        v-else-if="avatarDisplay.type === 'initials'"
+        class="avatar-initials"
+      >
+        {{ avatarDisplay.value }}
       </div>
+      <div v-else class="avatar-initials">?</div>
     </div>
     <div class="conversation-info">
       <div class="info-header">
@@ -96,7 +224,7 @@ const isUnread = computed(() => {
         <span
           v-if="
             !conversation.is_accepted &&
-            conversation.initiator?.id !== authStore.authUser?.id
+            conversation.initiator_user?.id !== authStore.authUser?.id
           "
           class="request-badge"
         >
@@ -105,7 +233,7 @@ const isUnread = computed(() => {
         <span
           v-else-if="
             !conversation.is_accepted &&
-            conversation.initiator?.id === authStore.authUser?.id
+            conversation.initiator_user?.id === authStore.authUser?.id
           "
           class="request-badge-sent"
         >
@@ -114,7 +242,7 @@ const isUnread = computed(() => {
         <span v-else>{{ lastMessageSnippet }}</span>
       </div>
     </div>
-    <div v-if="isUnread && conversation.is_accepted" class="unread-indicator">
+    <div v-if="isUnread" class="unread-indicator">
       {{ conversation.unread_count }}
     </div>
   </div>
@@ -132,12 +260,11 @@ const isUnread = computed(() => {
 .conversation-list-item:hover {
   background-color: var(--color-background-mute);
 }
-.conversation-list-item.unread .participant-name,
-.conversation-list-item.unread .last-message {
+.conversation-list-item.unread .participant-name {
+  /* Last message boldness handled by snippet now */
   font-weight: bold;
 }
 .conversation-list-item.pending {
-  /* Optional: slightly different style for pending requests */
   opacity: 0.85;
 }
 
@@ -151,7 +278,7 @@ const isUnread = computed(() => {
   justify-content: center;
   margin-right: 1rem;
   flex-shrink: 0;
-  overflow: hidden; /* For images */
+  overflow: hidden;
 }
 .avatar-img {
   width: 100%;
@@ -193,6 +320,11 @@ const isUnread = computed(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.conversation-list-item.unread .last-message {
+  /* Add boldness for unread last messages */
+  font-weight: bold;
+  color: var(--color-text); /* Make it darker for unread */
 }
 .request-badge,
 .request-badge-sent {
