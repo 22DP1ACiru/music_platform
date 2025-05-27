@@ -9,6 +9,7 @@ import os
 import tempfile
 import logging
 import shutil 
+from django.db.models import Q # Import Q
 
 from .models import Release, GeneratedDownload, Track 
 
@@ -177,3 +178,56 @@ def generate_release_download_zip(self, generated_download_id):
         except Exception as e_save:
             logger.error(f"Additionally, failed to update download_request status to FAILED: {e_save}")
         raise
+
+@shared_task(name="cleanup_generated_downloads")
+def cleanup_generated_downloads_task():
+    """
+    Celery task to periodically clean up old/failed GeneratedDownload entries and files.
+    """
+    now = timezone.now()
+    items_to_cleanup = GeneratedDownload.objects.filter(
+        Q(status=GeneratedDownload.StatusChoices.FAILED) |
+        Q(status=GeneratedDownload.StatusChoices.EXPIRED) |
+        (Q(status=GeneratedDownload.StatusChoices.READY) & Q(expires_at__lt=now))
+    )
+
+    count_cleaned = 0
+    count_failed_to_clean = 0
+
+    logger.info(f"[Celery Task] Found {items_to_cleanup.count()} GeneratedDownload items for cleanup.")
+
+    for item in items_to_cleanup:
+        original_status = item.status
+        file_deleted_successfully = False
+        if item.download_file and item.download_file.name:
+            try:
+                item.download_file.delete(save=False) # Delete file from storage
+                file_deleted_successfully = True
+                logger.info(f"[Celery Task] Deleted file {item.download_file.name} for GeneratedDownload ID {item.id}")
+            except Exception as e:
+                logger.error(f"[Celery Task] Failed to delete file for GeneratedDownload ID {item.id}: {e}")
+                item.failure_reason = (item.failure_reason or "") + f"\nFile deletion error: {e}"
+        
+        # Update status to EXPIRED, even if file deletion failed or no file was present
+        # (to prevent reprocessing by this task if status was FAILED or READY but expired)
+        item.status = GeneratedDownload.StatusChoices.EXPIRED
+        
+        # Add note about cleanup action only if file existed and was targeted for deletion
+        if item.download_file.name : # Check if there was a file to begin with
+             if file_deleted_successfully:
+                item.failure_reason = (item.failure_reason or "") + f"\nFile cleaned up by periodic task (original status: {original_status})."
+             else: # File existed but deletion failed
+                item.failure_reason = (item.failure_reason or "") + f"\nFile cleanup FAILED by periodic task (original status: {original_status})."
+        else: # No file associated, just marking as EXPIRED
+            item.failure_reason = (item.failure_reason or "") + f"\nMarked EXPIRED by periodic task (original status: {original_status}, no file found)."
+
+
+        try:
+            item.save(update_fields=['status', 'download_file', 'failure_reason']) # download_file field is updated to None by delete(save=False)
+            count_cleaned += 1
+        except Exception as e_save:
+            logger.error(f"[Celery Task] Failed to update status for GeneratedDownload ID {item.id} after cleanup attempt: {e_save}")
+            count_failed_to_clean +=1
+    
+    logger.info(f"[Celery Task] Cleanup finished. Cleaned records: {count_cleaned}. Failed to update records: {count_failed_to_clean}.")
+    return f"Cleaned {count_cleaned} items. Failed to update {count_failed_to_clean} items."

@@ -62,6 +62,123 @@ services:
       - backend # Worker often depends on backend models/code
       - redis
 
+  celery_beat: # New service for Celery Beat
+    container_name: music_celery_beat
+    build: ./backend # Reuses the same backend image
+    command: celery -A vaultwave beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - ./backend:/app
+    environment:
+      - SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DEBUG=${DJANGO_DEBUG}
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS}
+    depends_on:
+      - backend # Beat might depend on backend models if using django-celery-beat
+      - redis
+
+  frontend:
+    container_name: music_frontend
+    build:
+      context: ./frontend # Look for Dockerfile in ./frontend
+      dockerfile: Dockerfile # Explicitly name Dockerfile
+    volumes:
+      - ./frontend:/app # Mount frontend code
+      - /app/node_modules # Don't mount host node_modules over container's
+    ports:
+      - "5341:5341" # Default Vite port
+    environment:
+      - VITE_API_URL=http://localhost:8102/api # Tell Vue where the backend API is
+    depends_on:
+      - backend # Doesn't strictly depend, but good practice
+
+volumes: # Define named volumes for persistent data
+  postgres_data:
+  media_volume: # Will be used for uploads by backend and potentially celery
+
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15-alpine # Using Alpine for smaller image size
+    container_name: music_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      # These vars are read by the postgres image to initialize the DB
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    ports: # Expose port only if you need direct DB access from host
+      - "54320:5432" # Exposing on host 54320 to avoid conflict
+
+  redis:
+    image: redis:7-alpine # Using Alpine for smaller image size
+    container_name: music_redis
+    ports: # Expose port only if needed for direct access
+      - "63790:6379" # Exposing on host 63790
+
+  backend:
+    container_name: music_backend
+    build: ./backend # Tells Docker to look for a Dockerfile in ./backend
+    command: python manage.py runserver 0.0.0.0:8000 # Command to run inside container
+    volumes:
+      - ./backend:/app # Mount backend code into container for live reload
+      - media_volume:/app/mediafiles # Mount media volume for persistent file uploads
+    ports:
+      - "8102:8000" # Map host port 8102 to container port 8000
+    environment:
+      # Pass environment variables needed by Django
+      - SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DEBUG=${DJANGO_DEBUG}
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS} # e.g., localhost, 127.0.0.1
+    depends_on: # Ensure db and redis start before backend
+      - db
+      - redis
+    stdin_open: true # Allows interactive debugging if needed
+    tty: true
+
+  celery_worker:
+    container_name: music_celery_worker
+    build: ./backend # Reuses the same backend image
+    command: celery -A vaultwave worker --loglevel=info # Command to start worker (core=your Django project name)
+    volumes:
+      - ./backend:/app # Mount code for worker too
+      - media_volume:/app/mediafiles # If worker needs access to media uploads later
+    environment:
+      # Worker needs same env vars as backend for DB access, etc.
+      - SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DEBUG=${DJANGO_DEBUG}
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS}
+    depends_on:
+      - backend # Worker often depends on backend models/code
+      - redis
+
+  celery_beat: # New service for Celery Beat
+    container_name: music_celery_beat
+    build: ./backend # Reuses the same backend image
+    command: celery -A vaultwave beat -l info # Uses schedule from settings.py
+    volumes:
+      - ./backend:/app
+    environment:
+      - SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DEBUG=${DJANGO_DEBUG}
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS}
+    depends_on:
+      - backend 
+      - redis
+
   frontend:
     container_name: music_frontend
     build:

@@ -14,6 +14,7 @@ import environ
 from pathlib import Path
 from datetime import timedelta
 import os
+from celery.schedules import crontab # Import crontab
 
 env = environ.Env(
     # set casting, default value
@@ -212,6 +213,16 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC' 
+
+# Celery Beat Schedule
+CELERY_BEAT_SCHEDULE = {
+    'cleanup-generated-downloads-daily': {
+        'task': 'cleanup_generated_downloads', # Name of the task as registered with Celery
+        'schedule': crontab(hour=3, minute=0),  # Run daily at 3:00 AM UTC
+        # 'schedule': crontab(minute='*/5'), # For testing: run every 5 minutes
+    },
+}
+
 
 FORBIDDEN_USERNAME_SUBSTRINGS = [
     'admin',
