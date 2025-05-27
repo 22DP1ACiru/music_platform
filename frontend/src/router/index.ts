@@ -89,7 +89,21 @@ const router = createRouter({
       path: "/order/confirm/:orderId",
       name: "order-confirm",
       component: () => import("../views/OrderConfirmView.vue"),
-      props: true, // Pass route params as props to the component
+      props: true,
+      meta: { requiresAuth: true },
+    },
+    // --- CHAT ROUTES ---
+    {
+      path: "/chat",
+      name: "chat-list",
+      component: () => import("../views/ChatListView.vue"),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/chat/:conversationId", // Using conversationId as param
+      name: "chat-conversation",
+      component: () => import("../views/ChatConversationView.vue"), // To be created
+      props: true,
       meta: { requiresAuth: true },
     },
   ],
@@ -98,29 +112,24 @@ const router = createRouter({
 router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore();
 
-  // If not logged in but a token exists, try to log in.
-  // Also, if user data is not loaded yet, tryAutoLogin will attempt to fetch it.
   if (
     (!authStore.isLoggedIn && localStorage.getItem("accessToken")) ||
     (authStore.isLoggedIn && !authStore.user)
   ) {
     if (!authStore.authLoading) {
-      // Avoid multiple concurrent calls
       console.log("Router Guard: Attempting auto-login or user data fetch.");
-      await authStore.tryAutoLogin(router); // Pass router for potential logout redirects
+      await authStore.tryAutoLogin(router);
     }
   }
 
-  // Wait for any ongoing authentication process to complete.
-  // This is crucial for guards that depend on the auth state.
   while (authStore.authLoading) {
     console.log(
       "Router Guard: Waiting for authentication/user data loading to complete..."
     );
-    await new Promise((resolve) => setTimeout(resolve, 100)); // Poll briefly
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  const isLoggedIn = authStore.isLoggedIn; // Re-evaluate after potential loading
+  const isLoggedIn = authStore.isLoggedIn;
 
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth);
   const requiresArtist = to.matched.some(

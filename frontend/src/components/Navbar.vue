@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { RouterLink, useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
-import { useCartStore } from "@/stores/cart"; // Import cart store
-import { computed } from "vue"; // Import computed
+import { useCartStore } from "@/stores/cart";
+import { computed } from "vue";
 
 const authStore = useAuthStore();
-const cartStore = useCartStore(); // Initialize cart store
+const cartStore = useCartStore();
 const router = useRouter();
 
 const handleLogout = async () => {
   await authStore.logout(router);
-  cartStore.fetchCart(); // Fetch/clear cart on logout
+  cartStore.fetchCart();
 };
 
 const cartItemCount = computed(() => cartStore.itemCount);
@@ -29,6 +29,8 @@ const cartItemCount = computed(() => cartStore.itemCount);
       <RouterLink v-if="authStore.isLoggedIn" to="/orders"
         >My Orders</RouterLink
       >
+      <!-- Add Chat Link -->
+      <RouterLink v-if="authStore.isLoggedIn" to="/chat">Chat</RouterLink>
       <!-- <RouterLink to="/about">About</RouterLink> -->
 
       <template v-if="!authStore.isLoggedIn">

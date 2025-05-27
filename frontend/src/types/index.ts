@@ -53,9 +53,6 @@ export interface GeneratedDownloadStatus {
   failure_reason: string | null;
 }
 
-// From LibraryView.vue (if specific types needed, but LibraryItem uses ReleaseDetail)
-// If TrackInfoFromApi is defined in LibraryItem's ReleaseDetail, ensure it's consistent.
-
 // Player related types if they become complex and shared
 export interface PlayerTrackInfo {
   id: number;
@@ -67,22 +64,22 @@ export interface PlayerTrackInfo {
   duration?: number | null;
 }
 
-// --- NEW CART TYPES ---
+// --- CART TYPES ---
 export interface ProductSummaryForCart {
   id: number;
   name: string;
-  price: string; // Assuming price is a string from backend (decimal)
+  price: string;
   currency: string;
-  cover_art?: string | null; // Assuming ProductSerializer might provide this via release
-  release_title?: string | null; // From ProductSerializer
-  artist_name?: string | null; // Assuming ProductSerializer might get this via release.artist
+  cover_art?: string | null;
+  release_title?: string | null;
+  artist_name?: string | null;
   release_id?: number | null;
 }
 
 export interface CartItem {
   id: number;
-  product: ProductSummaryForCart; // Nested Product details
-  price_override: string | null; // Decimal as string
+  product: ProductSummaryForCart;
+  price_override: string | null;
   added_at: string;
   effective_price_original_currency: string;
   original_currency: string;
@@ -91,11 +88,80 @@ export interface CartItem {
 
 export interface Cart {
   id: number;
-  user: string; // Username
+  user: string;
   items: CartItem[];
-  total_price: string; // Decimal as string
+  total_price: string;
   currency: string;
   created_at: string;
   updated_at: string;
 }
-// --- END NEW CART TYPES ---
+
+// --- CHAT TYPES ---
+export interface UserChatInfo {
+  // Basic user info for chat
+  id: number;
+  username: string;
+  // profile?: { profile_picture: string | null }; // Optional: if you want to show profile pics
+}
+
+export interface ArtistChatInfo {
+  // Info for an artist context in chat
+  id: number;
+  name: string;
+  artist_picture: string | null;
+}
+
+export interface ChatMessage {
+  id: number;
+  conversation: number; // Conversation ID
+  sender: UserChatInfo;
+  text: string | null;
+  attachment?: string | null; // Path to attachment (use attachment_url for display)
+  attachment_url?: string | null; // Full URL for attachment
+  message_type: "TEXT" | "AUDIO" | "VOICE" | "TRACK_SHARE";
+  timestamp: string;
+  is_read: boolean;
+}
+
+export interface Conversation {
+  id: number;
+  participants: UserChatInfo[];
+  is_accepted: boolean;
+  initiator: UserChatInfo | null;
+  related_artist: ArtistChatInfo | null; // New field
+  created_at: string;
+  updated_at: string;
+  latest_message: ChatMessage | null;
+  unread_count: number;
+  other_participant_username: string | null; // Helper from backend
+}
+
+export interface CreateMessagePayload {
+  recipient_user_id?: number | null;
+  recipient_artist_id?: number | null;
+  text?: string | null;
+  attachment?: File | null;
+  message_type?: "TEXT" | "AUDIO" | "VOICE";
+}
+
+// Type for OrderDetail, assuming it's used in OrderHistoryView etc.
+// This should match the structure your backend's OrderSerializer provides.
+export interface OrderItemDetail {
+  id: number;
+  product_name: string;
+  quantity: number;
+  price_at_purchase: string; // Decimal as string
+  // any other fields for order item...
+}
+
+export interface OrderDetail {
+  id: number;
+  user: string; // Username or ID
+  status: string;
+  total_amount: string; // Decimal as string
+  currency: string;
+  created_at: string;
+  updated_at: string;
+  items: OrderItemDetail[]; // Array of order items
+  // any other fields for order...
+}
