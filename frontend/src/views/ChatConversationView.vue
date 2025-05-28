@@ -30,6 +30,7 @@ const newMessageFile = ref<File | null>(null);
 const messageType = ref<"TEXT" | "AUDIO" | "VOICE">("TEXT");
 
 const messageListRef = ref<HTMLElement | null>(null);
+const messageTextareaRef = ref<HTMLTextAreaElement | null>(null); // Ref for the textarea
 
 const isComposeMode = ref(false);
 const recipientInfo = ref<{
@@ -71,6 +72,21 @@ const canAcceptRequest = computed(() => {
   );
 });
 
+const canSendMessage = computed(() => {
+  if (isLoading.value) return false;
+  if (isComposeMode.value) return true;
+
+  if (activeConversation.value) {
+    if (activeConversation.value.is_accepted) {
+      return true;
+    }
+    return (
+      activeConversation.value.initiator_user?.id === authStore.authUser?.id
+    );
+  }
+  return false;
+});
+
 function scrollToBottom() {
   nextTick(() => {
     if (messageListRef.value) {
@@ -88,7 +104,7 @@ async function loadConversationOrPrepareCompose() {
     .senderArtistProfileId as string;
 
   chatStore.clearActiveConversation();
-  recipientInfo.value = null; // Reset recipient info
+  recipientInfo.value = null;
 
   if (cIdParam && cIdParam !== "new" && !isNaN(parseInt(cIdParam))) {
     isComposeMode.value = false;
@@ -104,7 +120,6 @@ async function loadConversationOrPrepareCompose() {
 
     let type: "USER" | "ARTIST" = "USER";
     let id: number = 0;
-    // Initialize recipientInfo with a loading state for the name
 
     if (queryRecipientUserId) {
       type = "USER";
@@ -123,7 +138,6 @@ async function loadConversationOrPrepareCompose() {
         : authStore.artistProfileId;
     }
 
-    // Set recipientInfo with a placeholder/loading name first
     recipientInfo.value = {
       type,
       id,
@@ -133,7 +147,6 @@ async function loadConversationOrPrepareCompose() {
     };
     chatStore.activeConversationMessages.value = [];
 
-    // Then fetch the actual name
     try {
       let fetchedName = "Unknown";
       if (type === "USER" && id) {
@@ -143,9 +156,7 @@ async function loadConversationOrPrepareCompose() {
         const artistRes = await axios.get<{ name: string }>(`/artists/${id}/`);
         fetchedName = artistRes.data.name;
       }
-      // Update the name property of the reactive recipientInfo object
       if (recipientInfo.value) {
-        // Check if recipientInfo is still relevant (user hasn't navigated away)
         recipientInfo.value.name = fetchedName;
       }
     } catch (e) {
@@ -172,8 +183,8 @@ const handleSendMessage = async () => {
     return;
   }
 
+  let success = false;
   if (isComposeMode.value && recipientInfo.value) {
-    // Ensure recipient ID is valid before sending
     if (!recipientInfo.value.id || recipientInfo.value.id === 0) {
       alert("Recipient information is incomplete. Cannot send message.");
       console.error(
@@ -198,30 +209,35 @@ const handleSendMessage = async () => {
 
     const newConversation = await chatStore.sendInitialMessage(payload);
     if (newConversation) {
+      success = true;
       isComposeMode.value = false;
-      // recipientInfo.value = null; // Keep recipientInfo for a moment if needed for UI transition
       await router.replace({
         name: "chat-conversation",
         params: { conversationId: newConversation.id.toString() },
         query: {},
       });
-      // Watcher on route.fullPath will trigger loadConversationOrPrepareCompose
     }
   } else if (conversationIdInternal.value) {
-    await chatStore.sendReply(conversationIdInternal.value, {
+    success = await chatStore.sendReply(conversationIdInternal.value, {
       text: newMessageText.value,
       attachment: newMessageFile.value || undefined,
       message_type: newMessageFile.value ? messageType.value : "TEXT",
     });
   }
 
-  newMessageText.value = "";
-  newMessageFile.value = null;
-  const fileInput = document.getElementById(
-    "message-file-input"
-  ) as HTMLInputElement;
-  if (fileInput) fileInput.value = "";
-  scrollToBottom();
+  if (success) {
+    newMessageText.value = "";
+    newMessageFile.value = null;
+    const fileInput = document.getElementById(
+      "message-file-input"
+    ) as HTMLInputElement;
+    if (fileInput) fileInput.value = "";
+    scrollToBottom();
+    nextTick(() => {
+      // Add this nextTick
+      messageTextareaRef.value?.focus();
+    });
+  }
 };
 
 const handleAcceptRequest = async () => {
@@ -244,19 +260,7 @@ const handleFileChange = (event: Event) => {
     if (newMessageFile.value.type.startsWith("audio/")) {
       messageType.value = "AUDIO";
     } else {
-      // For any other file type, if text is also present, it's fine.
-      // If no text, and it's not audio, it's a generic attachment.
-      // Backend validation handles if text is required based on type.
-      // For now, let's simplify: if attachment exists, type depends on its nature.
-      // The backend `CreateMessageSerializer` seems to validate text based on message_type,
-      // which is fine. The default `message_type` on the payload will be TEXT if only text is provided.
-      // If an attachment is provided, we set a more specific type here.
-      // If it's not audio, and we want to support other attachments,
-      // we'd need more types (e.g., 'IMAGE', 'FILE').
-      // For now, non-audio with attachment but no text might default to message_type TEXT by payload,
-      // which backend might reject if it's only an attachment.
-      // The `sendInitialMessage` and `sendReply` set message_type based on `newMessageFile.value`.
-      messageType.value = "TEXT"; // Default if not audio, can be overridden by user choice if UI supports it
+      messageType.value = "TEXT";
     }
   } else {
     newMessageFile.value = null;
@@ -266,13 +270,18 @@ const handleFileChange = (event: Event) => {
 
 onMounted(() => {
   loadConversationOrPrepareCompose();
+  nextTick(() => {
+    // Also focus on mount if possible
+    if (canSendMessage.value) {
+      messageTextareaRef.value?.focus();
+    }
+  });
 });
 
 watch(
   () => route.fullPath,
   (newPath, oldPath) => {
     if (newPath !== oldPath) {
-      // Only reload if the full path actually changed
       loadConversationOrPrepareCompose();
     }
   },
@@ -286,6 +295,15 @@ watch(
   },
   { deep: true }
 );
+
+// When canSendMessage becomes true (e.g., after accepting a request), focus the input.
+watch(canSendMessage, (newValue, oldValue) => {
+  if (newValue && !oldValue) {
+    nextTick(() => {
+      messageTextareaRef.value?.focus();
+    });
+  }
+});
 
 const goBack = () => {
   chatStore.clearActiveConversation();
@@ -364,29 +382,13 @@ const goBack = () => {
       >
 
       <textarea
+        ref="messageTextareaRef"
         v-model="newMessageText"
         placeholder="Type your message..."
         @keyup.enter.exact.prevent="handleSendMessage"
-        :disabled="
-          isLoading ||
-          (activeConversation &&
-            !activeConversation.is_accepted &&
-            !isComposeMode &&
-            !canAcceptRequest)
-        "
+        :disabled="!canSendMessage"
       ></textarea>
-      <button
-        type="submit"
-        :disabled="
-          isLoading ||
-          (activeConversation &&
-            !activeConversation.is_accepted &&
-            !isComposeMode &&
-            !canAcceptRequest)
-        "
-      >
-        Send
-      </button>
+      <button type="submit" :disabled="!canSendMessage">Send</button>
     </form>
   </div>
 </template>
@@ -438,11 +440,8 @@ const goBack = () => {
 
 .accept-request-banner {
   padding: 0.8rem 1rem;
-  background-color: var(
-    --color-accent-soft,
-    #e6f7ff
-  ); /* Define this color in base.css if needed */
-  color: var(--color-accent-dark, #005f8d); /* Define this */
+  background-color: var(--color-accent-soft, #e6f7ff);
+  color: var(--color-accent-dark, #005f8d);
   text-align: center;
   border-bottom: 1px solid var(--color-accent);
 }
@@ -457,6 +456,10 @@ const goBack = () => {
   color: white;
   border: none;
   border-radius: 4px;
+}
+.accept-request-banner button:disabled {
+  background-color: var(--color-border);
+  cursor: not-allowed;
 }
 
 .message-list {
@@ -483,7 +486,7 @@ const goBack = () => {
   padding: 0.8rem 1rem;
   border-top: 1px solid var(--color-border);
   background-color: var(--color-background-soft);
-  align-items: center; /* Align items vertically */
+  align-items: center;
 }
 .message-input-form textarea {
   flex-grow: 1;
@@ -491,12 +494,16 @@ const goBack = () => {
   border: 1px solid var(--color-border);
   border-radius: 6px;
   resize: none;
-  min-height: 40px; /* Initial height */
-  max-height: 120px; /* Max height before scroll */
+  min-height: 40px;
+  max-height: 120px;
   line-height: 1.4;
   font-size: 1em;
   margin-right: 0.5rem;
   margin-left: 0.5rem;
+}
+.message-input-form textarea:disabled {
+  background-color: var(--color-background-mute);
+  cursor: not-allowed;
 }
 .message-input-form button[type="submit"] {
   padding: 0.6rem 1rem;
@@ -530,8 +537,8 @@ const goBack = () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100px; /* Shorter max-width for selected file name */
-  display: inline-block; /* Ensure ellipsis works */
-  vertical-align: middle; /* Align with textarea */
+  max-width: 100px;
+  display: inline-block;
+  vertical-align: middle;
 }
 </style>
