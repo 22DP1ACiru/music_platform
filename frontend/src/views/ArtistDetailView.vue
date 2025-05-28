@@ -4,21 +4,19 @@ import { RouterLink, useRouter } from "vue-router";
 import axios from "axios";
 import { useAuthStore } from "@/stores/auth";
 import ArtistEditForm from "@/components/ArtistEditForm.vue";
-import { useChatStore } from "@/stores/chat"; // Import chat store
-import type {
-  Conversation, // Import Conversation type
-} from "@/types";
+import { useChatStore } from "@/stores/chat";
+import type { Conversation } from "@/types";
+import ChooseSenderIdentityModal from "@/components/chat/ChooseSenderIdentityModal.vue"; // Import the new modal
 
-// --- Interfaces ---
 interface ArtistDetail {
   id: number;
   name: string;
   bio: string | null;
-  artist_picture: string | null; // URL
+  artist_picture: string | null;
   location: string | null;
   website_url: string | null;
-  user: string; // Username (from StringRelatedField)
-  user_id: number; // User ID (from ReadOnlyField)
+  user: string;
+  user_id: number;
 }
 
 interface ReleaseSummary {
@@ -51,6 +49,8 @@ const error = ref<string | null>(null);
 const isEditing = ref(false);
 const editError = ref<string | null>(null);
 
+const showIdentityModal = ref(false);
+
 const isOwner = computed(() => {
   return (
     authStore.isLoggedIn &&
@@ -71,7 +71,6 @@ const fetchArtistDetail = async (artistId: string) => {
   error.value = null;
   artist.value = null;
   try {
-    console.log(`Fetching artist details for ID: ${artistId}`);
     const response = await axios.get<ArtistDetail>(`/artists/${artistId}/`);
     artist.value = response.data;
   } catch (err: any) {
@@ -90,7 +89,6 @@ const fetchArtistReleases = async (artistId: string) => {
   isLoadingReleases.value = true;
   releases.value = [];
   try {
-    console.log(`Fetching releases for artist ID: ${artistId}`);
     const response = await axios.get<PaginatedArtistReleasesResponse>(
       `/releases/?artist=${artistId}`
     );
@@ -124,86 +122,60 @@ const handleUpdateError = (errorMessage: string | null) => {
   editError.value = errorMessage;
 };
 
-const startChatWithArtist = async () => {
-  if (!artist.value || !authStore.isLoggedIn || !authStore.authUser) {
-    alert("You need to be logged in to send a message.");
-    router.push({
-      name: "login",
-      query: { redirect: router.currentRoute.value.fullPath },
-    });
-    return;
-  }
+const proceedWithChatNavigation = (chosenSenderIdentity: "USER" | "ARTIST") => {
+  if (!artist.value || !authStore.authUser) return;
 
-  // Determine the sender's identity for this new chat
-  const senderIdentity = chatStore.currentChatViewIdentity; // This is 'USER' or 'ARTIST'
   const senderArtistProfileId =
-    senderIdentity === "ARTIST" ? authStore.artistProfileId : null;
+    chosenSenderIdentity === "ARTIST" ? authStore.artistProfileId : null;
 
-  // Prevent sending to self with same identity
-  if (
-    senderIdentity === "ARTIST" &&
-    senderArtistProfileId === artist.value.id
-  ) {
-    alert("An artist profile cannot send a message to itself.");
-    return;
-  }
-  if (
-    senderIdentity === "USER" &&
-    authStore.authUser.id === artist.value.user_id &&
-    authStore.artistProfileId === artist.value.id
-  ) {
-    // This means the user is trying to DM their *own* artist profile from their user account.
-    alert(
-      "You cannot send a message from your user account to your own artist profile."
-    );
-    return;
-  }
-
-  // Try to find an existing conversation
-  // This check needs to be robust and match the backend's logic for conversation uniqueness
   const existingConversation = chatStore.conversations.find((convo) => {
     const participantIds = convo.participants.map((p) => p.id);
     const involvesMe = participantIds.includes(authStore.authUser!.id);
-    const involvesTargetUser = participantIds.includes(artist.value!.user_id); // Artist's owner user
+    const involvesTargetUserAsArtistOwner = participantIds.includes(
+      artist.value!.user_id
+    );
 
-    if (!(involvesMe && involvesTargetUser && participantIds.length === 2))
+    if (
+      !(
+        involvesMe &&
+        involvesTargetUserAsArtistOwner &&
+        participantIds.length === 2
+      )
+    )
       return false;
 
-    // Check if I am the initiator
     if (convo.initiator_user?.id === authStore.authUser!.id) {
       return (
-        convo.initiator_identity_type === senderIdentity &&
-        (senderIdentity === "ARTIST"
+        convo.initiator_identity_type === chosenSenderIdentity &&
+        (chosenSenderIdentity === "ARTIST"
           ? convo.initiator_artist_profile_details?.id === senderArtistProfileId
           : true) &&
         convo.related_artist_recipient_details?.id === artist.value!.id
       );
     }
-    // Check if the target artist (or their user) is the initiator
     if (convo.initiator_user?.id === artist.value!.user_id) {
-      // If target initiated as User, and I'm sending as User to their Artist profile
-      if (
-        convo.initiator_identity_type === "USER" &&
-        senderIdentity === "USER" &&
-        convo.related_artist_recipient_details?.id === artist.value!.id
-      )
-        return true;
-      // If target initiated as Artist, and I'm sending to that Artist (either as User or other Artist)
       if (
         convo.initiator_identity_type === "ARTIST" &&
         convo.initiator_artist_profile_details?.id === artist.value!.id
       ) {
-        // And my current sending context matches how they targeted me
         if (
-          senderIdentity === "USER" &&
+          chosenSenderIdentity === "USER" &&
           convo.related_artist_recipient_details === null
         )
           return true;
         if (
-          senderIdentity === "ARTIST" &&
+          chosenSenderIdentity === "ARTIST" &&
           convo.related_artist_recipient_details?.id === senderArtistProfileId
         )
           return true;
+      } else if (
+        convo.initiator_identity_type === "USER" &&
+        chosenSenderIdentity === "USER" &&
+        convo.related_artist_recipient_details?.id === artist.value!.id
+      ) {
+        // This case handles when the target artist's USER account DMed THIS artist profile,
+        // and I am now trying to reply as USER to this artist profile.
+        return true;
       }
     }
     return false;
@@ -215,25 +187,50 @@ const startChatWithArtist = async () => {
       params: { conversationId: existingConversation.id.toString() },
     });
   } else {
-    // Navigate to compose mode of ChatConversationView
-    // We pass recipientArtistId, and how the current user wants to send (asUser or asArtist)
     const queryParams: any = {
       recipientArtistId: artist.value.id.toString(),
-      senderIdentity: senderIdentity,
+      senderIdentity: chosenSenderIdentity,
     };
-    if (senderIdentity === "ARTIST" && senderArtistProfileId) {
+    if (chosenSenderIdentity === "ARTIST" && senderArtistProfileId) {
       queryParams.senderArtistProfileId = senderArtistProfileId.toString();
     }
     router.push({
-      name: "chat-conversation", // Re-use ChatConversationView, it will detect "compose mode"
+      name: "chat-conversation",
+      params: { conversationId: "new" },
       query: queryParams,
     });
   }
+  showIdentityModal.value = false; // Close modal after navigation
 };
+
+const startChatWithArtist = async () => {
+  if (!artist.value || !authStore.isLoggedIn || !authStore.authUser) {
+    alert("You need to be logged in to send a message.");
+    router.push({
+      name: "login",
+      query: { redirect: router.currentRoute.value.fullPath },
+    });
+    return;
+  }
+  if (authStore.artistProfileId === artist.value.id) {
+    alert(
+      "You cannot send a message to your own artist profile using this button."
+    );
+    return;
+  }
+
+  if (authStore.hasArtistProfile) {
+    showIdentityModal.value = true;
+  } else {
+    proceedWithChatNavigation("USER");
+  }
+};
+
+// No need for handleIdentityChosen here as it's encapsulated in the modal component.
+// The modal will emit 'identity-chosen' which `proceedWithChatNavigation` handles.
 
 onMounted(() => {
   loadData(props.id);
-  // Ensure conversations are loaded if user is logged in, to find existing chats
   if (authStore.isLoggedIn && chatStore.conversations.length === 0) {
     chatStore.fetchConversations();
   }
@@ -289,7 +286,7 @@ watch(
           >
             Edit Artist Profile
           </button>
-          <!-- Conditional Send Message Button -->
+
           <button
             v-if="
               authStore.isLoggedIn && artist.user_id !== authStore.authUser?.id
@@ -365,10 +362,17 @@ watch(
     </div>
 
     <button @click="router.back()" class="back-button">Go Back</button>
+
+    <ChooseSenderIdentityModal
+      :is-visible="showIdentityModal"
+      @identity-chosen="proceedWithChatNavigation"
+      @close="showIdentityModal = false"
+    />
   </div>
 </template>
 
 <style scoped>
+/* Styles remain the same as previous ArtistDetailView.vue */
 .artist-detail-page {
   max-width: 900px;
   margin: 1rem auto;
@@ -377,7 +381,7 @@ watch(
   display: flex;
   gap: 2rem;
   margin-bottom: 2.5rem;
-  align-items: center; /* Changed from flex-start to center for better vertical alignment */
+  align-items: center;
 }
 .artist-pic,
 .artist-pic-placeholder {
@@ -394,10 +398,10 @@ watch(
   border: 2px solid var(--color-border);
 }
 .artist-info {
-  flex-grow: 1; /* Allow info to take remaining space */
+  flex-grow: 1;
 }
 .artist-info h1 {
-  margin-top: 0; /* Remove top margin if centered */
+  margin-top: 0;
   margin-bottom: 0.5rem;
 }
 .artist-meta {
@@ -423,7 +427,7 @@ watch(
   margin-top: 1rem;
   display: flex;
   gap: 1rem;
-  align-items: center; /* Align items if they have different heights */
+  align-items: center;
 }
 .edit-button,
 .send-message-button {
