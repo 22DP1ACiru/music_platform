@@ -5,8 +5,8 @@ import { useAuthStore } from "./auth";
 import type {
   Conversation,
   ChatMessage,
-  CreateMessagePayload, // For initiating
-  ReplyMessagePayload, // For replies
+  CreateMessagePayload,
+  ReplyMessagePayload,
 } from "@/types";
 
 interface PaginatedResponse<T> {
@@ -29,24 +29,32 @@ export const useChatStore = defineStore("chat", () => {
   const error = ref<string | null>(null);
 
   const userDirectMessages = computed(() => {
-    // User DMs:
-    // 1. No related_artist_recipient (standard user-to-user)
-    // 2. OR, related_artist_recipient IS NOT ME, and I initiated as USER
-    // 3. OR, related_artist_recipient IS ME, and other user initiated as USER (or Artist, but displayed in my User DMs)
-    // This logic can get complex for presentation.
-    // A simpler approach for "My DMs" tab:
-    // - Initiated by me as USER
-    // - Initiated towards me as USER (related_artist_recipient is null, and initiator is not me)
+    if (!authStore.authUser) return [];
+    const currentUserId = authStore.authUser.id;
+    const currentUserArtistId = authStore.artistProfileId; // Can be null
+
     return conversations.value.filter((conv) => {
-      // Standard User-to-User DM (no artist involved as recipient)
-      if (!conv.related_artist_recipient_details) return true;
-      // If I initiated it as USER towards an ARTIST, it's still from "My User DM" perspective
+      // Scenario 1: Conversation initiated by me as "USER"
       if (
-        conv.initiator_user?.id === authStore.authUser?.id &&
-        conv.initiator_identity_type === "USER" &&
-        conv.related_artist_recipient_details
+        conv.initiator_user?.id === currentUserId &&
+        conv.initiator_identity_type === "USER"
       ) {
         return true;
+      }
+
+      // Scenario 2: Conversation initiated by someone else
+      if (conv.initiator_user?.id !== currentUserId) {
+        // Subcase 2a: DM to me as "USER" (no specific artist recipient)
+        if (!conv.related_artist_recipient_details) {
+          return true;
+        }
+        // Subcase 2b: DM to MY artist profile, but initiated by a "USER"
+        if (
+          conv.related_artist_recipient_details?.id === currentUserArtistId &&
+          conv.initiator_identity_type === "USER"
+        ) {
+          return true;
+        }
       }
       return false;
     });
@@ -54,27 +62,36 @@ export const useChatStore = defineStore("chat", () => {
 
   const artistDirectMessages = computed(() => {
     if (
-      !authStore.isLoggedIn ||
       !authStore.hasArtistProfile ||
-      !authStore.artistProfileId
+      !authStore.artistProfileId ||
+      !authStore.authUser
     ) {
       return [];
     }
-    // Artist DMs:
-    // 1. Initiated by me as ARTIST
-    // 2. Initiated towards my ARTIST profile
+    const currentUserId = authStore.authUser.id;
+    const currentArtistId = authStore.artistProfileId;
+
     return conversations.value.filter((conv) => {
+      // Scenario 1: Conversation initiated by me AS THIS ARTIST
       if (
-        conv.initiator_user?.id === authStore.authUser?.id &&
+        conv.initiator_user?.id === currentUserId &&
         conv.initiator_identity_type === "ARTIST" &&
-        conv.initiator_artist_profile_details?.id === authStore.artistProfileId
+        conv.initiator_artist_profile_details?.id === currentArtistId
       ) {
-        return true; // I initiated as this artist
+        return true;
       }
-      if (
-        conv.related_artist_recipient_details?.id === authStore.artistProfileId
-      ) {
-        return true; // DM is to my artist profile
+
+      // Scenario 2: Conversation is directed TO THIS ARTIST profile (initiated by anyone, including another artist)
+      if (conv.related_artist_recipient_details?.id === currentArtistId) {
+        // We need to ensure it wasn't a User DMing my Artist profile, as that's handled by userDirectMessages
+        if (conv.initiator_identity_type === "ARTIST") {
+          return true; // Artist-to-MyArtist
+        }
+        // If User DMed my Artist, it's already in userDirectMessages.
+        // However, if the requirement is that DMs *to* my artist always show here, regardless of who sent, then:
+        // return true; // This would make User-to-MyArtist appear in both tabs.
+        // The current filtering in `userDirectMessages` (Subcase 2b) aims to put User-to-MyArtist in User DMs.
+        // So, for Artist DMs, we only want Artist-to-MyArtist if received.
       }
       return false;
     });
@@ -152,8 +169,6 @@ export const useChatStore = defineStore("chat", () => {
     if (payload.text) formData.append("text", payload.text);
     if (payload.attachment) formData.append("attachment", payload.attachment);
     formData.append("message_type", payload.message_type || "TEXT");
-
-    // Use updated field names for initiator identity
     formData.append(
       "initiator_identity_type",
       payload.initiator_identity_type || "USER"
@@ -178,9 +193,11 @@ export const useChatStore = defineStore("chat", () => {
       const index = conversations.value.findIndex(
         (c) => c.id === newOrUpdatedConversation.id
       );
-      if (index !== -1) conversations.value[index] = newOrUpdatedConversation;
-      else conversations.value.unshift(newOrUpdatedConversation);
-
+      if (index !== -1) {
+        conversations.value[index] = newOrUpdatedConversation;
+      } else {
+        conversations.value.unshift(newOrUpdatedConversation);
+      }
       conversations.value.sort(
         (a, b) =>
           new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
@@ -202,10 +219,9 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  // sendReply now uses ReplyMessagePayload (simpler)
   async function sendReply(
     conversationId: number,
-    payload: ReplyMessagePayload // Does not include sender identity fields
+    payload: ReplyMessagePayload
   ): Promise<boolean> {
     if (!authStore.isLoggedIn) {
       error.value = "You must be logged in to send messages.";
@@ -218,8 +234,6 @@ export const useChatStore = defineStore("chat", () => {
     if (payload.attachment) formData.append("attachment", payload.attachment);
     formData.append("message_type", payload.message_type || "TEXT");
 
-    // Sender identity is NOT sent from client for replies; backend determines it.
-
     try {
       const response = await axios.post<Conversation>(
         `/chat/conversations/${conversationId}/reply/`,
@@ -230,8 +244,11 @@ export const useChatStore = defineStore("chat", () => {
       const convIndex = conversations.value.findIndex(
         (c) => c.id === conversationId
       );
-      if (convIndex !== -1)
+      if (convIndex !== -1) {
         conversations.value[convIndex] = updatedConversation;
+      } else {
+        conversations.value.unshift(updatedConversation);
+      }
 
       if (
         activeConversationId.value === conversationId &&
@@ -244,6 +261,9 @@ export const useChatStore = defineStore("chat", () => {
           activeConversationMessages.value.push(
             updatedConversation.latest_message
           );
+        } else {
+          activeConversationMessages.value[existingMsgIndex] =
+            updatedConversation.latest_message;
         }
       }
       conversations.value.sort(
@@ -281,7 +301,12 @@ export const useChatStore = defineStore("chat", () => {
       const index = conversations.value.findIndex(
         (c) => c.id === conversationId
       );
-      if (index !== -1) conversations.value[index] = updatedConversation;
+      if (index !== -1) {
+        conversations.value[index] = updatedConversation;
+        if (activeConversationId.value === conversationId) {
+          fetchMessagesForConversation(conversationId);
+        }
+      }
       return true;
     } catch (err: any) {
       console.error(
@@ -297,6 +322,41 @@ export const useChatStore = defineStore("chat", () => {
         error.value = "An unexpected error occurred.";
       }
       return false;
+    }
+  }
+
+  function addMessageToActiveConversation(message: ChatMessage) {
+    if (activeConversationId.value === message.conversation) {
+      if (!activeConversationMessages.value.find((m) => m.id === message.id)) {
+        activeConversationMessages.value.push(message);
+      }
+      const conversation = conversations.value.find(
+        (c) => c.id === activeConversationId.value
+      );
+      if (conversation && message.sender_user.id !== authStore.authUser?.id) {
+        message.is_read = true;
+        if (conversation.unread_count > 0) {
+          conversation.unread_count--;
+        }
+      }
+    }
+    const convInList = conversations.value.find(
+      (c) => c.id === message.conversation
+    );
+    if (convInList) {
+      convInList.latest_message = message;
+      convInList.updated_at = message.timestamp;
+      if (
+        message.sender_user.id !== authStore.authUser?.id &&
+        activeConversationId.value !== message.conversation &&
+        !message.is_read
+      ) {
+        convInList.unread_count = (convInList.unread_count || 0) + 1;
+      }
+      conversations.value.sort(
+        (a, b) =>
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+      );
     }
   }
 
@@ -321,5 +381,6 @@ export const useChatStore = defineStore("chat", () => {
     sendReply,
     acceptChatRequest,
     clearActiveConversation,
+    addMessageToActiveConversation,
   };
 });

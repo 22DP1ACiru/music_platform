@@ -1,265 +1,120 @@
 <script setup lang="ts">
-import { onMounted, computed, ref } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
-import type { Conversation, CreateMessagePayload } from "@/types";
 import ConversationListItem from "@/components/chat/ConversationListItem.vue";
+// Import a component for creating new messages if you have one
+// import CreateNewMessageModal from '@/components/chat/CreateNewMessageModal.vue';
 
 const chatStore = useChatStore();
 const authStore = useAuthStore();
 const router = useRouter();
 
-const showNewMessageModal = ref(false);
-const newMessageRecipientType = ref<"user" | "artist">("user");
-const newMessageRecipientId = ref<number | null>(null);
-const newMessageText = ref("");
-const newMessageError = ref<string | null>(null);
-// Renamed to reflect it's for the INITIATOR of a NEW conversation
-const newConversationInitiatorIdentity = ref<"USER" | "ARTIST">("USER");
+type ActiveTab = "user" | "artist";
+const activeTab = ref<ActiveTab>("user");
 
-const activeTab = ref<"user" | "artist">("user");
+// Use computed properties from the store
+const userConversations = computed(() => chatStore.userDirectMessages);
+const artistConversations = computed(() => chatStore.artistDirectMessages);
+const isLoading = computed(() => chatStore.isLoadingConversations);
+const errorLoading = computed(() => chatStore.error);
 
-onMounted(() => {
-  if (authStore.isLoggedIn) {
-    chatStore.fetchConversations();
-  } else {
-    router.push({ name: "login", query: { redirect: "/chat" } });
-  }
+const hasArtistProfile = computed(() => authStore.hasArtistProfile);
+
+const displayedConversations = computed(() => {
+  return activeTab.value === "user"
+    ? userConversations.value
+    : artistConversations.value;
 });
-
-const sortedUserDMs = computed(() =>
-  // The filtering logic for userDirectMessages in the store should handle this.
-  // This component just consumes it.
-  [...chatStore.userDirectMessages].sort(
-    (a, b) =>
-      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-  )
-);
-
-const sortedArtistDMs = computed(() =>
-  // The filtering logic for artistDirectMessages in the store should handle this.
-  [...chatStore.artistDirectMessages].sort(
-    (a, b) =>
-      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-  )
-);
-
-const handleOpenNewMessageModal = (type: "user" | "artist") => {
-  newMessageRecipientType.value = type;
-  newMessageRecipientId.value = null;
-  newMessageText.value = "";
-  newMessageError.value = null;
-  newConversationInitiatorIdentity.value = "USER"; // Default to USER when opening modal
-  showNewMessageModal.value = true;
-};
-
-const handleSendNewMessage = async () => {
-  if (!newMessageRecipientId.value || !newMessageText.value.trim()) {
-    newMessageError.value = "Recipient ID and message text are required.";
-    return;
-  }
-  newMessageError.value = null;
-
-  // Construct payload using the new field names from CreateMessagePayload
-  const payload: CreateMessagePayload = {
-    text: newMessageText.value.trim(),
-    message_type: "TEXT",
-    initiator_identity_type: newConversationInitiatorIdentity.value,
-  };
-
-  if (newConversationInitiatorIdentity.value === "ARTIST") {
-    if (!authStore.artistProfileId) {
-      newMessageError.value =
-        "Cannot send as artist: Your artist profile ID not found.";
-      return;
-    }
-    payload.initiator_artist_profile_id = authStore.artistProfileId;
-  }
-
-  if (newMessageRecipientType.value === "user") {
-    payload.recipient_user_id = newMessageRecipientId.value;
-  } else {
-    payload.recipient_artist_id = newMessageRecipientId.value;
-  }
-
-  const newConversation = await chatStore.sendInitialMessage(payload);
-  if (newConversation) {
-    showNewMessageModal.value = false;
-    router.push({
-      name: "chat-conversation",
-      params: { conversationId: newConversation.id },
-    });
-  } else {
-    newMessageError.value = chatStore.error || "Failed to send new message.";
-  }
-};
 
 const navigateToConversation = (conversationId: number) => {
   router.push({
     name: "chat-conversation",
-    params: { conversationId },
+    params: { conversationId: conversationId.toString() },
   });
 };
+
+const switchToTab = (tab: ActiveTab) => {
+  if (tab === "artist" && !hasArtistProfile.value) {
+    alert("You do not have an artist profile to view artist DMs.");
+    return;
+  }
+  activeTab.value = tab;
+};
+
+onMounted(() => {
+  chatStore.fetchConversations();
+  // If the user doesn't have an artist profile, default to user tab even if artist was last active
+  if (activeTab.value === "artist" && !hasArtistProfile.value) {
+    activeTab.value = "user";
+  }
+});
+
+// Watch for login/logout to re-fetch conversations
+watch(
+  () => authStore.isLoggedIn,
+  (isLoggedIn) => {
+    if (isLoggedIn) {
+      chatStore.fetchConversations();
+    } else {
+      chatStore.conversations = []; // Clear conversations on logout
+    }
+  }
+);
 </script>
 
 <template>
   <div class="chat-list-view">
-    <h2>Messages</h2>
-
-    <div class="new-message-actions">
-      <button @click="handleOpenNewMessageModal('user')">
-        New Message to User
-      </button>
-      <button @click="handleOpenNewMessageModal('artist')">
-        New Message to Artist
-      </button>
-    </div>
-
-    <div class="tabs" v-if="authStore.hasArtistProfile">
+    <header class="chat-list-header">
+      <h2>Direct Messages</h2>
+      <div class="tabs" v-if="hasArtistProfile">
+        <button
+          @click="switchToTab('user')"
+          :class="{ active: activeTab === 'user' }"
+        >
+          My User DMs
+        </button>
+        <button
+          @click="switchToTab('artist')"
+          :class="{ active: activeTab === 'artist' }"
+          :disabled="!hasArtistProfile"
+        >
+          My Artist DMs
+        </button>
+      </div>
+      <!-- Add button for initiating new conversation -->
       <button
-        :class="{ active: activeTab === 'user' }"
-        @click="activeTab = 'user'"
+        @click="router.push({ name: 'chat-create' })"
+        class="new-chat-button"
       >
-        My DMs (as {{ authStore.authUser?.username }})
+        New Message
       </button>
-      <button
-        :class="{ active: activeTab === 'artist' }"
-        @click="activeTab = 'artist'"
-      >
-        Artist DMs (for
-        {{
-          authStore.authUser?.profile?.artist_profile_data?.name ||
-          "Your Artist"
-        }})
-      </button>
-    </div>
+      <!-- You'll need a route and component for 'chat-create' -->
+    </header>
 
-    <div v-if="chatStore.isLoadingConversations" class="loading">
+    <div v-if="isLoading" class="loading-indicator">
       Loading conversations...
     </div>
-    <div v-else-if="chatStore.error" class="error-message">
-      {{ chatStore.error }}
+    <div v-else-if="errorLoading" class="error-message">
+      {{ errorLoading }}
     </div>
-
-    <div v-else>
-      <div
-        v-show="activeTab === 'user' || !authStore.hasArtistProfile"
-        class="conversation-list user-dms"
-      >
-        <h3 v-if="authStore.hasArtistProfile && sortedUserDMs.length > 0">
-          Messages as {{ authStore.authUser?.username }}
-        </h3>
-        <div
-          v-if="sortedUserDMs.length === 0 && !chatStore.isLoadingConversations"
-          class="empty-list"
-        >
-          No direct messages as {{ authStore.authUser?.username }}.
-        </div>
+    <div v-else class="conversations-container">
+      <div v-if="displayedConversations.length > 0" class="conversation-list">
         <ConversationListItem
-          v-for="convo in sortedUserDMs"
-          :key="convo.id"
-          :conversation="convo"
-          @click="navigateToConversation(convo.id)"
+          v-for="conv in displayedConversations"
+          :key="conv.id"
+          :conversation="conv"
+          @click="navigateToConversation(conv.id)"
         />
       </div>
-
-      <div
-        v-if="authStore.hasArtistProfile"
-        v-show="activeTab === 'artist'"
-        class="conversation-list artist-dms"
-      >
-        <h3>
-          Messages for
-          {{ authStore.authUser?.profile?.artist_profile_data?.name }} [Artist]
-        </h3>
-        <div
-          v-if="
-            sortedArtistDMs.length === 0 && !chatStore.isLoadingConversations
-          "
-          class="empty-list"
-        >
-          No messages for your artist profile yet.
-        </div>
-        <ConversationListItem
-          v-for="convo in sortedArtistDMs"
-          :key="convo.id"
-          :conversation="convo"
-          @click="navigateToConversation(convo.id)"
-        />
-      </div>
-    </div>
-
-    <!-- New Message Modal -->
-    <div
-      v-if="showNewMessageModal"
-      class="modal-overlay"
-      @click.self="showNewMessageModal = false"
-    >
-      <div class="modal-content" @click.stop>
-        <h3>
-          New Message to
-          {{ newMessageRecipientType === "user" ? "User" : "Artist" }}
-        </h3>
-
-        <!-- Initiator Identity Selector -->
-        <div class="form-group" v-if="authStore.hasArtistProfile">
-          <label for="new-message-initiator-identity">Send as:</label>
-          <select
-            id="new-message-initiator-identity"
-            v-model="newConversationInitiatorIdentity"
-          >
-            <option value="USER">
-              {{ authStore.authUser?.username }} (User)
-            </option>
-            <option
-              value="ARTIST"
-              v-if="authStore.authUser?.profile?.artist_profile_data"
-            >
-              {{ authStore.authUser.profile.artist_profile_data.name }} (Artist)
-            </option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label :for="`recipient-${newMessageRecipientType}-id`">
-            Recipient
-            {{ newMessageRecipientType === "user" ? "User" : "Artist" }} ID:
-          </label>
-          <input
-            type="number"
-            :id="`recipient-${newMessageRecipientType}-id`"
-            v-model.number="newMessageRecipientId"
-            placeholder="Enter ID"
-            required
-          />
-        </div>
-        <div class="form-group">
-          <label for="new-message-text">Message:</label>
-          <textarea
-            id="new-message-text"
-            v-model="newMessageText"
-            rows="3"
-            required
-          ></textarea>
-        </div>
-        <p v-if="newMessageError" class="error-message modal-error">
-          {{ newMessageError }}
+      <div v-else class="empty-state">
+        <p v-if="activeTab === 'user'">
+          No direct messages for your user account yet.
         </p>
-        <div class="modal-actions">
-          <button
-            @click="handleSendNewMessage"
-            :disabled="chatStore.isSendingMessage"
-          >
-            {{ chatStore.isSendingMessage ? "Sending..." : "Send" }}
-          </button>
-          <button
-            @click="showNewMessageModal = false"
-            :disabled="chatStore.isSendingMessage"
-          >
-            Cancel
-          </button>
-        </div>
+        <p v-if="activeTab === 'artist'">
+          No direct messages for your artist profile yet.
+        </p>
       </div>
     </div>
   </div>
@@ -271,109 +126,77 @@ const navigateToConversation = (conversationId: number) => {
   margin: 1rem auto;
   padding: 1rem;
 }
-.chat-list-view h2 {
-  margin-bottom: 1.5rem;
-}
-.new-message-actions {
-  margin-bottom: 1.5rem;
+
+.chat-list-header {
   display: flex;
-  gap: 1rem;
-}
-.new-message-actions button {
-  padding: 0.5em 1em;
-}
-.tabs {
-  margin-bottom: 1rem;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
   border-bottom: 1px solid var(--color-border);
 }
-.tabs button {
-  padding: 0.5rem 1rem;
-  border: none;
-  background-color: transparent;
-  cursor: pointer;
-  font-size: 1em;
-  color: var(--color-text-light);
-  border-bottom: 2px solid transparent;
-}
-.tabs button.active {
-  color: var(--color-accent);
-  border-bottom-color: var(--color-accent);
-  font-weight: bold;
-}
-.conversation-list {
-  margin-top: 1rem;
-}
-.conversation-list h3 {
-  font-size: 1.2em;
-  color: var(--color-heading);
-  margin-bottom: 0.8rem;
-}
-.empty-list {
-  color: var(--color-text-light);
-  padding: 1rem;
-  text-align: center;
-  font-style: italic;
-}
-.loading,
-.error-message {
-  text-align: center;
-  padding: 1rem;
-  font-style: italic;
-}
-.error-message {
-  color: var(--vt-c-red-dark);
+
+.chat-list-header h2 {
+  margin: 0;
+  font-size: 1.8em;
 }
 
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.6);
+.tabs {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1050;
+  gap: 0.5rem;
 }
-.modal-content {
-  background-color: var(--color-background-soft);
-  padding: 2rem;
-  border-radius: 8px;
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-  width: 90%;
-  max-width: 450px;
-}
-.modal-content h3 {
-  margin-top: 0;
-  margin-bottom: 1.5rem;
-}
-.modal-content .form-group {
-  margin-bottom: 1rem;
-}
-.modal-content label {
-  display: block;
-  margin-bottom: 0.3rem;
-}
-.modal-content input,
-.modal-content textarea,
-.modal-content select {
-  width: 100%;
-  padding: 0.5rem;
+
+.tabs button {
+  padding: 0.5em 1em;
   border: 1px solid var(--color-border);
+  background-color: var(--color-background-soft);
+  cursor: pointer;
   border-radius: 4px;
-  background-color: var(--color-background);
-  color: var(--color-text);
-}
-.modal-actions {
-  margin-top: 1.5rem;
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-}
-.modal-error {
   font-size: 0.9em;
-  margin-top: 0.5rem;
+}
+
+.tabs button.active {
+  background-color: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
+}
+
+.tabs button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.new-chat-button {
+  background-color: var(--color-accent);
+  color: white;
+  border: none;
+  padding: 0.6em 1em;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+.new-chat-button:hover {
+  background-color: var(--color-accent-hover);
+}
+
+.loading-indicator,
+.error-message,
+.empty-state {
+  text-align: center;
+  padding: 2rem;
+  color: var(--color-text-light);
+}
+
+.error-message {
   color: var(--vt-c-red-dark);
+  background-color: var(--vt-c-red-soft);
+  border: 1px solid var(--vt-c-red);
+  border-radius: 4px;
+}
+
+.conversation-list {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden; /* For child border radius if needed */
 }
 </style>

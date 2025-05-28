@@ -1,7 +1,8 @@
 export interface ArtistInfo {
   id: number;
   name: string;
-  user_id: number;
+  user_id: number; // ID of the User model that owns this Artist
+  artist_picture?: string | null; // Add artist_picture here if ArtistInfo is used for avatars
 }
 
 export interface TrackInfoFromApi {
@@ -9,15 +10,15 @@ export interface TrackInfoFromApi {
   title: string;
   track_number: number | null;
   duration_in_seconds: number | null;
-  audio_file: string;
-  stream_url: string;
+  audio_file: string; // This is likely the storage path, not stream URL
+  stream_url: string; // This is the one for playing
   genres_data?: { id: number; name: string }[];
 }
 
 export interface ReleaseDetail {
   id: number;
   title: string;
-  artist: ArtistInfo;
+  artist: ArtistInfo; // ArtistInfo should include id and name
   product_info_id: number | null;
   tracks: TrackInfoFromApi[];
   cover_art: string | null;
@@ -40,7 +41,7 @@ export interface GeneratedDownloadStatus {
   unique_identifier: string;
   release: number;
   release_title: string;
-  user: number;
+  user: number; // User ID
   requested_format: string;
   requested_format_display: string;
   status: "PENDING" | "PROCESSING" | "READY" | "FAILED" | "EXPIRED";
@@ -53,9 +54,9 @@ export interface GeneratedDownloadStatus {
 }
 
 export interface PlayerTrackInfo {
-  id: number;
+  id: number; // Track ID
   title: string;
-  audio_file: string;
+  audio_file: string; // Stream URL
   artistName?: string;
   releaseTitle?: string;
   coverArtUrl?: string | null;
@@ -63,29 +64,29 @@ export interface PlayerTrackInfo {
 }
 
 export interface ProductSummaryForCart {
-  id: number;
-  name: string;
-  price: string;
+  id: number; // Product ID
+  name: string; // Usually Release title
+  price: string; // Default price of the product
   currency: string;
   cover_art?: string | null;
   release_title?: string | null;
   artist_name?: string | null;
-  release_id?: number | null;
+  release_id?: number | null; // ID of the related Release
 }
 
 export interface CartItem {
-  id: number;
+  id: number; // CartItem ID
   product: ProductSummaryForCart;
-  price_override: string | null;
+  price_override: string | null; // For NYP
   added_at: string;
   effective_price_original_currency: string;
   original_currency: string;
-  effective_price_settlement_currency: string | null;
+  effective_price_settlement_currency: string | null; // If prices are converted
 }
 
 export interface Cart {
-  id: number;
-  user: string;
+  id: number; // Cart ID
+  user: string; // Username
   items: CartItem[];
   total_price: string;
   currency: string;
@@ -93,9 +94,11 @@ export interface Cart {
   updated_at: string;
 }
 
+// --- CHAT TYPES ---
 export interface UserChatInfo {
   id: number;
   username: string;
+  // profile_picture?: string | null; // Consider adding for avatars
 }
 
 export interface ArtistChatInfo {
@@ -107,66 +110,63 @@ export interface ArtistChatInfo {
 export interface ChatMessage {
   id: number;
   conversation: number;
-  sender_user: UserChatInfo;
-  sender_identity_type: "USER" | "ARTIST";
-  sending_artist_details: ArtistChatInfo | null;
+  sender_user: UserChatInfo; // The actual User model that sent it
+  sender_identity_type: "USER" | "ARTIST"; // The identity used for THIS message
+  sending_artist_details: ArtistChatInfo | null; // If sender_identity_type is ARTIST
   text: string | null;
-  attachment?: string | null;
-  attachment_url?: string | null;
+  attachment?: string | null; // Raw attachment path (less used by frontend directly)
+  attachment_url?: string | null; // URL to download/stream attachment
   original_attachment_filename?: string | null;
   message_type: "TEXT" | "AUDIO" | "VOICE" | "TRACK_SHARE";
   timestamp: string;
   is_read: boolean;
 }
 
-// For Conversation, add initiator identity fields
 export interface Conversation {
   id: number;
-  participants: UserChatInfo[];
+  participants: UserChatInfo[]; // The User models involved in this conversation
   is_accepted: boolean;
-  initiator_user: UserChatInfo | null; // Changed from initiator
-  initiator_identity_type: "USER" | "ARTIST"; // Added
-  initiator_artist_profile_details: ArtistChatInfo | null; // Added
-  related_artist_recipient_details: ArtistChatInfo | null; // Changed from related_artist
+  initiator_user: UserChatInfo | null; // The User model who created the conversation
+  initiator_identity_type: "USER" | "ARTIST"; // The identity the initiator_user chose
+  initiator_artist_profile_details: ArtistChatInfo | null; // If initiator chose ARTIST
+  related_artist_recipient_details: ArtistChatInfo | null; // If conversation is TO an artist
   created_at: string;
   updated_at: string;
   latest_message: ChatMessage | null;
   unread_count: number;
-  other_participant_username: string | null; // This will need careful re-evaluation based on new identity model
+  other_participant_display_name: string | null; // Name to display for the other party
 }
 
-// Updated CreateMessagePayload for INITIATING conversations
 export interface CreateMessagePayload {
   recipient_user_id?: number | null;
-  recipient_artist_id?: number | null; // This refers to the ID of the Artist being targeted
+  recipient_artist_id?: number | null;
   text?: string | null;
   attachment?: File | null;
   message_type?: "TEXT" | "AUDIO" | "VOICE";
-  // Fields for the INITIATOR's identity
-  initiator_identity_type?: "USER" | "ARTIST"; // Changed from sender_identity_type
-  initiator_artist_profile_id?: number | null; // Changed from sending_artist_id (ID of user's own artist profile)
+  initiator_identity_type?: "USER" | "ARTIST";
+  initiator_artist_profile_id?: number | null;
 }
 
-// Payload for REPLIES will be simpler, not needing recipient or initiator identity fields
 export type ReplyMessagePayload = Pick<
   CreateMessagePayload,
   "text" | "attachment" | "message_type"
 >;
+// --- END CHAT TYPES ---
 
 export interface OrderItemDetail {
   id: number;
-  product_name: string;
-  quantity: number;
-  price_at_purchase: string;
+  product_name: string; // Name of the product (e.g., release title)
+  quantity: number; // Should always be 1 for digital items
+  price_at_purchase: string; // Price paid for this item
 }
 
 export interface OrderDetail {
   id: number;
-  user: string;
-  status: string;
-  total_amount: string;
-  currency: string;
+  user: string; // Username of the buyer
+  status: string; // e.g., PENDING, COMPLETED, FAILED
+  total_amount: string; // Total amount of the order
+  currency: string; // Currency of the order
   created_at: string;
   updated_at: string;
-  items: OrderItemDetail[];
+  items: OrderItemDetail[]; // List of items in the order
 }

@@ -2,39 +2,32 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.core.validators import MaxLengthValidator 
 from .models import Conversation, Message
-from users.serializers import UserSerializer 
+from users.serializers import UserSerializer as FullUserSerializer # Renamed for clarity
 from music.models import Artist 
-# from music.serializers import ArtistSerializer as FullArtistSerializer # Not strictly needed here now
 import logging 
 
 User = get_user_model()
 MAX_MESSAGE_LENGTH = 1000 
 logger = logging.getLogger(__name__) 
 
-class ArtistChatSerializer(serializers.ModelSerializer): 
+class BasicUserSerializer(serializers.ModelSerializer): # For embedding in chat related objects
+    class Meta:
+        model = User
+        fields = ['id', 'username'] # Add other fields like profile picture if needed later
+
+class ArtistChatInfoSerializer(serializers.ModelSerializer): # For embedding artist info
     class Meta:
         model = Artist
         fields = ['id', 'name', 'artist_picture'] 
 
-class SendingArtistSerializer(serializers.ModelSerializer): # For message.sending_artist
-    class Meta:
-        model = Artist
-        fields = ['id', 'name', 'artist_picture']
-
-class InitiatorArtistSerializer(serializers.ModelSerializer): # For conversation.initiator_artist_profile
-    class Meta:
-        model = Artist
-        fields = ['id', 'name', 'artist_picture']
-
 
 class MessageSerializer(serializers.ModelSerializer):
-    sender_user = UserSerializer(read_only=True) 
+    sender_user = BasicUserSerializer(read_only=True) 
     attachment_url = serializers.SerializerMethodField(read_only=True)
     original_attachment_filename = serializers.CharField(read_only=True, allow_null=True)
     
-    # These are now read_only as they are derived from conversation context or set on creation
     sender_identity_type = serializers.ChoiceField(choices=Message.SenderIdentity.choices, read_only=True)
-    sending_artist_details = SendingArtistSerializer(source='sending_artist', read_only=True, allow_null=True)
+    sending_artist_details = ArtistChatInfoSerializer(source='sending_artist', read_only=True, allow_null=True)
 
     class Meta:
         model = Message
@@ -45,19 +38,17 @@ class MessageSerializer(serializers.ModelSerializer):
             'sender_identity_type', 
             'sending_artist_details',
             'text',
-            'attachment', # Still writeable for upload
+            'attachment', 
             'attachment_url', 
             'original_attachment_filename', 
             'message_type',
             'timestamp', 
             'is_read'
         ]
-        # sender_identity_type and sending_artist_id are no longer direct inputs here
-        # They will be set by the view based on conversation context.
         read_only_fields = [
             'id', 'timestamp', 'sender_user', 'attachment_url', 
             'original_attachment_filename', 'conversation', 
-            'sender_identity_type', 'sending_artist_details' # Make these read-only
+            'sender_identity_type', 'sending_artist_details'
         ] 
         extra_kwargs = {
             'attachment': {'write_only': True, 'required': False}, 
@@ -69,39 +60,39 @@ class MessageSerializer(serializers.ModelSerializer):
             }
         }
 
-    def get_attachment_url(self, obj):
+    def get_attachment_url(self, obj: Message):
         if obj.attachment and obj.attachment.name:
             request = self.context.get('request')
             if request:
                 from django.urls import reverse
                 try:
+                    # Ensure your URL name matches what's in chat/urls.py
                     download_url = reverse('chat-attachment-download', kwargs={'message_pk': obj.pk})
                     return request.build_absolute_uri(download_url)
                 except Exception as e:
-                    logger.error(f"Could not reverse chat-attachment-download URL: {e}")
+                    logger.error(f"Could not reverse chat-attachment-download URL for message {obj.pk}: {e}")
+                    # Fallback if URL reversing fails, but direct .url might not be secure for private files
                     if hasattr(obj.attachment, 'url'):
                          return request.build_absolute_uri(obj.attachment.url)
+            # Fallback if no request context (e.g. in shell or tests without request factory)
             elif hasattr(obj.attachment, 'url'):
-                return obj.attachment.url
+                return obj.attachment.url # This might expose media root if not careful with S3/private files
         return None
     
-    # create and update are simplified as identity is set by the view now before calling .save() on serializer instance
     def create(self, validated_data):
-        attachment_file = validated_data.get('attachment')
-        if attachment_file:
-            validated_data['original_attachment_filename'] = attachment_file.name
-        # sender_user, conversation, sender_identity_type, sending_artist are passed to .save() in the view
+        # sender_user, conversation, sender_identity_type, sending_artist
+        # are passed to .save() in the view, not part of `validated_data` here.
+        
+        # original_attachment_filename is handled by the model's save method
+        # if an attachment is present.
         return super().create(validated_data)
 
-    def update(self, instance, validated_data): # Updates are less common for messages
-        attachment_file = validated_data.get('attachment')
-        if attachment_file:
-            validated_data['original_attachment_filename'] = attachment_file.name
-        elif 'attachment' in validated_data and attachment_file is None:
-            validated_data['original_attachment_filename'] = None
+    def update(self, instance, validated_data):
+        # Updates are less common for messages, but if implemented:
+        # original_attachment_filename is handled by model's save method.
         return super().update(instance, validated_data)
 
-    def validate(self, data): # Basic content validation remains
+    def validate(self, data):
         message_type = data.get('message_type', self.instance.message_type if self.instance else Message.MessageType.TEXT)
         text = data.get('text', None) 
         if text is None and self.instance and 'text' not in data: 
@@ -125,8 +116,8 @@ class MessageSerializer(serializers.ModelSerializer):
         if not text and not new_attachment_provided and not current_attachment_exists:
              raise serializers.ValidationError("Message must have either text or an attachment.")
         
-        if new_attachment_provided and message_type != Message.MessageType.TEXT:
-            if text is not None and not text.strip(): 
+        if new_attachment_provided and message_type != Message.MessageType.TEXT: # For AUDIO/VOICE
+            if text is not None and not text.strip(): # If text is provided but empty for audio/voice, make it null
                  data['text'] = None 
         
         if new_attachment_provided: 
@@ -141,67 +132,94 @@ class MessageSerializer(serializers.ModelSerializer):
         return data
 
 class ConversationSerializer(serializers.ModelSerializer):
-    participants = UserSerializer(many=True, read_only=True)
-    latest_message = MessageSerializer(read_only=True, source='messages.last') 
+    participants = BasicUserSerializer(many=True, read_only=True)
+    latest_message = MessageSerializer(read_only=True, source='messages.last') # Get the last message
     
-    # Initiator details
-    initiator_user = UserSerializer(read_only=True)
+    initiator_user = BasicUserSerializer(read_only=True)
     initiator_identity_type = serializers.ChoiceField(choices=Conversation.IdentityType.choices, read_only=True)
-    initiator_artist_profile_details = InitiatorArtistSerializer(source='initiator_artist_profile', read_only=True, allow_null=True)
+    initiator_artist_profile_details = ArtistChatInfoSerializer(source='initiator_artist_profile', read_only=True, allow_null=True)
 
-    # Recipient artist context
-    related_artist_recipient_details = ArtistChatSerializer(source='related_artist_recipient', read_only=True, allow_null=True)
+    related_artist_recipient_details = ArtistChatInfoSerializer(source='related_artist_recipient', read_only=True, allow_null=True)
     
     unread_count = serializers.SerializerMethodField()
-    other_participant_username = serializers.SerializerMethodField() # May need adjustment based on new identities
+    # This field is crucial for the frontend to display the "chat with" name
+    other_participant_display_name = serializers.SerializerMethodField() 
 
     class Meta:
         model = Conversation
         fields = [
             'id', 'participants', 'is_accepted', 
-            'initiator_user', 'initiator_identity_type', 'initiator_artist_profile_details', # New initiator fields
-            'related_artist_recipient_details', # Updated recipient artist field
+            'initiator_user', 'initiator_identity_type', 'initiator_artist_profile_details',
+            'related_artist_recipient_details', 
             'created_at', 'updated_at', 'latest_message', 'unread_count',
-            'other_participant_username'
+            'other_participant_display_name' # Use this instead of other_participant_username
         ]
         read_only_fields = [
             'id', 'created_at', 'updated_at', 'latest_message', 'unread_count', 
+            'participants', # Participants are set by the backend on creation
             'initiator_user', 'initiator_identity_type', 'initiator_artist_profile_details',
-            'related_artist_recipient_details'
+            'related_artist_recipient_details', 'other_participant_display_name'
         ] 
 
-    def get_unread_count(self, obj):
+    def get_unread_count(self, obj: Conversation):
         user = self.context['request'].user
         if user.is_authenticated:
+            # Count unread messages not sent by the current user
             return obj.messages.filter(is_read=False).exclude(sender_user=user).count()
         return 0
         
-    def get_other_participant_username(self, obj): # This needs careful re-evaluation
+    def get_other_participant_display_name(self, obj: Conversation):
         requesting_user = self.context.get('request').user
         if not requesting_user.is_authenticated: return None
 
-        other_user_model = obj.get_other_participant(requesting_user)
-        if not other_user_model: return None # Should not happen in a 2-party convo
+        # Case 1: Conversation is directed TO an artist profile
+        if obj.related_artist_recipient:
+            # If I (requesting_user) am the owner of this target artist profile
+            # (i.e., this conversation is a DM sent TO MY artist profile)
+            # Then the "other party" is the initiator of the conversation.
+            # We need to display the initiator's identity.
+            if hasattr(requesting_user, 'artist_profile') and \
+               requesting_user.artist_profile and \
+               requesting_user.artist_profile == obj.related_artist_recipient:
+                
+                if obj.initiator_identity_type == Conversation.IdentityType.ARTIST and obj.initiator_artist_profile:
+                    return f"{obj.initiator_artist_profile.name} [Artist]"
+                elif obj.initiator_user: # Initiator was a User
+                    return f"{obj.initiator_user.username} [User]"
+                else: # Should ideally not happen if data is consistent
+                    return "Unknown Initiator"
+            else:
+                # I am NOT the owner of the target artist profile.
+                # This means either I DMed them, or it's an Artist-to-Artist DM where I am the initiator.
+                # In either case, the "other party" context for display is the target artist.
+                return f"{obj.related_artist_recipient.name} [Artist]"
+        else:
+            # Case 2: Standard User-to-User DM context (related_artist_recipient is null)
+            # Find the other User model among participants.
+            other_user_model = obj.participants.exclude(id=requesting_user.id).first()
+            if not other_user_model: return "Conversation" # Fallback, should not happen in a 2-party convo
 
-        # If this conversation was initiated by an Artist towards me (as User)
-        if obj.initiator_user == other_user_model and \
-           obj.initiator_identity_type == Conversation.IdentityType.ARTIST and \
-           obj.initiator_artist_profile:
-            return f"{obj.initiator_artist_profile.name} [Artist]"
+            # If this other user model *is* the initiator of the conversation,
+            # AND they initiated it as an Artist.
+            if obj.initiator_user == other_user_model and \
+               obj.initiator_identity_type == Conversation.IdentityType.ARTIST and \
+               obj.initiator_artist_profile:
+                return f"{obj.initiator_artist_profile.name} [Artist]"
+            else:
+                # Conditions:
+                # 1. Standard User-to-User DM (other user is initiator or recipient, but as User).
+                # 2. An Artist initiated to me (requesting_user, as User), so other_user_model is that Artist's owner,
+                #    but initiator_identity_type is USER for that initiator_user.
+                # 3. I (as User) initiated to another User.
+                # In all these sub-cases, the other_user_model is displayed as a User.
+                return f"{other_user_model.username} [User]"
         
-        # If this conversation is directed towards an Artist (related_artist_recipient)
-        # and I am not that artist's owner (i.e., I am a User DMing an Artist)
-        if obj.related_artist_recipient and \
-           (not hasattr(requesting_user, 'artist_profile') or requesting_user.artist_profile != obj.related_artist_recipient):
-            return f"{obj.related_artist_recipient.name} [Artist]"
-
-        # Default to the other user's username (standard User-to-User or User receiving from Artist)
-        return f"{other_user_model.username} [User]"
+        return "Conversation" # Ultimate fallback
 
 
-class CreateMessageSerializer(serializers.Serializer): # For INITIATING a new conversation
+class CreateMessageSerializer(serializers.Serializer):
     recipient_user_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
-    recipient_artist_id = serializers.IntegerField(write_only=True, required=False, allow_null=True) # This is related_artist_recipient
+    recipient_artist_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     
     text = serializers.CharField(
         required=False, 
@@ -212,13 +230,11 @@ class CreateMessageSerializer(serializers.Serializer): # For INITIATING a new co
     attachment = serializers.FileField(required=False, allow_null=True)
     message_type = serializers.ChoiceField(choices=Message.MessageType.choices, default=Message.MessageType.TEXT)
     
-    # Initiator's identity for THIS new conversation
     initiator_identity_type = serializers.ChoiceField(
         choices=Conversation.IdentityType.choices, 
         default=Conversation.IdentityType.USER,
         required=False 
     )
-    # If initiator_identity_type is ARTIST, this ID must be provided
     initiator_artist_profile_id = serializers.IntegerField(required=False, allow_null=True)
 
 
@@ -234,10 +250,19 @@ class CreateMessageSerializer(serializers.Serializer): # For INITIATING a new co
     def validate_recipient_artist_id(self, value):
         if value is not None: 
             try:
-                artist = Artist.objects.get(id=value)
+                artist = Artist.objects.select_related('user').get(id=value)
                 request = self.context.get('request')
-                if request and hasattr(request.user, 'artist_profile') and request.user.artist_profile and request.user.artist_profile.id == artist.id:
-                    raise serializers.ValidationError("You cannot send a message to your own artist profile as a recipient.")
+                # Prevent sending from User account to own Artist Profile
+                if request and request.user == artist.user:
+                     # Get initiator_identity_type from initial data if present, else context or default
+                    initiator_type_from_initial = self.initial_data.get('initiator_identity_type', Conversation.IdentityType.USER)
+                    if initiator_type_from_initial == Conversation.IdentityType.USER:
+                        raise serializers.ValidationError("You cannot send a message from your user account to your own artist profile.")
+                # Prevent sending from Artist Profile to itself (Artist X to Artist X)
+                initiator_artist_id_from_initial = self.initial_data.get('initiator_artist_profile_id')
+                if initiator_artist_id_from_initial and int(initiator_artist_id_from_initial) == artist.id:
+                    raise serializers.ValidationError("An artist profile cannot send a message to itself.")
+
             except Artist.DoesNotExist:
                  raise serializers.ValidationError("Recipient artist does not exist.")
         return value
@@ -255,7 +280,6 @@ class CreateMessageSerializer(serializers.Serializer): # For INITIATING a new co
                  "recipient_user_id": "Provide either recipient_user_id or recipient_artist_id, not both.",
                  "recipient_artist_id": "Provide either recipient_user_id or recipient_artist_id, not both."})
 
-        # Validate initiator identity
         request_user = self.context.get('request').user
         initiator_identity_type = data.get('initiator_identity_type', Conversation.IdentityType.USER)
         initiator_artist_profile_id = data.get('initiator_artist_profile_id') 
@@ -264,14 +288,15 @@ class CreateMessageSerializer(serializers.Serializer): # For INITIATING a new co
             if not initiator_artist_profile_id:
                 raise serializers.ValidationError({"initiator_artist_profile_id": "initiator_artist_profile_id must be provided if initiating as ARTIST."})
             try:
+                # Ensure the artist profile belongs to the requesting user
                 artist_profile = Artist.objects.get(pk=initiator_artist_profile_id, user=request_user)
-                data['initiator_artist_profile_instance'] = artist_profile # Store instance for the view
+                data['initiator_artist_profile_instance'] = artist_profile 
             except Artist.DoesNotExist:
                 raise serializers.ValidationError({"initiator_artist_profile_id": "Invalid artist ID for initiator or it does not belong to you."})
         elif initiator_identity_type == Conversation.IdentityType.USER:
             if initiator_artist_profile_id:
                 raise serializers.ValidationError({"initiator_artist_profile_id": "initiator_artist_profile_id should not be provided if initiating as USER."})
-            data['initiator_artist_profile_instance'] = None 
+            data['initiator_artist_profile_instance'] = None # Explicitly set to None
 
         message_type = data.get('message_type', Message.MessageType.TEXT)
         text = data.get('text')
@@ -293,8 +318,5 @@ class CreateMessageSerializer(serializers.Serializer): # For INITIATING a new co
                     try: main_type = attachment.content_type.split('/')[0]
                     except IndexError: pass 
                 if main_type != 'audio':
-                    raise serializers.ValidationError({"attachment": "Uploaded file does not appear to be an audio file."})
+                    raise serializers.ValidationError({"attachment": "Uploaded file does not appear to be an audio file for this message type."})
         return data
-
-# For sending REPLIES, the payload is simpler, MessageSerializer is used directly by the view.
-# The view will determine the sender_identity_type and sending_artist for the new message based on Conversation context.
