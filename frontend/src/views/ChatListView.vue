@@ -1,120 +1,152 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { onMounted, computed, ref } from "vue"; // Added ref
 import { useRouter } from "vue-router";
-import { useChatStore } from "@/stores/chat";
+import { useChatStore, type ChatViewIdentityType } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
 import ConversationListItem from "@/components/chat/ConversationListItem.vue";
-// Import a component for creating new messages if you have one
-// import CreateNewMessageModal from '@/components/chat/CreateNewMessageModal.vue';
+import type { Conversation } from "@/types";
 
 const chatStore = useChatStore();
 const authStore = useAuthStore();
 const router = useRouter();
 
-type ActiveTab = "user" | "artist";
-const activeTab = ref<ActiveTab>("user");
-
-// Use computed properties from the store
-const userConversations = computed(() => chatStore.userDirectMessages);
-const artistConversations = computed(() => chatStore.artistDirectMessages);
 const isLoading = computed(() => chatStore.isLoadingConversations);
-const errorLoading = computed(() => chatStore.error);
+const error = computed(() => chatStore.error);
 
-const hasArtistProfile = computed(() => authStore.hasArtistProfile);
-
-const displayedConversations = computed(() => {
-  return activeTab.value === "user"
-    ? userConversations.value
-    : artistConversations.value;
+// Use the new computed properties for requests and accepted conversations
+const pendingRequests = computed(() => {
+  return currentViewIdentity.value === "USER"
+    ? chatStore.pendingUserRequests
+    : chatStore.pendingArtistRequests;
 });
 
-const navigateToConversation = (conversationId: number) => {
+const acceptedConversations = computed(() => {
+  return currentViewIdentity.value === "USER"
+    ? chatStore.acceptedUserConversations
+    : chatStore.acceptedArtistConversations;
+});
+
+const showRequests = ref(false); // For expanding/collapsing requests
+
+const hasArtistProfile = computed(() => authStore.hasArtistProfile);
+const currentViewIdentity = computed({
+  get: () => chatStore.currentChatViewIdentity,
+  set: (value: ChatViewIdentityType) => {
+    chatStore.setActiveChatViewIdentity(value);
+    showRequests.value = false; // Reset on view change
+  },
+});
+
+const openConversation = (conversation: Conversation) => {
   router.push({
     name: "chat-conversation",
-    params: { conversationId: conversationId.toString() },
+    params: { conversationId: conversation.id.toString() },
   });
 };
 
-const switchToTab = (tab: ActiveTab) => {
-  if (tab === "artist" && !hasArtistProfile.value) {
-    alert("You do not have an artist profile to view artist DMs.");
-    return;
-  }
-  activeTab.value = tab;
-};
+// Deprecated startNewChat
+// const startNewChat = () => {
+//   router.push({ name: "chat-create" });
+// };
 
 onMounted(() => {
-  chatStore.fetchConversations();
-  // If the user doesn't have an artist profile, default to user tab even if artist was last active
-  if (activeTab.value === "artist" && !hasArtistProfile.value) {
-    activeTab.value = "user";
+  if (authStore.isLoggedIn) {
+    chatStore.fetchConversations();
+  } else {
+    router.push({ name: "login", query: { redirect: "/chat" } });
   }
 });
-
-// Watch for login/logout to re-fetch conversations
-watch(
-  () => authStore.isLoggedIn,
-  (isLoggedIn) => {
-    if (isLoggedIn) {
-      chatStore.fetchConversations();
-    } else {
-      chatStore.conversations = []; // Clear conversations on logout
-    }
-  }
-);
 </script>
 
 <template>
   <div class="chat-list-view">
-    <header class="chat-list-header">
+    <div class="chat-header">
       <h2>Direct Messages</h2>
-      <div class="tabs" v-if="hasArtistProfile">
-        <button
-          @click="switchToTab('user')"
-          :class="{ active: activeTab === 'user' }"
-        >
-          My User DMs
-        </button>
-        <button
-          @click="switchToTab('artist')"
-          :class="{ active: activeTab === 'artist' }"
-          :disabled="!hasArtistProfile"
-        >
-          My Artist DMs
-        </button>
-      </div>
-      <!-- Add button for initiating new conversation -->
-      <button
-        @click="router.push({ name: 'chat-create' })"
-        class="new-chat-button"
-      >
-        New Message
-      </button>
-      <!-- You'll need a route and component for 'chat-create' -->
-    </header>
+      <!-- Removed New Chat Button -->
+    </div>
 
-    <div v-if="isLoading" class="loading-indicator">
-      Loading conversations...
+    <div v-if="hasArtistProfile" class="chat-view-selector">
+      <button
+        @click="currentViewIdentity = 'USER'"
+        :class="{ active: currentViewIdentity === 'USER' }"
+      >
+        My User DMs
+      </button>
+      <button
+        @click="currentViewIdentity = 'ARTIST'"
+        :class="{ active: currentViewIdentity === 'ARTIST' }"
+        :disabled="!authStore.artistProfileId"
+      >
+        My Artist DMs ({{
+          authStore.authUser?.profile?.artist_profile_data?.name || "Artist"
+        }})
+      </button>
     </div>
-    <div v-else-if="errorLoading" class="error-message">
-      {{ errorLoading }}
+
+    <div v-if="isLoading" class="loading-indicator">Loading chats...</div>
+    <div v-else-if="error" class="error-message">{{ error }}</div>
+    <div
+      v-else-if="
+        pendingRequests.length === 0 && acceptedConversations.length === 0
+      "
+      class="empty-state"
+    >
+      <p v-if="currentViewIdentity === 'USER'">No user direct messages yet.</p>
+      <p v-else>No artist direct messages yet for this profile.</p>
+      <p>Start a new conversation by visiting a user or artist profile.</p>
     </div>
-    <div v-else class="conversations-container">
-      <div v-if="displayedConversations.length > 0" class="conversation-list">
+    <div v-else>
+      <!-- Message Requests Section -->
+      <div v-if="pendingRequests.length > 0" class="message-requests-section">
+        <button
+          @click="showRequests = !showRequests"
+          class="requests-toggle-button"
+        >
+          Message Requests ({{ pendingRequests.length }})
+          <span>{{ showRequests ? "▲" : "▼" }}</span>
+        </button>
+        <div v-if="showRequests" class="conversation-list requests-list">
+          <ConversationListItem
+            v-for="conversation in pendingRequests"
+            :key="`req-${conversation.id}`"
+            :conversation="conversation"
+            @click="openConversation(conversation)"
+          />
+        </div>
+      </div>
+
+      <!-- Accepted Conversations Section -->
+      <h4
+        v-if="acceptedConversations.length > 0 && pendingRequests.length > 0"
+        class="accepted-chats-header"
+      >
+        Accepted Chats
+      </h4>
+      <div
+        v-if="
+          acceptedConversations.length === 0 &&
+          pendingRequests.length > 0 &&
+          showRequests
+        "
+        class="empty-state small-empty"
+      >
+        No accepted chats yet.
+      </div>
+      <div class="conversation-list accepted-list">
         <ConversationListItem
-          v-for="conv in displayedConversations"
-          :key="conv.id"
-          :conversation="conv"
-          @click="navigateToConversation(conv.id)"
+          v-for="conversation in acceptedConversations"
+          :key="`acc-${conversation.id}`"
+          :conversation="conversation"
+          @click="openConversation(conversation)"
         />
       </div>
-      <div v-else class="empty-state">
-        <p v-if="activeTab === 'user'">
-          No direct messages for your user account yet.
-        </p>
-        <p v-if="activeTab === 'artist'">
-          No direct messages for your artist profile yet.
-        </p>
+      <div
+        v-if="
+          acceptedConversations.length === 0 && pendingRequests.length === 0
+        "
+        class="empty-state"
+      >
+        No active conversations.
       </div>
     </div>
   </div>
@@ -122,12 +154,14 @@ watch(
 
 <style scoped>
 .chat-list-view {
-  max-width: 800px;
+  max-width: 700px;
   margin: 1rem auto;
   padding: 1rem;
+  background-color: var(--color-background-soft);
+  border-radius: 8px;
 }
 
-.chat-list-header {
+.chat-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -135,48 +169,35 @@ watch(
   padding-bottom: 1rem;
   border-bottom: 1px solid var(--color-border);
 }
-
-.chat-list-header h2 {
+.chat-header h2 {
   margin: 0;
-  font-size: 1.8em;
+  color: var(--color-heading);
 }
 
-.tabs {
+.chat-view-selector {
   display: flex;
   gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 1rem;
 }
-
-.tabs button {
-  padding: 0.5em 1em;
+.chat-view-selector button {
+  padding: 0.5rem 1rem;
   border: 1px solid var(--color-border);
-  background-color: var(--color-background-soft);
+  background-color: var(--color-background-mute);
+  color: var(--color-text);
+  border-radius: 5px;
   cursor: pointer;
-  border-radius: 4px;
   font-size: 0.9em;
 }
-
-.tabs button.active {
+.chat-view-selector button.active {
   background-color: var(--color-accent);
   color: white;
   border-color: var(--color-accent);
 }
-
-.tabs button:disabled {
-  opacity: 0.5;
+.chat-view-selector button:disabled {
+  opacity: 0.6;
   cursor: not-allowed;
-}
-
-.new-chat-button {
-  background-color: var(--color-accent);
-  color: white;
-  border: none;
-  padding: 0.6em 1em;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.9em;
-}
-.new-chat-button:hover {
-  background-color: var(--color-accent-hover);
 }
 
 .loading-indicator,
@@ -186,17 +207,59 @@ watch(
   padding: 2rem;
   color: var(--color-text-light);
 }
-
 .error-message {
   color: var(--vt-c-red-dark);
   background-color: var(--vt-c-red-soft);
   border: 1px solid var(--vt-c-red);
   border-radius: 4px;
 }
+.empty-state p {
+  margin-bottom: 0.5rem;
+}
+.empty-state.small-empty {
+  padding: 1rem;
+  font-size: 0.9em;
+}
 
-.conversation-list {
+.message-requests-section {
+  margin-bottom: 1.5rem;
+}
+.requests-toggle-button {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background-color: var(--color-background-mute);
   border: 1px solid var(--color-border);
-  border-radius: 6px;
-  overflow: hidden; /* For child border radius if needed */
+  border-radius: 5px;
+  text-align: left;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 1em;
+  color: var(--color-heading);
+}
+.requests-toggle-button:hover {
+  border-color: var(--color-border-hover);
+}
+.requests-toggle-button span {
+  font-size: 0.8em;
+}
+.requests-list {
+  margin-top: 0.5rem;
+  border-left: 2px solid var(--color-accent);
+  padding-left: 0.5rem;
+}
+
+.accepted-chats-header {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.9em;
+  color: var(--color-text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.conversation-list {
+  /* Styles for the list itself, if any */
 }
 </style>

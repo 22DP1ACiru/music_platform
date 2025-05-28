@@ -88,101 +88,116 @@ class ConversationViewSet(viewsets.ModelViewSet):
             return Response(create_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         validated_data = create_serializer.validated_data
-        requesting_user = request.user
         
-        chosen_initiator_identity_type = validated_data.get('initiator_identity_type', Conversation.IdentityType.USER)
-        chosen_initiator_artist_profile_instance = validated_data.get('initiator_artist_profile_instance', None)
+        # Current action's sender details
+        current_sender_user = request.user
+        current_sender_identity_type = validated_data.get('initiator_identity_type', Conversation.IdentityType.USER)
+        current_sender_artist_profile = validated_data.get('initiator_artist_profile_instance', None)
 
+        # Current action's recipient details
         recipient_user_id = validated_data.get('recipient_user_id')
         recipient_artist_id = validated_data.get('recipient_artist_id')
         
-        target_recipient_user_model = None 
-        target_related_artist_recipient_instance = None 
-
+        actual_recipient_user_model = None # The User model instance of the other party
+        targeted_recipient_artist_profile = None # If recipient is an Artist profile, this is it
+        
         if recipient_user_id:
-            try:
-                target_recipient_user_model = User.objects.get(id=recipient_user_id)
-                if requesting_user.id == target_recipient_user_model.id:
-                     return Response({"error": "You cannot send a message to yourself as a user."}, status=status.HTTP_400_BAD_REQUEST)
-            except User.DoesNotExist:
-                return Response({"error": "Recipient user not found."}, status=status.HTTP_404_NOT_FOUND)
+            try: actual_recipient_user_model = User.objects.get(id=recipient_user_id)
+            except User.DoesNotExist: return Response({"error": "Recipient user not found."}, status=status.HTTP_404_NOT_FOUND)
         elif recipient_artist_id:
             try:
-                target_related_artist_recipient_instance = Artist.objects.select_related('user').get(id=recipient_artist_id)
-                target_recipient_user_model = target_related_artist_recipient_instance.user # User who owns the target artist
-                if requesting_user.id == target_recipient_user_model.id and chosen_initiator_identity_type == Conversation.IdentityType.USER:
-                    return Response({"error": "You cannot send a message from your user account to your own artist profile."}, status=status.HTTP_400_BAD_REQUEST)
-                if chosen_initiator_identity_type == Conversation.IdentityType.ARTIST and \
-                   chosen_initiator_artist_profile_instance and \
-                   chosen_initiator_artist_profile_instance == target_related_artist_recipient_instance:
-                    return Response({"error": "An artist profile cannot send a message to itself."}, status=status.HTTP_400_BAD_REQUEST)
+                targeted_recipient_artist_profile = Artist.objects.select_related('user').get(id=recipient_artist_id)
+                actual_recipient_user_model = targeted_recipient_artist_profile.user 
             except Artist.DoesNotExist: return Response({"error": "Recipient artist not found."}, status=status.HTTP_404_NOT_FOUND)
-            except User.DoesNotExist: return Response({"error": "Artist owner user not found. This should not happen."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            except User.DoesNotExist: return Response({"error": "Artist owner user not found."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         else: return Response({"error": "No recipient specified."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Prevent initiating a message from an artist profile to its own user account
-        if chosen_initiator_identity_type == Conversation.IdentityType.ARTIST and \
-           chosen_initiator_artist_profile_instance and \
-           target_recipient_user_model == requesting_user and \
-           not target_related_artist_recipient_instance: 
-            return Response({"error": "You cannot send a message from your artist profile to your own user account."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # --- REVISED LOGIC FOR FINDING/CREATING UNIQUE CONVERSATION ---
-        user1 = requesting_user
-        user2 = target_recipient_user_model
+        # --- Self-messaging Validations ---
+        if current_sender_user == actual_recipient_user_model: # Both underlying users are the same
+            is_sender_user_identity = current_sender_identity_type == Conversation.IdentityType.USER
+            is_sender_artist_identity = current_sender_identity_type == Conversation.IdentityType.ARTIST
+            is_recipient_artist_target = targeted_recipient_artist_profile is not None
 
-        # Build the base query for participants: must contain user1 AND user2.
-        base_query = Conversation.objects.filter(participants=user1).filter(participants=user2)
+            if is_sender_user_identity and not is_recipient_artist_target: # User to Self User
+                return Response({"error": "You cannot send a message to yourself as a user."}, status=status.HTTP_400_BAD_REQUEST)
+            if is_sender_user_identity and is_recipient_artist_target and targeted_recipient_artist_profile.user == current_sender_user: # User to Own Artist
+                return Response({"error": "You cannot send a message from your user account to your own artist profile."}, status=status.HTTP_400_BAD_REQUEST)
+            if is_sender_artist_identity and current_sender_artist_profile and not is_recipient_artist_target: # Artist to Own User
+                return Response({"error": "You cannot send a message from your artist profile to your own user account."}, status=status.HTTP_400_BAD_REQUEST)
+            if is_sender_artist_identity and current_sender_artist_profile and is_recipient_artist_target and current_sender_artist_profile == targeted_recipient_artist_profile: # Artist to Self Artist
+                return Response({"error": "An artist profile cannot send a message to itself."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # --- Find Existing Conversation ---
+        # A conversation is uniquely defined by the two Users involved and the "channel type"
+        # Channel type is determined by:
+        #   - Who initiated AS what identity (User or specific Artist)
+        #   - Who was targeted AS what identity (User or specific Artist)
 
-        # Further filter by the target artist recipient context
-        if target_related_artist_recipient_instance:
-            base_query = base_query.filter(
-                related_artist_recipient=target_related_artist_recipient_instance
-            )
-        else: # Standard User-to-User DM (or Artist-to-User DM where target is a User)
-            base_query = base_query.filter(
-                related_artist_recipient__isnull=True
-            )
-        
-        # Now, from these candidates, find one that ONLY has these two participants.
-        conversation = None
-        # Efficiently check if any candidate strictly has only 2 participants.
-        # This avoids iterating in Python if possible.
-        # We are looking for a conversation that includes user1, includes user2,
-        # matches target_related_artist_recipient_instance, and has participant_count == 2.
-        
-        # The annotate and filter for count should be applied on the base_query itself.
-        final_candidate_query = base_query.annotate(
+        # First, get all conversations involving *exactly* these two users
+        conversations_between_users = Conversation.objects.annotate(
             p_count=Count('participants')
-        ).filter(p_count=2)
+        ).filter(
+            p_count=2,
+            participants=current_sender_user
+        ).filter(
+            participants=actual_recipient_user_model
+        )
+
+        found_conversation = None
+        for conv_candidate in conversations_between_users:
+            # Case A: current_sender initiated this candidate conv, check if identities match
+            if conv_candidate.initiator_user == current_sender_user and \
+               conv_candidate.initiator_identity_type == current_sender_identity_type and \
+               conv_candidate.initiator_artist_profile == current_sender_artist_profile and \
+               conv_candidate.related_artist_recipient == targeted_recipient_artist_profile:
+                found_conversation = conv_candidate
+                break
+            
+            # Case B: actual_recipient_user_model initiated this candidate conv.
+            # Check if the candidate's initiation matches the *inverse* of the current send attempt.
+            #   - candidate's initiator_user must be actual_recipient_user_model
+            #   - candidate's initiator_identity_type must match how actual_recipient_user_model is being targeted now
+            #   - candidate's initiator_artist_profile must match targeted_recipient_artist_profile (if any)
+            #   - candidate's related_artist_recipient must match current_sender_artist_profile (if any)
+            
+            # Determine the identity of the actual_recipient_user_model if they were the initiator
+            recipient_as_initiator_identity_type = Conversation.IdentityType.ARTIST if targeted_recipient_artist_profile else Conversation.IdentityType.USER
+            recipient_as_initiator_artist_profile = targeted_recipient_artist_profile # This is their artist profile if they are an artist target
+
+            if conv_candidate.initiator_user == actual_recipient_user_model and \
+               conv_candidate.initiator_identity_type == recipient_as_initiator_identity_type and \
+               conv_candidate.initiator_artist_profile == recipient_as_initiator_artist_profile and \
+               conv_candidate.related_artist_recipient == current_sender_artist_profile: # Target was current sender's artist (if any)
+                found_conversation = conv_candidate
+                break
         
-        conversation = final_candidate_query.first()
-        
-        if not conversation:
-            conversation = Conversation.objects.create(
-                initiator_user=requesting_user, 
-                initiator_identity_type=chosen_initiator_identity_type,
-                initiator_artist_profile=chosen_initiator_artist_profile_instance,
+        if not found_conversation:
+            found_conversation = Conversation.objects.create(
+                initiator_user=current_sender_user, 
+                initiator_identity_type=current_sender_identity_type,
+                initiator_artist_profile=current_sender_artist_profile,
                 is_accepted=False, 
-                related_artist_recipient=target_related_artist_recipient_instance 
+                related_artist_recipient=targeted_recipient_artist_profile 
             )
-            conversation.participants.add(user1, user2)
-            logger.info(f"Created new conversation (ID: {conversation.id}) between {user1.username} and {user2.username}, target_artist: {target_related_artist_recipient_instance.name if target_related_artist_recipient_instance else 'N/A'}")
+            found_conversation.participants.add(current_sender_user, actual_recipient_user_model)
+            logger.info(f"CREATED New Conversation (ID: {found_conversation.id}): "
+                        f"Initiator: {current_sender_user.username} (as {current_sender_identity_type}, ArtistID: {current_sender_artist_profile.id if current_sender_artist_profile else 'N/A'}), "
+                        f"Recipient User: {actual_recipient_user_model.username}, Recipient Artist Target: {targeted_recipient_artist_profile.name if targeted_recipient_artist_profile else 'N/A (User Target)'}")
         else:
-            logger.info(f"Found existing conversation (ID: {conversation.id}) between {user1.username} and {user2.username}, target_artist: {target_related_artist_recipient_instance.name if target_related_artist_recipient_instance else 'N/A'}")
+            logger.info(f"FOUND Existing Conversation (ID: {found_conversation.id})")
 
         new_message = Message( 
-            conversation=conversation,
-            sender_user=requesting_user,
-            sender_identity_type=chosen_initiator_identity_type, 
-            sending_artist=chosen_initiator_artist_profile_instance,
+            conversation=found_conversation,
+            sender_user=current_sender_user,
+            sender_identity_type=current_sender_identity_type, 
+            sending_artist=current_sender_artist_profile,
             text=validated_data.get('text'),
             attachment=validated_data.get('attachment'),
             message_type=validated_data.get('message_type', Message.MessageType.TEXT),
         )
         new_message.save()
         
-        conv_serializer = ConversationSerializer(conversation, context={'request': request})
+        conv_serializer = ConversationSerializer(found_conversation, context={'request': request})
         return Response(conv_serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='reply', serializer_class=MessageSerializer)
@@ -192,31 +207,21 @@ class ConversationViewSet(viewsets.ModelViewSet):
         
         message_sender_identity_type: Message.SenderIdentity
         message_sending_artist_instance: Artist | None = None
-
-        # Determine the identity for this reply message.
-        # If the user has an artist profile that is relevant to this conversation context,
-        # they might want to choose. For now, let's keep it simpler:
         
-        # If I am the original initiator of this conversation.
         if conversation.initiator_user == requesting_user:
-            # Reply with the same identity type used to initiate the conversation.
             if conversation.initiator_identity_type == Conversation.IdentityType.ARTIST:
                 message_sender_identity_type = Message.SenderIdentity.ARTIST
                 message_sending_artist_instance = conversation.initiator_artist_profile
-            else: # USER
+            else: 
                 message_sender_identity_type = Message.SenderIdentity.USER
                 message_sending_artist_instance = None
         else: 
-            # I am replying to a conversation someone else started.
-            # If this conversation is directed TO MY ARTIST profile:
             if conversation.related_artist_recipient and \
                hasattr(requesting_user, 'artist_profile') and \
                requesting_user.artist_profile == conversation.related_artist_recipient:
-                # I should reply AS this Artist.
                 message_sender_identity_type = Message.SenderIdentity.ARTIST
-                message_sending_artist_instance = conversation.related_artist_recipient # My artist profile
+                message_sending_artist_instance = conversation.related_artist_recipient
             else:
-                # It's a User-to-User DM, or an Artist DMed me (as User). I reply as User.
                 message_sender_identity_type = Message.SenderIdentity.USER
                 message_sending_artist_instance = None
         

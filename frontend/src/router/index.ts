@@ -99,12 +99,12 @@ const router = createRouter({
       component: () => import("../views/ChatListView.vue"),
       meta: { requiresAuth: true },
     },
-    {
-      path: "/chat/new", // Define the path for creating a new chat
-      name: "chat-create", // The name you're trying to navigate to
-      component: () => import("../views/CreateChatView.vue"), // Create this component
-      meta: { requiresAuth: true },
-    },
+    // {
+    //   path: "/chat/new", // Define the path for creating a new chat
+    //   name: "chat-create", // The name you're trying to navigate to
+    //   component: () => import("../views/CreateChatView.vue"), // Create this component
+    //   meta: { requiresAuth: true },
+    // },
     {
       path: "/chat/:conversationId",
       name: "chat-conversation",

@@ -1,10 +1,13 @@
-// frontend/src/views/ArtistDetailView.vue
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import axios from "axios";
 import { useAuthStore } from "@/stores/auth";
 import ArtistEditForm from "@/components/ArtistEditForm.vue";
+import { useChatStore } from "@/stores/chat"; // Import chat store
+import type {
+  Conversation, // Import Conversation type
+} from "@/types";
 
 // --- Interfaces ---
 interface ArtistDetail {
@@ -18,17 +21,14 @@ interface ArtistDetail {
   user_id: number; // User ID (from ReadOnlyField)
 }
 
-// Interface for individual release items within the paginated response
 interface ReleaseSummary {
   id: number;
   title: string;
   cover_art: string | null;
   release_type: string;
-  // Add release_type_display if your backend serializer for this view includes it
   release_type_display?: string;
 }
 
-// Interface for the paginated response from /releases/?artist=ID
 interface PaginatedArtistReleasesResponse {
   count: number;
   next: string | null;
@@ -36,15 +36,15 @@ interface PaginatedArtistReleasesResponse {
   results: ReleaseSummary[];
 }
 
-// --- Props ---
 const props = defineProps<{
   id: string;
 }>();
 
 const authStore = useAuthStore();
+const chatStore = useChatStore();
 const router = useRouter();
 const artist = ref<ArtistDetail | null>(null);
-const releases = ref<ReleaseSummary[]>([]); // This will hold the array of ReleaseSummary
+const releases = ref<ReleaseSummary[]>([]);
 const isLoadingArtist = ref(true);
 const isLoadingReleases = ref(true);
 const error = ref<string | null>(null);
@@ -57,6 +57,12 @@ const isOwner = computed(() => {
     authStore.authUser &&
     artist.value &&
     artist.value.user_id === authStore.authUser.id
+  );
+});
+
+const isMyArtistProfile = computed(() => {
+  return (
+    authStore.isLoggedIn && authStore.artistProfileId === parseInt(props.id, 10)
   );
 });
 
@@ -82,14 +88,13 @@ const fetchArtistDetail = async (artistId: string) => {
 
 const fetchArtistReleases = async (artistId: string) => {
   isLoadingReleases.value = true;
-  releases.value = []; // Initialize as empty array
+  releases.value = [];
   try {
     console.log(`Fetching releases for artist ID: ${artistId}`);
-    // Expect the paginated response
     const response = await axios.get<PaginatedArtistReleasesResponse>(
       `/releases/?artist=${artistId}`
     );
-    releases.value = response.data.results; // Correctly assign the results array
+    releases.value = response.data.results;
   } catch (err) {
     console.error(`Failed to fetch releases for artist ${artistId}:`, err);
   } finally {
@@ -119,8 +124,119 @@ const handleUpdateError = (errorMessage: string | null) => {
   editError.value = errorMessage;
 };
 
+const startChatWithArtist = async () => {
+  if (!artist.value || !authStore.isLoggedIn || !authStore.authUser) {
+    alert("You need to be logged in to send a message.");
+    router.push({
+      name: "login",
+      query: { redirect: router.currentRoute.value.fullPath },
+    });
+    return;
+  }
+
+  // Determine the sender's identity for this new chat
+  const senderIdentity = chatStore.currentChatViewIdentity; // This is 'USER' or 'ARTIST'
+  const senderArtistProfileId =
+    senderIdentity === "ARTIST" ? authStore.artistProfileId : null;
+
+  // Prevent sending to self with same identity
+  if (
+    senderIdentity === "ARTIST" &&
+    senderArtistProfileId === artist.value.id
+  ) {
+    alert("An artist profile cannot send a message to itself.");
+    return;
+  }
+  if (
+    senderIdentity === "USER" &&
+    authStore.authUser.id === artist.value.user_id &&
+    authStore.artistProfileId === artist.value.id
+  ) {
+    // This means the user is trying to DM their *own* artist profile from their user account.
+    alert(
+      "You cannot send a message from your user account to your own artist profile."
+    );
+    return;
+  }
+
+  // Try to find an existing conversation
+  // This check needs to be robust and match the backend's logic for conversation uniqueness
+  const existingConversation = chatStore.conversations.find((convo) => {
+    const participantIds = convo.participants.map((p) => p.id);
+    const involvesMe = participantIds.includes(authStore.authUser!.id);
+    const involvesTargetUser = participantIds.includes(artist.value!.user_id); // Artist's owner user
+
+    if (!(involvesMe && involvesTargetUser && participantIds.length === 2))
+      return false;
+
+    // Check if I am the initiator
+    if (convo.initiator_user?.id === authStore.authUser!.id) {
+      return (
+        convo.initiator_identity_type === senderIdentity &&
+        (senderIdentity === "ARTIST"
+          ? convo.initiator_artist_profile_details?.id === senderArtistProfileId
+          : true) &&
+        convo.related_artist_recipient_details?.id === artist.value!.id
+      );
+    }
+    // Check if the target artist (or their user) is the initiator
+    if (convo.initiator_user?.id === artist.value!.user_id) {
+      // If target initiated as User, and I'm sending as User to their Artist profile
+      if (
+        convo.initiator_identity_type === "USER" &&
+        senderIdentity === "USER" &&
+        convo.related_artist_recipient_details?.id === artist.value!.id
+      )
+        return true;
+      // If target initiated as Artist, and I'm sending to that Artist (either as User or other Artist)
+      if (
+        convo.initiator_identity_type === "ARTIST" &&
+        convo.initiator_artist_profile_details?.id === artist.value!.id
+      ) {
+        // And my current sending context matches how they targeted me
+        if (
+          senderIdentity === "USER" &&
+          convo.related_artist_recipient_details === null
+        )
+          return true;
+        if (
+          senderIdentity === "ARTIST" &&
+          convo.related_artist_recipient_details?.id === senderArtistProfileId
+        )
+          return true;
+      }
+    }
+    return false;
+  });
+
+  if (existingConversation) {
+    router.push({
+      name: "chat-conversation",
+      params: { conversationId: existingConversation.id.toString() },
+    });
+  } else {
+    // Navigate to compose mode of ChatConversationView
+    // We pass recipientArtistId, and how the current user wants to send (asUser or asArtist)
+    const queryParams: any = {
+      recipientArtistId: artist.value.id.toString(),
+      senderIdentity: senderIdentity,
+    };
+    if (senderIdentity === "ARTIST" && senderArtistProfileId) {
+      queryParams.senderArtistProfileId = senderArtistProfileId.toString();
+    }
+    router.push({
+      name: "chat-conversation", // Re-use ChatConversationView, it will detect "compose mode"
+      query: queryParams,
+    });
+  }
+};
+
 onMounted(() => {
   loadData(props.id);
+  // Ensure conversations are loaded if user is logged in, to find existing chats
+  if (authStore.isLoggedIn && chatStore.conversations.length === 0) {
+    chatStore.fetchConversations();
+  }
 });
 
 watch(
@@ -161,16 +277,47 @@ watch(
         </div>
         <p v-if="artist.bio" class="artist-bio">{{ artist.bio }}</p>
         <p v-else class="artist-bio">No biography available.</p>
-        <button
-          v-if="isOwner"
-          @click="
-            isEditing = true;
-            editError = null;
-          "
-          class="edit-button"
-        >
-          Edit Artist Profile
-        </button>
+
+        <div class="artist-actions">
+          <button
+            v-if="isOwner"
+            @click="
+              isEditing = true;
+              editError = null;
+            "
+            class="edit-button"
+          >
+            Edit Artist Profile
+          </button>
+          <!-- Conditional Send Message Button -->
+          <button
+            v-if="
+              authStore.isLoggedIn && artist.user_id !== authStore.authUser?.id
+            "
+            @click="startChatWithArtist"
+            class="send-message-button"
+          >
+            Send Message
+          </button>
+          <p
+            v-else-if="
+              authStore.isLoggedIn && artist.user_id === authStore.authUser?.id
+            "
+            class="info-text self-profile-text"
+          >
+            This is your artist profile.
+          </p>
+          <p v-else class="info-text">
+            <RouterLink
+              :to="{
+                name: 'login',
+                query: { redirect: router.currentRoute.value.fullPath },
+              }"
+              >Login</RouterLink
+            >
+            to send a message.
+          </p>
+        </div>
       </div>
     </div>
 
@@ -193,26 +340,25 @@ watch(
       <h2>Releases by {{ artist?.name || "this artist" }}</h2>
       <div v-if="isLoadingReleases">Loading releases...</div>
       <div v-else-if="!releases || releases.length === 0">
-        <!-- Added !releases check -->
         No releases found for this artist.
       </div>
       <div v-else class="releases-grid">
         <RouterLink
-          v-for="release in releases"
-          :key="release.id"
-          :to="{ name: 'release-detail', params: { id: release.id } }"
+          v-for="releaseItem in releases"
+          :key="releaseItem.id"
+          :to="{ name: 'release-detail', params: { id: releaseItem.id } }"
           class="release-card"
         >
           <img
-            v-if="release.cover_art"
-            :src="release.cover_art"
-            :alt="`${release.title} cover art`"
+            v-if="releaseItem.cover_art"
+            :src="releaseItem.cover_art"
+            :alt="`${releaseItem.title} cover art`"
             class="cover-art"
           />
           <div v-else class="cover-art-placeholder">No Cover</div>
-          <h3>{{ release.title }}</h3>
+          <h3>{{ releaseItem.title }}</h3>
           <span class="release-type">{{
-            release.release_type_display || release.release_type
+            releaseItem.release_type_display || releaseItem.release_type
           }}</span>
         </RouterLink>
       </div>
@@ -231,7 +377,7 @@ watch(
   display: flex;
   gap: 2rem;
   margin-bottom: 2.5rem;
-  align-items: center;
+  align-items: center; /* Changed from flex-start to center for better vertical alignment */
 }
 .artist-pic,
 .artist-pic-placeholder {
@@ -247,7 +393,11 @@ watch(
   color: var(--color-text);
   border: 2px solid var(--color-border);
 }
+.artist-info {
+  flex-grow: 1; /* Allow info to take remaining space */
+}
 .artist-info h1 {
+  margin-top: 0; /* Remove top margin if centered */
   margin-bottom: 0.5rem;
 }
 .artist-meta {
@@ -267,7 +417,45 @@ watch(
 }
 .artist-bio {
   line-height: 1.6;
+  margin-bottom: 1rem;
 }
+.artist-actions {
+  margin-top: 1rem;
+  display: flex;
+  gap: 1rem;
+  align-items: center; /* Align items if they have different heights */
+}
+.edit-button,
+.send-message-button {
+  padding: 0.6em 1.2em;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.95em;
+}
+.edit-button {
+  background-color: var(--color-background-mute);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.edit-button:hover {
+  border-color: var(--color-border-hover);
+}
+.send-message-button {
+  background-color: var(--color-accent);
+  color: white;
+  border: 1px solid var(--color-accent);
+}
+.send-message-button:hover {
+  background-color: var(--color-accent-hover);
+}
+.info-text {
+  font-size: 0.9em;
+  color: var(--color-text-light);
+}
+.self-profile-text {
+  font-style: italic;
+}
+
 .artist-releases {
   margin-top: 3rem;
 }
@@ -325,8 +513,21 @@ watch(
 }
 .error-message {
   color: red;
+  background-color: #ffe0e0;
+  border: 1px solid red;
+  padding: 0.5em;
+  border-radius: 4px;
+  margin-bottom: 1em;
 }
 .back-button {
   margin-top: 2rem;
+  padding: 0.6em 1.2em;
+  border-radius: 5px;
+  background-color: var(--color-background-mute);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.back-button:hover {
+  border-color: var(--color-border-hover);
 }
 </style>

@@ -3,18 +3,19 @@ import { ref, onMounted, computed, watch } from "vue";
 import { useAuthStore } from "@/stores/auth";
 import { useRouter, RouterLink } from "vue-router";
 import ProfileEditForm from "@/components/ProfileEditForm.vue";
+import { useChatStore } from "@/stores/chat"; // Import chat store
 
 const authStore = useAuthStore();
+const chatStore = useChatStore(); // Initialize chat store
 const router = useRouter();
 
 const isEditing = ref(false);
 const editError = ref<string | null>(null);
 
-// Computed properties to get data from the store
-const isLoadingProfile = computed(() => authStore.authLoading); // Use store's loading state
-const profileData = computed(() => authStore.authUser?.profile); // Get profile from store
-const currentUser = computed(() => authStore.authUser); // Basic user info
-const errorLoadingProfile = computed(() => authStore.authError); // Use store's error state
+const isLoadingProfile = computed(() => authStore.authLoading);
+const profileData = computed(() => authStore.authUser?.profile);
+const currentUser = computed(() => authStore.authUser);
+const errorLoadingProfile = computed(() => authStore.authError);
 
 const goToCreateArtist = () => {
   router.push({ name: "artist-create" });
@@ -24,16 +25,12 @@ const goToCreateRelease = () => {
   if (authStore.hasArtistProfile) {
     router.push({ name: "release-create" });
   } else {
-    // This case should ideally be prevented by the button's v-if
     alert("Error: Artist profile required.");
   }
 };
 
-// Called when ProfileEditForm emits 'profileUpdated'
 const onProfileUpdate = async (updatedProfileDataFromForm: any) => {
-  // After a successful PATCH, the backend returns the updated profile.
-  // We need to tell the authStore to re-fetch the user/profile data to update its state.
-  await authStore.fetchUser(); // Re-fetch to ensure store is up-to-date
+  await authStore.fetchUser();
   isEditing.value = false;
   editError.value = null;
   alert("Profile updated successfully!");
@@ -43,23 +40,37 @@ const handleUpdateError = (errorMessage: string | null) => {
   editError.value = errorMessage;
 };
 
-// Ensure user/profile data is fetched if not already present when component mounts
+const startChatWithUser = async (targetUserId: number) => {
+  if (!authStore.authUser || authStore.authUser.id === targetUserId) {
+    alert("You cannot chat with yourself.");
+    return;
+  }
+  // For User-to-User, initiator is always USER
+  const payload = {
+    recipient_user_id: targetUserId,
+    initiator_identity_type: "USER" as "USER" | "ARTIST", // Correct type
+  };
+  const conversation = await chatStore.sendInitialMessage(payload);
+  if (conversation) {
+    router.push({
+      name: "chat-conversation",
+      params: { conversationId: conversation.id.toString() },
+    });
+  } else {
+    alert(`Failed to start chat: ${chatStore.error || "Unknown error"}`);
+  }
+};
+
 onMounted(async () => {
   if (!authStore.authUser || !authStore.authUser.profile) {
-    // If profile data is missing in the store, trigger a fetch
-    // This handles cases like direct navigation to /profile after login
-    // but before fetchUser fully completed or if profile part failed initially.
     await authStore.fetchUser();
   }
 });
 
-// Watch for authUser changes if profile might be loaded asynchronously
 watch(
   () => authStore.authUser,
   (newUser) => {
     if (newUser && !newUser.profile && !authStore.authLoading) {
-      // If user is loaded but profile is missing and not currently loading, try fetching again.
-      // This is a fallback, ideally fetchUser in authStore is robust.
       // authStore.fetchUser();
     }
   },
@@ -103,6 +114,18 @@ watch(
         <p v-if="profileData.bio"><strong>Bio:</strong></p>
         <p class="bio-text" v-if="profileData.bio">{{ profileData.bio }}</p>
         <p class="bio-text" v-else>(No bio set)</p>
+
+        <!-- Placeholder for Send Message to this user if viewing another user's profile -->
+        <!-- This button would only appear if `currentUser.id !== authStore.authUser?.id` -->
+        <!--
+        <button 
+          v-if="authStore.isLoggedIn && currentUser.id !== authStore.authUser?.id"
+          @click="startChatWithUser(currentUser.id)" 
+          class="action-button send-message-button"
+        >
+          Send Message
+        </button>
+        -->
 
         <div
           v-if="authStore.hasArtistProfile && profileData.artist_profile_data"
@@ -220,5 +243,10 @@ watch(
 }
 .error-message {
   color: red;
+}
+.send-message-button {
+  background-color: var(--color-accent);
+  color: white;
+  margin-top: 1rem;
 }
 </style>
