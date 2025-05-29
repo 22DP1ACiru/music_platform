@@ -26,12 +26,14 @@ const cartItemCount = computed(() => cartStore.itemCount);
       <RouterLink v-if="authStore.isLoggedIn" to="/library"
         >My Library</RouterLink
       >
+      <RouterLink v-if="authStore.isLoggedIn" to="/playlists/my"
+        >My Playlists</RouterLink
+      >
+      <!-- Added My Playlists link -->
       <RouterLink v-if="authStore.isLoggedIn" to="/orders"
         >My Orders</RouterLink
       >
-      <!-- Add Chat Link -->
       <RouterLink v-if="authStore.isLoggedIn" to="/chat">Chat</RouterLink>
-      <!-- <RouterLink to="/about">About</RouterLink> -->
 
       <template v-if="!authStore.isLoggedIn">
         <RouterLink to="/login">Login</RouterLink>

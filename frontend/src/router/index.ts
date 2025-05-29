@@ -99,18 +99,32 @@ const router = createRouter({
       component: () => import("../views/ChatListView.vue"),
       meta: { requiresAuth: true },
     },
-    // {
-    //   path: "/chat/new", // Define the path for creating a new chat
-    //   name: "chat-create", // The name you're trying to navigate to
-    //   component: () => import("../views/CreateChatView.vue"), // Create this component
-    //   meta: { requiresAuth: true },
-    // },
     {
       path: "/chat/:conversationId",
       name: "chat-conversation",
       component: () => import("../views/ChatConversationView.vue"),
       props: true,
       meta: { requiresAuth: true },
+    },
+    // --- PLAYLIST ROUTES ---
+    {
+      path: "/playlists/my",
+      name: "my-playlists",
+      component: () => import("../views/MyPlaylistsView.vue"),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/playlists/create",
+      name: "playlist-create",
+      component: () => import("../views/CreatePlaylistView.vue"),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: "/playlists/:id",
+      name: "playlist-detail",
+      component: () => import("../views/PlaylistDetailView.vue"), // Updated component
+      props: true,
+      // meta: { requiresAuth: false } // Allow viewing public playlists; ownership checks done in component
     },
   ],
 });

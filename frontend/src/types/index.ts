@@ -2,7 +2,7 @@ export interface ArtistInfo {
   id: number;
   name: string;
   user_id: number; // ID of the User model that owns this Artist
-  artist_picture?: string | null; // Add artist_picture here if ArtistInfo is used for avatars
+  artist_picture?: string | null;
 }
 
 export interface TrackInfoFromApi {
@@ -13,12 +13,17 @@ export interface TrackInfoFromApi {
   audio_file: string; // This is likely the storage path, not stream URL
   stream_url: string; // This is the one for playing
   genres_data?: { id: number; name: string }[];
+  release_id?: number; // Added
+  artist_id?: number; // Added
+  artist_name?: string; // Added for convenience
+  release_title?: string; // Added for convenience
+  release_cover_art?: string | null; // Added
 }
 
 export interface ReleaseDetail {
   id: number;
   title: string;
-  artist: ArtistInfo; // ArtistInfo should include id and name
+  artist: ArtistInfo;
   product_info_id: number | null;
   tracks: TrackInfoFromApi[];
   cover_art: string | null;
@@ -41,7 +46,7 @@ export interface GeneratedDownloadStatus {
   unique_identifier: string;
   release: number;
   release_title: string;
-  user: number; // User ID
+  user: number;
   requested_format: string;
   requested_format_display: string;
   status: "PENDING" | "PROCESSING" | "READY" | "FAILED" | "EXPIRED";
@@ -54,9 +59,9 @@ export interface GeneratedDownloadStatus {
 }
 
 export interface PlayerTrackInfo {
-  id: number; // Track ID
+  id: number;
   title: string;
-  audio_file: string; // Stream URL
+  audio_file: string;
   artistName?: string;
   releaseTitle?: string;
   coverArtUrl?: string | null;
@@ -64,29 +69,29 @@ export interface PlayerTrackInfo {
 }
 
 export interface ProductSummaryForCart {
-  id: number; // Product ID
-  name: string; // Usually Release title
-  price: string; // Default price of the product
+  id: number;
+  name: string;
+  price: string;
   currency: string;
   cover_art?: string | null;
   release_title?: string | null;
   artist_name?: string | null;
-  release_id?: number | null; // ID of the related Release
+  release_id?: number | null;
 }
 
 export interface CartItem {
-  id: number; // CartItem ID
+  id: number;
   product: ProductSummaryForCart;
-  price_override: string | null; // For NYP
+  price_override: string | null;
   added_at: string;
   effective_price_original_currency: string;
   original_currency: string;
-  effective_price_settlement_currency: string | null; // If prices are converted
+  effective_price_settlement_currency: string | null;
 }
 
 export interface Cart {
-  id: number; // Cart ID
-  user: string; // Username
+  id: number;
+  user: string;
   items: CartItem[];
   total_price: string;
   currency: string;
@@ -98,7 +103,6 @@ export interface Cart {
 export interface UserChatInfo {
   id: number;
   username: string;
-  // profile_picture?: string | null; // Consider adding for avatars
 }
 
 export interface ArtistChatInfo {
@@ -110,12 +114,11 @@ export interface ArtistChatInfo {
 export interface ChatMessage {
   id: number;
   conversation: number;
-  sender_user: UserChatInfo; // The actual User model that sent it
-  sender_identity_type: "USER" | "ARTIST"; // The identity used for THIS message
-  sending_artist_details: ArtistChatInfo | null; // If sender_identity_type is ARTIST
+  sender_user: UserChatInfo;
+  sender_identity_type: "USER" | "ARTIST";
+  sending_artist_details: ArtistChatInfo | null;
   text: string | null;
-  attachment?: string | null; // Raw attachment path (less used by frontend directly)
-  attachment_url?: string | null; // URL to download/stream attachment
+  attachment_url?: string | null;
   original_attachment_filename?: string | null;
   message_type: "TEXT" | "AUDIO" | "VOICE" | "TRACK_SHARE";
   timestamp: string;
@@ -124,17 +127,17 @@ export interface ChatMessage {
 
 export interface Conversation {
   id: number;
-  participants: UserChatInfo[]; // The User models involved in this conversation
+  participants: UserChatInfo[];
   is_accepted: boolean;
-  initiator_user: UserChatInfo | null; // The User model who created the conversation
-  initiator_identity_type: "USER" | "ARTIST"; // The identity the initiator_user chose
-  initiator_artist_profile_details: ArtistChatInfo | null; // If initiator chose ARTIST
-  related_artist_recipient_details: ArtistChatInfo | null; // If conversation is TO an artist
+  initiator_user: UserChatInfo | null;
+  initiator_identity_type: "USER" | "ARTIST";
+  initiator_artist_profile_details: ArtistChatInfo | null;
+  related_artist_recipient_details: ArtistChatInfo | null;
   created_at: string;
   updated_at: string;
   latest_message: ChatMessage | null;
   unread_count: number;
-  other_participant_display_name: string | null; // Name to display for the other party
+  other_participant_display_name: string | null;
 }
 
 export interface CreateMessagePayload {
@@ -155,18 +158,33 @@ export type ReplyMessagePayload = Pick<
 
 export interface OrderItemDetail {
   id: number;
-  product_name: string; // Name of the product (e.g., release title)
-  quantity: number; // Should always be 1 for digital items
-  price_at_purchase: string; // Price paid for this item
+  product_name: string;
+  quantity: number;
+  price_at_purchase: string;
 }
 
 export interface OrderDetail {
   id: number;
-  user: string; // Username of the buyer
-  status: string; // e.g., PENDING, COMPLETED, FAILED
-  total_amount: string; // Total amount of the order
-  currency: string; // Currency of the order
+  user: string;
+  status: string;
+  total_amount: string;
+  currency: string;
   created_at: string;
   updated_at: string;
-  items: OrderItemDetail[]; // List of items in the order
+  items: OrderItemDetail[];
 }
+
+// --- PLAYLIST TYPES ---
+export interface Playlist {
+  id: number;
+  title: string;
+  owner: string; // Username
+  tracks: TrackInfoFromApi[];
+  track_count: number;
+  cover_art: string | null;
+  description: string | null;
+  is_public: boolean;
+  created_at: string;
+  updated_at: string;
+}
+// --- END PLAYLIST TYPES ---

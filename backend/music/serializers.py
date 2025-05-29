@@ -1,9 +1,8 @@
-# backend/music/serializers.py
 from rest_framework import serializers
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload # Ensure Product is NOT imported here
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload 
 from rest_framework.reverse import reverse
 from decimal import Decimal
-# from shop.models import Product # DO NOT IMPORT Product here to avoid circularity if shop.models imports music.models
+
 
 class GenreSerializer(serializers.ModelSerializer):
     class Meta:
@@ -22,7 +21,13 @@ class ArtistSerializer(serializers.ModelSerializer):
 class TrackSerializer(serializers.ModelSerializer):
     release_title = serializers.CharField(source='release.title', read_only=True)
     artist_name = serializers.CharField(source='release.artist.name', read_only=True)
-    
+    # Add release_cover_art
+    release_cover_art = serializers.ImageField(source='release.cover_art', read_only=True, allow_null=True)
+    # Add release_id for context
+    release_id = serializers.IntegerField(source='release.id', read_only=True)
+    artist_id = serializers.IntegerField(source='release.artist.id', read_only=True)
+
+
     genres_data = GenreSerializer(source='genres', many=True, read_only=True) 
     genre_names = serializers.ListField(
         child=serializers.CharField(max_length=100, allow_blank=False),
@@ -43,17 +48,24 @@ class TrackSerializer(serializers.ModelSerializer):
             'sample_rate',
             'channels',
             'is_lossless',
-            'release', 
-            'release_title', 'artist_name',
+            'release',  # Keep the original release FK for writing if needed elsewhere
+            'release_id', # Added
+            'artist_id', # Added
+            'release_title', 
+            'artist_name',
+            'release_cover_art', # Added
             'genres_data', 
             'genre_names', 
             'created_at'
         ]
         read_only_fields = [
-            'release_title', 'artist_name', 'duration_in_seconds', 
-            'codec_name', 'bit_rate', 'sample_rate', 'channels', 'is_lossless', 
-            'genres_data', 'stream_url'
+            'release_id', 'artist_id', 'release_title', 'artist_name', 'release_cover_art', 
+            'duration_in_seconds', 'codec_name', 'bit_rate', 'sample_rate', 
+            'channels', 'is_lossless', 'genres_data', 'stream_url'
         ]
+        # 'release' field itself is now mainly for create/update operations if tracks are not managed via nested routes.
+        # If tracks are always created/updated in context of a release (e.g. inlines in ReleaseAdmin or nested serializer),
+        # the 'release' field for write might be less critical here directly.
 
     def get_stream_url(self, obj: Track) -> str | None:
         request = self.context.get('request')
@@ -109,15 +121,13 @@ class ReleaseSerializer(serializers.ModelSerializer):
     pricing_model_display = serializers.CharField(source='get_pricing_model_display', read_only=True) 
     available_download_formats = serializers.SerializerMethodField()
     
-    # --- THIS IS THE IMPORTANT LINE ---
     product_info_id = serializers.IntegerField(source='product_info.id', read_only=True, allow_null=True)
-    # --- END IMPORTANT LINE ---
 
     class Meta:
         model = Release
         fields = [
             'id', 'title', 'artist', 'artist_id', 
-            'product_info_id', # <<< MAKE SURE IT'S IN fields
+            'product_info_id', 
             'release_type', 'release_type_display', 'release_date',
             'cover_art', 
             'genres_data', 
@@ -136,7 +146,7 @@ class ReleaseSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'is_visible', 'release_type_display', 'genres_data', 'artist', 
             'pricing_model_display', 'available_download_formats',
-            'product_info_id' # <<< MAKE SURE IT'S IN read_only_fields
+            'product_info_id' 
         ]
 
     def get_available_download_formats(self, obj: Release):
