@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
-import HomeView from "../views/HomeView.vue";
+// Removed HomeView import, will use dynamic import
 import { useAuthStore } from "@/stores/auth";
 
 const router = createRouter({
@@ -8,87 +8,87 @@ const router = createRouter({
     {
       path: "/",
       name: "home",
-      component: HomeView,
+      component: () => import("../views/general/HomeView.vue"), // Path was already updated by user
     },
     {
       path: "/about",
       name: "about",
-      component: () => import("../views/AboutView.vue"),
+      component: () => import("../views/general/AboutView.vue"), // Path was already updated by user
     },
     {
       path: "/login",
       name: "login",
-      component: () => import("../views/LoginView.vue"),
+      component: () => import("../views/auth/LoginView.vue"), // Path was already updated by user
     },
     {
       path: "/register",
       name: "register",
-      component: () => import("../views/RegisterView.vue"),
+      component: () => import("../views/auth/RegisterView.vue"), // Path was already updated by user
     },
     {
       path: "/releases",
       name: "releases",
-      component: () => import("../views/ReleaseListView.vue"),
+      component: () => import("../views/release/ReleaseListView.vue"), // Updated path
     },
     {
       path: "/releases/:id",
       name: "release-detail",
-      component: () => import("../views/ReleaseDetailView.vue"),
+      component: () => import("../views/release/ReleaseDetailView.vue"), // Updated path
       props: true,
     },
     {
       path: "/artists/:id",
       name: "artist-detail",
-      component: () => import("../views/ArtistDetailView.vue"),
+      component: () => import("../views/artist/ArtistDetailView.vue"), // Updated path
       props: true,
     },
     {
       path: "/profile",
       name: "profile",
-      component: () => import("../views/ProfileView.vue"),
+      component: () => import("../views/profile/ProfileView.vue"), // Updated path
       meta: { requiresAuth: true },
     },
     {
       path: "/artist/create",
       name: "artist-create",
-      component: () => import("../views/CreateArtistView.vue"),
+      component: () => import("../views/artist/CreateArtistView.vue"), // Updated path
       meta: { requiresAuth: true, requiresArtistCreation: true },
     },
     {
       path: "/release/create",
       name: "release-create",
-      component: () => import("../views/CreateReleaseView.vue"),
+      component: () => import("../views/release/CreateReleaseView.vue"), // Updated path
       meta: { requiresAuth: true, requiresArtist: true },
     },
     {
       path: "/release/edit/:id",
       name: "release-edit",
-      component: () => import("../views/EditReleaseView.vue"),
+      component: () => import("../views/release/EditReleaseView.vue"), // Updated path
       props: true,
       meta: { requiresAuth: true, requiresArtist: true },
     },
     {
       path: "/library",
       name: "library",
-      component: () => import("../views/LibraryView.vue"),
+      component: () => import("../views/library/LibraryView.vue"), // Updated path
       meta: { requiresAuth: true },
     },
     {
       path: "/orders",
       name: "order-history",
-      component: () => import("../views/OrderHistoryView.vue"),
+      component: () => import("../views/order/OrderHistoryView.vue"), // Updated path
       meta: { requiresAuth: true },
     },
     {
       path: "/cart",
       name: "cart",
-      component: () => import("../views/CartView.vue"),
+      component: () => import("../views/cart/CartView.vue"), // Updated path
       meta: { requiresAuth: true },
     },
     {
       path: "/order/confirm/:orderId",
       name: "order-confirm",
-      component: () => import("../views/OrderConfirmView.vue"),
+      component: () => import("../views/order/OrderConfirmView.vue"), // Updated path
       props: true,
       meta: { requiresAuth: true },
     },
@@ -96,13 +96,13 @@ const router = createRouter({
     {
       path: "/chat",
       name: "chat-list",
-      component: () => import("../views/ChatListView.vue"),
+      component: () => import("../views/chat/ChatListView.vue"), // Updated path
       meta: { requiresAuth: true },
     },
     {
       path: "/chat/:conversationId",
       name: "chat-conversation",
-      component: () => import("../views/ChatConversationView.vue"),
+      component: () => import("../views/chat/ChatConversationView.vue"), // Updated path
       props: true,
       meta: { requiresAuth: true },
     },
@@ -110,21 +110,20 @@ const router = createRouter({
     {
       path: "/playlists/my",
       name: "my-playlists",
-      component: () => import("../views/MyPlaylistsView.vue"),
+      component: () => import("../views/playlist/MyPlaylistsView.vue"), // Updated path
       meta: { requiresAuth: true },
     },
     {
       path: "/playlists/create",
       name: "playlist-create",
-      component: () => import("../views/CreatePlaylistView.vue"),
+      component: () => import("../views/playlist/CreatePlaylistView.vue"), // Updated path
       meta: { requiresAuth: true },
     },
     {
       path: "/playlists/:id",
       name: "playlist-detail",
-      component: () => import("../views/PlaylistDetailView.vue"), // Updated component
+      component: () => import("../views/playlist/PlaylistDetailView.vue"), // Updated path
       props: true,
-      // meta: { requiresAuth: false } // Allow viewing public playlists; ownership checks done in component
     },
   ],
 });

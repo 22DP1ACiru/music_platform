@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { RouterView, useRoute } from "vue-router";
-import Navbar from "./components/Navbar.vue";
-import AudioPlayer from "./components/AudioPlayer.vue";
+import Navbar from "./components/layout/Navbar.vue"; // Updated import path
+import AudioPlayer from "./components/player/AudioPlayer.vue"; // Updated import path
 import { computed } from "vue";
 
 const route = useRoute();
