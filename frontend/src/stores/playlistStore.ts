@@ -1,14 +1,21 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import axios from "axios";
-import type { Playlist, TrackInfoFromApi } from "@/types"; // Added TrackInfoFromApi
+import type { Playlist, TrackInfoFromApi } from "@/types";
 import { useAuthStore } from "./auth";
+
+export interface CreatePlaylistPayload {
+  title: string;
+  description?: string | null;
+  is_public: boolean;
+  cover_art?: File | null; // Added for file upload
+}
 
 export interface UpdatePlaylistPayload {
   title?: string;
   description?: string | null;
   is_public?: boolean;
-  // cover_art might be handled separately if it involves file upload
+  cover_art?: File | null | ""; // Allow File, null (no change), or "" (to remove)
 }
 
 export const usePlaylistStore = defineStore("playlist", () => {
@@ -17,7 +24,7 @@ export const usePlaylistStore = defineStore("playlist", () => {
   const isLoadingMyPlaylists = ref(false);
   const isLoadingPlaylistDetail = ref(false);
   const error = ref<string | null>(null);
-  const detailError = ref<string | null>(null); // For errors on detail page
+  const detailError = ref<string | null>(null);
 
   const authStore = useAuthStore();
 
@@ -46,19 +53,32 @@ export const usePlaylistStore = defineStore("playlist", () => {
     }
   }
 
-  async function createPlaylist(payload: {
-    title: string;
-    description?: string | null;
-    is_public: boolean;
-  }): Promise<Playlist | null> {
+  async function createPlaylist(
+    payload: CreatePlaylistPayload
+  ): Promise<Playlist | null> {
     if (!authStore.isLoggedIn) {
       error.value = "You must be logged in to create playlists.";
       return null;
     }
-    isLoadingMyPlaylists.value = true; // Or a specific isLoadingCreate
+    isLoadingMyPlaylists.value = true;
     error.value = null;
+
+    const formData = new FormData();
+    formData.append("title", payload.title);
+    if (payload.description) {
+      formData.append("description", payload.description);
+    } else {
+      formData.append("description", ""); // Send empty string if null/undefined
+    }
+    formData.append("is_public", String(payload.is_public));
+    if (payload.cover_art) {
+      formData.append("cover_art", payload.cover_art);
+    }
+
     try {
-      const response = await axios.post<Playlist>("/playlists/", payload);
+      const response = await axios.post<Playlist>("/playlists/", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
       myPlaylists.value.unshift(response.data);
       return response.data;
     } catch (err) {
@@ -68,6 +88,19 @@ export const usePlaylistStore = defineStore("playlist", () => {
           err.response.data.detail ||
           Object.values(err.response.data).join(", ") ||
           "Could not create playlist.";
+        // Check for specific cover_art GIF error
+        if (
+          err.response.data.cover_art &&
+          Array.isArray(err.response.data.cover_art)
+        ) {
+          if (
+            err.response.data.cover_art.some((e: string) =>
+              e.toLowerCase().includes("gif")
+            )
+          ) {
+            error.value += " Animated GIFs are not allowed for cover art.";
+          }
+        }
       } else {
         error.value = "An unexpected error occurred.";
       }
@@ -105,13 +138,34 @@ export const usePlaylistStore = defineStore("playlist", () => {
   ): Promise<Playlist | null> {
     isLoadingPlaylistDetail.value = true;
     detailError.value = null;
+
+    const formData = new FormData();
+    if (payload.title !== undefined) formData.append("title", payload.title);
+    if (payload.description !== undefined)
+      formData.append("description", payload.description || "");
+    if (payload.is_public !== undefined)
+      formData.append("is_public", String(payload.is_public));
+
+    // Handle cover_art:
+    // - If payload.cover_art is a File, append it.
+    // - If payload.cover_art is an empty string "", it means remove the cover.
+    // - If payload.cover_art is null or undefined, do nothing (don't send the field).
+    if (payload.cover_art instanceof File) {
+      formData.append("cover_art", payload.cover_art);
+    } else if (payload.cover_art === "") {
+      // Signal to backend to clear the image
+      formData.append("cover_art", "");
+    }
+
     try {
       const response = await axios.patch<Playlist>(
         `/playlists/${playlistId}/`,
-        payload
+        formData,
+        {
+          headers: { "Content-Type": "multipart/form-data" },
+        }
       );
       currentPlaylistDetail.value = response.data;
-      // Update in the main list as well
       const index = myPlaylists.value.findIndex((p) => p.id === playlistId);
       if (index !== -1) {
         myPlaylists.value[index] = response.data;
@@ -127,6 +181,20 @@ export const usePlaylistStore = defineStore("playlist", () => {
           err.response.data.detail ||
           Object.values(err.response.data).join(", ") ||
           "Could not update playlist.";
+        // Check for specific cover_art GIF error
+        if (
+          err.response.data.cover_art &&
+          Array.isArray(err.response.data.cover_art)
+        ) {
+          if (
+            err.response.data.cover_art.some((e: string) =>
+              e.toLowerCase().includes("gif")
+            )
+          ) {
+            detailError.value +=
+              " Animated GIFs are not allowed for cover art.";
+          }
+        }
       } else {
         detailError.value = "An unexpected error occurred.";
       }
@@ -137,7 +205,7 @@ export const usePlaylistStore = defineStore("playlist", () => {
   }
 
   async function deletePlaylist(playlistId: number): Promise<boolean> {
-    isLoadingPlaylistDetail.value = true; // Use detail loading for context
+    isLoadingPlaylistDetail.value = true;
     detailError.value = null;
     try {
       await axios.delete(`/playlists/${playlistId}/`);
@@ -168,9 +236,7 @@ export const usePlaylistStore = defineStore("playlist", () => {
       await axios.post(`/playlists/${playlistId}/add_track/`, {
         track_id: trackId,
       });
-      // Re-fetch details to get updated track list and count
       await fetchPlaylistDetail(playlistId);
-      // Also update the track_count in the main list if it's there
       const index = myPlaylists.value.findIndex((p) => p.id === playlistId);
       if (index !== -1 && currentPlaylistDetail.value) {
         myPlaylists.value[index].track_count =
@@ -218,7 +284,6 @@ export const usePlaylistStore = defineStore("playlist", () => {
       await axios.post(`/playlists/${playlistId}/remove_track/`, {
         track_id: trackId,
       });
-      // Re-fetch details
       await fetchPlaylistDetail(playlistId);
       const index = myPlaylists.value.findIndex((p) => p.id === playlistId);
       if (index !== -1 && currentPlaylistDetail.value) {

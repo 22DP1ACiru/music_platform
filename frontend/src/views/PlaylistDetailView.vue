@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, watch, onUnmounted } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import {
   usePlaylistStore,
@@ -7,7 +7,7 @@ import {
 } from "@/stores/playlistStore";
 import { useAuthStore } from "@/stores/auth";
 import { usePlayerStore } from "@/stores/player";
-import type { TrackInfoFromApi, PlayerTrackInfo, Playlist } from "@/types"; // Added Playlist to import
+import type { TrackInfoFromApi, PlayerTrackInfo, Playlist } from "@/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -23,6 +23,9 @@ const isEditingMeta = ref(false);
 const editTitle = ref("");
 const editDescription = ref("");
 const editIsPublic = ref(true);
+const editCoverArtFile = ref<File | null>(null);
+const editCoverArtPreviewUrl = ref<string | null>(null);
+const removeExistingCoverArt = ref(false);
 
 const trackIdToAdd = ref<number | null>(null);
 
@@ -34,15 +37,28 @@ const isOwner = computed(() => {
   );
 });
 
+const resetEditForm = () => {
+  if (playlist.value) {
+    editTitle.value = playlist.value.title;
+    editDescription.value = playlist.value.description || "";
+    editIsPublic.value = playlist.value.is_public;
+    editCoverArtFile.value = null;
+    if (
+      editCoverArtPreviewUrl.value &&
+      editCoverArtPreviewUrl.value.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(editCoverArtPreviewUrl.value);
+    }
+    editCoverArtPreviewUrl.value = playlist.value.cover_art;
+    removeExistingCoverArt.value = false;
+  }
+};
+
 const fetchPlaylist = async () => {
   const playlistId = route.params.id as string;
   if (playlistId) {
     await playlistStore.fetchPlaylistDetail(playlistId);
-    if (playlist.value) {
-      editTitle.value = playlist.value.title;
-      editDescription.value = playlist.value.description || "";
-      editIsPublic.value = playlist.value.is_public;
-    }
+    resetEditForm(); // Reset form with new playlist data
   }
 };
 
@@ -51,9 +67,66 @@ onMounted(fetchPlaylist);
 watch(
   () => route.params.id,
   (newId) => {
-    if (newId) fetchPlaylist();
+    if (newId) {
+      isEditingMeta.value = false; // Close edit form if navigating to a different playlist
+      fetchPlaylist();
+    }
   }
 );
+
+const handleEditCoverArtChange = (event: Event) => {
+  const target = event.target as HTMLInputElement;
+  if (target.files && target.files[0]) {
+    const file = target.files[0];
+    if (file.type === "image/gif") {
+      alert(
+        "Animated GIFs are not allowed. Please use a static image format (JPG, PNG, WEBP)."
+      );
+      target.value = ""; // Clear the input
+      editCoverArtFile.value = null;
+      if (
+        editCoverArtPreviewUrl.value &&
+        editCoverArtPreviewUrl.value.startsWith("blob:")
+      ) {
+        URL.revokeObjectURL(editCoverArtPreviewUrl.value);
+      }
+      // Revert to original playlist cover or null if it was also a blob
+      editCoverArtPreviewUrl.value = playlist.value?.cover_art || null;
+      return;
+    }
+    editCoverArtFile.value = file;
+    removeExistingCoverArt.value = false;
+    if (
+      editCoverArtPreviewUrl.value &&
+      editCoverArtPreviewUrl.value.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(editCoverArtPreviewUrl.value);
+    }
+    editCoverArtPreviewUrl.value = URL.createObjectURL(file);
+  } else {
+    editCoverArtFile.value = null;
+    // If file selection cleared, revert to original cover art for preview
+    if (
+      editCoverArtPreviewUrl.value &&
+      editCoverArtPreviewUrl.value.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(editCoverArtPreviewUrl.value);
+    }
+    editCoverArtPreviewUrl.value = playlist.value?.cover_art || null;
+  }
+};
+
+const triggerRemoveCoverArt = () => {
+  removeExistingCoverArt.value = true;
+  editCoverArtFile.value = null;
+  if (
+    editCoverArtPreviewUrl.value &&
+    editCoverArtPreviewUrl.value.startsWith("blob:")
+  ) {
+    URL.revokeObjectURL(editCoverArtPreviewUrl.value);
+  }
+  editCoverArtPreviewUrl.value = null;
+};
 
 const handleSaveMetadata = async () => {
   if (!playlist.value) return;
@@ -62,12 +135,21 @@ const handleSaveMetadata = async () => {
     description: editDescription.value,
     is_public: editIsPublic.value,
   };
-  const success = await playlistStore.updatePlaylist(
+  if (editCoverArtFile.value) {
+    payload.cover_art = editCoverArtFile.value;
+  } else if (removeExistingCoverArt.value) {
+    payload.cover_art = ""; // Signal to remove
+  }
+  // If neither new file nor remove, cover_art is undefined in payload, backend won't change it.
+
+  const updatedPlaylist = await playlistStore.updatePlaylist(
     playlist.value.id,
     payload
   );
-  if (success) {
+  if (updatedPlaylist) {
     isEditingMeta.value = false;
+    // Preview URL might need to update based on response, but fetchPlaylist will refresh it
+    await fetchPlaylist(); // Re-fetch to ensure UI reflects the actual stored state
   }
 };
 
@@ -102,7 +184,6 @@ const handleRemoveTrack = async (trackId: number) => {
   }
 };
 
-// Updated mapToPlayerTrack function
 const mapToPlayerTrack = (
   apiTrack: TrackInfoFromApi,
   playlistData: Playlist
@@ -111,26 +192,22 @@ const mapToPlayerTrack = (
     id: apiTrack.id,
     title: apiTrack.title,
     audio_file: apiTrack.stream_url,
-    // Use track-specific details first, then fall back to playlist-level (release) details
-    artistName: apiTrack.artist_name || playlistData.artist?.name, // Assuming Playlist type might have artist for context
-    releaseTitle: apiTrack.release_title || playlistData.title, // Use playlist title as fallback for release title
-    coverArtUrl: apiTrack.release_cover_art || playlistData.cover_art, // Use track's release cover, then playlist cover
+    artistName: apiTrack.artist_name || playlistData.artist?.name,
+    releaseTitle: apiTrack.release_title || playlistData.title,
+    coverArtUrl: apiTrack.release_cover_art || playlistData.cover_art,
     duration: apiTrack.duration_in_seconds,
   };
 };
 
 const playTrackFromPlaylist = (track: TrackInfoFromApi) => {
   if (!playlist.value || !playlist.value.tracks) return;
-
   const allPlaylistTracksForPlayer: PlayerTrackInfo[] =
     playlist.value.tracks.map((apiTrack) =>
       mapToPlayerTrack(apiTrack, playlist.value!)
     );
-
   const clickedTrackIndex = allPlaylistTracksForPlayer.findIndex(
     (pt) => pt.id === track.id
   );
-
   if (clickedTrackIndex !== -1) {
     playerStore.setQueueAndPlay(allPlaylistTracksForPlayer, clickedTrackIndex);
   } else {
@@ -170,6 +247,24 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   const seconds = Math.floor(totalSeconds % 60);
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 };
+
+onUnmounted(() => {
+  if (
+    editCoverArtPreviewUrl.value &&
+    editCoverArtPreviewUrl.value.startsWith("blob:")
+  ) {
+    URL.revokeObjectURL(editCoverArtPreviewUrl.value);
+  }
+});
+
+const startEditing = () => {
+  resetEditForm(); // Ensure form fields are fresh from current playlist state
+  isEditingMeta.value = true;
+};
+const cancelEditing = () => {
+  isEditingMeta.value = false;
+  resetEditForm(); // Also reset on cancel to discard any preview changes
+};
 </script>
 
 <template>
@@ -179,14 +274,35 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
     <div v-else-if="playlist" class="playlist-content">
       <div class="playlist-header">
         <div class="cover-art-container">
+          <!-- Display area for cover art (view mode) -->
           <img
-            v-if="playlist.cover_art"
+            v-if="!isEditingMeta && playlist.cover_art"
             :src="playlist.cover_art"
             alt="Playlist cover"
             class="playlist-cover-art"
           />
-          <div v-else class="playlist-cover-art-placeholder">🎵</div>
+          <div
+            v-else-if="!isEditingMeta && !playlist.cover_art"
+            class="playlist-cover-art-placeholder"
+          >
+            🎵
+          </div>
+
+          <!-- Preview area for cover art (edit mode) -->
+          <img
+            v-if="isEditingMeta && editCoverArtPreviewUrl"
+            :src="editCoverArtPreviewUrl"
+            alt="New cover art preview"
+            class="playlist-cover-art edit-preview"
+          />
+          <div
+            v-else-if="isEditingMeta && !editCoverArtPreviewUrl"
+            class="playlist-cover-art-placeholder edit-preview"
+          >
+            Select Cover
+          </div>
         </div>
+
         <div class="playlist-info">
           <template v-if="!isEditingMeta">
             <h1>{{ playlist.title }}</h1>
@@ -219,13 +335,44 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
                 rows="3"
               ></textarea>
             </div>
+            <div class="form-group">
+              <label for="edit-cover-art">Cover Art (JPG/PNG/WEBP):</label>
+              <input
+                type="file"
+                id="edit-cover-art"
+                @change="handleEditCoverArtChange"
+                accept="image/jpeg,image/png,image/webp"
+              />
+              <button
+                v-if="editCoverArtPreviewUrl"
+                type="button"
+                @click="triggerRemoveCoverArt"
+                class="remove-cover-btn"
+                :disabled="isLoading"
+              >
+                Remove Current Cover
+              </button>
+              <p v-if="editCoverArtFile" class="file-info">
+                New: {{ editCoverArtFile.name }}
+              </p>
+              <p
+                v-if="removeExistingCoverArt && !editCoverArtFile"
+                class="file-info"
+              >
+                Cover will be removed.
+              </p>
+            </div>
             <div class="form-group form-group-checkbox">
               <input type="checkbox" id="edit-public" v-model="editIsPublic" />
               <label for="edit-public">Public</label>
             </div>
             <div class="edit-form-actions">
-              <button type="submit">Save</button>
-              <button type="button" @click="isEditingMeta = false">
+              <button type="submit" :disabled="isLoading">Save</button>
+              <button
+                type="button"
+                @click="cancelEditing"
+                :disabled="isLoading"
+              >
                 Cancel
               </button>
             </div>
@@ -240,7 +387,7 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
             </button>
             <button
               v-if="isOwner && !isEditingMeta"
-              @click="isEditingMeta = true"
+              @click="startEditing"
               class="action-button"
             >
               Edit Details
@@ -264,7 +411,7 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
             v-model.number="trackIdToAdd"
             placeholder="Enter Track ID"
           />
-          <button type="submit">Add Track</button>
+          <button type="submit" :disabled="isLoading">Add Track</button>
         </form>
         <p class="info-text">
           You can find Track IDs on release pages or by inspecting network
@@ -315,9 +462,7 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
             </button>
             <div class="track-item-info">
               <span class="track-item-title">{{ track.title }}</span>
-              <!-- Display artist_name from track if available -->
               <span class="track-item-artist" v-if="track.artist_name">
-                <!-- Link to artist if artist_id is available on track -->
                 <RouterLink
                   v-if="track.artist_id"
                   :to="{
@@ -410,7 +555,13 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   justify-content: center;
   font-size: 3rem;
   color: var(--color-text-light);
+  border: 1px solid var(--color-border-hover);
 }
+.playlist-cover-art.edit-preview,
+.playlist-cover-art-placeholder.edit-preview {
+  margin-bottom: 0.5rem; /* Space before file input */
+}
+
 .playlist-info {
   flex-grow: 1;
 }
@@ -447,12 +598,16 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   margin-bottom: 0.2rem;
 }
 .edit-meta-form input[type="text"],
+.edit-meta-form input[type="file"],
 .edit-meta-form textarea {
   width: 100%;
   padding: 0.5em;
   border: 1px solid var(--color-border);
   border-radius: 4px;
   font-size: 0.95em;
+}
+.edit-meta-form input[type="file"] {
+  padding: 0.2em;
 }
 .edit-meta-form textarea {
   min-height: 60px;
@@ -474,6 +629,26 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 .edit-form-actions button {
   font-size: 0.9em;
   padding: 0.4em 0.8em;
+}
+.remove-cover-btn {
+  font-size: 0.8em;
+  padding: 0.2em 0.5em;
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: 4px;
+  margin-top: 0.3rem;
+  cursor: pointer;
+}
+.remove-cover-btn:hover {
+  border-color: var(--vt-c-red);
+  color: var(--vt-c-red);
+}
+.file-info {
+  font-size: 0.85em;
+  font-style: italic;
+  color: var(--color-text-light);
+  margin-top: 0.2rem;
 }
 
 .playlist-actions {
