@@ -2,7 +2,13 @@
 
 from decimal import Decimal
 from django.db import migrations, models
-import music.models
+# import music.models # Keep commented or remove if not used for anything else in THIS file
+
+# Define a dummy function placeholder.
+# This function will not actually be called by the new migration we are creating.
+# It's here so that makemigrations can load this historical migration file.
+def old_release_download_path_placeholder_0007(instance, filename):
+    return f'historical_release_downloads_0007/{filename}'
 
 
 class Migration(migrations.Migration):
@@ -20,7 +26,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='release',
             name='download_file',
-            field=models.FileField(blank=True, help_text='The downloadable file for the release (e.g., ZIP archive).', null=True, upload_to=music.models.release_download_path),
+            # Use the placeholder for the historical reference
+            field=models.FileField(blank=True, help_text='The downloadable file for the release (e.g., ZIP archive).', null=True, upload_to=old_release_download_path_placeholder_0007),
         ),
         migrations.AddField(
             model_name='release',

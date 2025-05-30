@@ -37,9 +37,9 @@ class ReleaseAdmin(admin.ModelAdmin):
         (None, {
             'fields': ('title', 'artist', 'release_type', 'release_date', 'cover_art', 'genres', 'is_published', 'listen_count') 
         }),
-        ('Musician-Uploaded Download & Pricing', { 
-            'fields': ('download_file', 'pricing_model', 'price', 'currency', 'minimum_price_nyp'),
-            'description': "Configure download options and pricing for this release based on a musician-provided file."
+        ('Pricing & Download (Generated)', { # Updated section title
+            'fields': ('pricing_model', 'price', 'currency', 'minimum_price_nyp'),
+            'description': "Configure pricing. Downloads are auto-generated from track files."
         }),
     )
     
@@ -118,10 +118,9 @@ class ListenEventAdmin(admin.ModelAdmin):
         'user_display', 
         'listen_start_timestamp_utc',
         'reported_listen_duration_ms',
-        # 'is_significant', # Removed as only significant ones are stored
         'listened_at' 
     )
-    list_filter = ('listened_at', 'track__release__artist', 'user') # Removed 'is_significant'
+    list_filter = ('listened_at', 'track__release__artist', 'user') 
     search_fields = ('track__title', 'release__title', 'user__username')
     readonly_fields = (
         'user', 
@@ -130,8 +129,6 @@ class ListenEventAdmin(admin.ModelAdmin):
         'listen_start_timestamp_utc', 
         'reported_listen_duration_ms', 
         'listened_at',
-        # 'is_significant', # Removed
-        # 'is_processed_for_totals' # Removed
     )
     list_select_related = ('user', 'track', 'release', 'track__release__artist')
 

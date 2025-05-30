@@ -3,8 +3,11 @@
 from django.conf import settings
 from django.db import migrations, models
 import django.db.models.deletion
-import music.models
+# import music.models # Keep this commented or remove if not used elsewhere in THIS file
 import uuid
+
+def old_release_download_path_placeholder_0008(instance, filename): # Renamed for clarity if needed
+    return f'historical_release_downloads_0008/{filename}'
 
 
 class Migration(migrations.Migration):
@@ -18,7 +21,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='release',
             name='download_file',
-            field=models.FileField(blank=True, help_text='The downloadable file for the release (e.g., ZIP archive) uploaded by the musician.', null=True, upload_to=music.models.release_download_path),
+            field=models.FileField(blank=True, help_text='The downloadable file for the release (e.g., ZIP archive) uploaded by the musician.', null=True, upload_to=old_release_download_path_placeholder_0008), # Ensure this uses ITS placeholder
         ),
         migrations.CreateModel(
             name='GeneratedDownload',
@@ -27,7 +30,8 @@ class Migration(migrations.Migration):
                 ('requested_format', models.CharField(choices=[('MP3_320', 'MP3 (320kbps)'), ('MP3_192', 'MP3 (192kbps)'), ('FLAC', 'FLAC'), ('WAV', 'WAV (Original Quality)')], max_length=20)),
                 ('status', models.CharField(choices=[('PENDING', 'Pending'), ('PROCESSING', 'Processing'), ('READY', 'Ready'), ('FAILED', 'Failed'), ('EXPIRED', 'Expired')], default='PENDING', max_length=20)),
                 ('celery_task_id', models.CharField(blank=True, db_index=True, max_length=255, null=True)),
-                ('download_file', models.FileField(blank=True, help_text='The generated ZIP file for download.', null=True, upload_to=music.models.generated_release_download_path)),
+                # This uses a string path which should resolve to your current models.py function
+                ('download_file', models.FileField(blank=True, help_text='The generated ZIP file for download.', null=True, upload_to='music.models.generated_release_download_path')), 
                 ('unique_identifier', models.UUIDField(default=uuid.uuid4, editable=False, help_text='Unique ID for download URL', unique=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),

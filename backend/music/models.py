@@ -9,7 +9,7 @@ from django.db.models.signals import pre_save, post_delete
 from django.dispatch import receiver 
 import logging 
 from decimal import Decimal 
-import uuid # Ensure uuid is imported
+import uuid 
 import subprocess 
 import json 
 
@@ -45,10 +45,7 @@ def track_audio_path(instance, filename):
     track_id_component = instance.id if instance.id else "new_track_temp"
     return f'tracks/{artist_id_for_path}/{release_id_for_path}/{track_id_component}/{unique_filename}'
 
-def release_download_path(instance, filename):
-    artist_id_for_path = instance.artist.id if instance.artist else "unknown_artist"
-    release_id_for_path = instance.id if instance.id else "new_release"
-    return f'release_downloads/{artist_id_for_path}/{release_id_for_path}/{filename}'
+# REMOVED: release_download_path function as the field is being removed
 
 def generated_release_download_path(instance, filename):
     release_id_for_path = instance.release.id if instance.release else "unknown_release"
@@ -104,12 +101,14 @@ class Release(models.Model):
     genres = models.ManyToManyField(Genre, blank=True, related_name='releases')
     is_published = models.BooleanField(default=True, help_text="If unchecked, release is a draft.")
     
-    download_file = models.FileField(
-        upload_to=release_download_path, 
-        null=True, 
-        blank=True, 
-        help_text="The downloadable file for the release (e.g., ZIP archive) uploaded by the musician."
-    )
+    # REMOVED: download_file field
+    # download_file = models.FileField(
+    #     upload_to=release_download_path, 
+    #     null=True, 
+    #     blank=True, 
+    #     help_text="The downloadable file for the release (e.g., ZIP archive) uploaded by the musician."
+    # )
+
     pricing_model = models.CharField(
         max_length=10, 
         choices=PricingModel.choices, 
@@ -158,11 +157,12 @@ class Release(models.Model):
             if self.minimum_price_nyp is not None and self.minimum_price_nyp < Decimal('0.00'):
                 raise ValidationError({'minimum_price_nyp': "Minimum 'Name Your Price' cannot be negative."})
         
-        if self.download_file and self.pricing_model not in [self.PricingModel.FREE, self.PricingModel.PAID, self.PricingModel.NAME_YOUR_PRICE]:
-             raise ValidationError("Download file provided but pricing model is unclear or not set for downloads.")
-        
-        if self.download_file and not self.pricing_model:
-             raise ValidationError({'pricing_model': "A pricing model must be selected if a download file is provided."})
+        # REMOVED: Validation related to download_file as it's being removed
+        # if self.download_file and self.pricing_model not in [self.PricingModel.FREE, self.PricingModel.PAID, self.PricingModel.NAME_YOUR_PRICE]:
+        #      raise ValidationError("Download file provided but pricing model is unclear or not set for downloads.")
+        # if self.download_file and not self.pricing_model:
+        #      raise ValidationError({'pricing_model': "A pricing model must be selected if a download file is provided."})
+
 
     def save(self, *args, **kwargs):
         if self.pricing_model != self.PricingModel.PAID:
@@ -429,11 +429,9 @@ class GeneratedDownload(models.Model):
         ]
 
 class ListenEvent(models.Model):
-    user = models.ForeignKey(
+    user = models.ForeignKey( 
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.CASCADE, 
         related_name='listen_events',
         db_index=True
     )
@@ -460,7 +458,6 @@ class ListenEvent(models.Model):
         auto_now_add=True, 
         help_text="Timestamp when this event was logged by the backend."
     )
-    # `is_significant` and `is_processed_for_totals` fields are removed as per the revised plan
 
     class Meta:
         ordering = ['-listened_at']
@@ -471,9 +468,7 @@ class ListenEvent(models.Model):
         ]
 
     def __str__(self):
-        user_display = self.user.username if self.user else "Anonymous"
-        # Since only significant listens are stored, we can assume it's significant.
-        return f"Significant listen for '{self.track.title}' by {user_display} at {self.listened_at.strftime('%Y-%m-%d %H:%M')}"
+        return f"Significant listen for '{self.track.title}' by {self.user.username} at {self.listened_at.strftime('%Y-%m-%d %H:%M')}"
 
     def save(self, *args, **kwargs):
         if self.track and not self.release: 
@@ -488,7 +483,8 @@ def artist_pre_save_delete_old_picture(sender, instance, **kwargs):
 @receiver(pre_save, sender=Release)
 def release_pre_save_delete_old_cover(sender, instance, **kwargs):
     delete_file_if_changed(sender, instance, 'cover_art')
-    delete_file_if_changed(sender, instance, 'download_file') 
+    # REMOVED: delete_file_if_changed for 'download_file' as it's removed from model
+    # delete_file_if_changed(sender, instance, 'download_file') 
 
 @receiver(pre_save, sender=Track)
 def track_pre_save_delete_old_audio(sender, instance, **kwargs):
@@ -506,7 +502,8 @@ def artist_post_delete_cleanup_picture(sender, instance, **kwargs):
 @receiver(post_delete, sender=Release)
 def release_post_delete_cleanup_cover_and_download(sender, instance, **kwargs):
     delete_file_on_instance_delete(instance.cover_art)
-    delete_file_on_instance_delete(instance.download_file) 
+    # REMOVED: delete_file_on_instance_delete for 'download_file'
+    # delete_file_on_instance_delete(instance.download_file) 
 
 @receiver(post_delete, sender=Track)
 def track_post_delete_cleanup_audio(sender, instance, **kwargs):

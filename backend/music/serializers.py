@@ -1,10 +1,9 @@
 from rest_framework import serializers
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent # Added ListenEvent
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent 
 from rest_framework.reverse import reverse
 from decimal import Decimal
-from django.utils.dateparse import parse_datetime # For parsing ISO datetime string
+from django.utils.dateparse import parse_datetime 
 
-# +++ NEW SERIALIZER +++
 class ListenSegmentLogSerializer(serializers.Serializer):
     segment_start_timestamp_utc = serializers.DateTimeField(
         help_text="ISO 8601 UTC timestamp when the unmuted segment started playing."
@@ -15,11 +14,9 @@ class ListenSegmentLogSerializer(serializers.Serializer):
     )
 
     def validate_segment_start_timestamp_utc(self, value):
-        # Ensure it's a valid datetime. DRF DateTimeField usually handles this.
         if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
             raise serializers.ValidationError("Timestamp must be timezone-aware (UTC).")
         return value
-# +++ END NEW SERIALIZER +++
 
 
 class GenreSerializer(serializers.ModelSerializer):
@@ -49,7 +46,7 @@ class TrackSerializer(serializers.ModelSerializer):
         required=False 
     )
     stream_url = serializers.SerializerMethodField() 
-    listen_count = serializers.IntegerField(read_only=True) # Added listen_count
+    listen_count = serializers.IntegerField(read_only=True) 
 
     class Meta:
         model = Track
@@ -71,14 +68,14 @@ class TrackSerializer(serializers.ModelSerializer):
             'release_cover_art', 
             'genres_data', 
             'genre_names', 
-            'listen_count', # Added listen_count
+            'listen_count', 
             'created_at'
         ]
         read_only_fields = [
             'release_id', 'artist_id', 'release_title', 'artist_name', 'release_cover_art', 
             'duration_in_seconds', 'codec_name', 'bit_rate', 'sample_rate', 
             'channels', 'is_lossless', 'genres_data', 'stream_url', 
-            'listen_count' # Added listen_count
+            'listen_count' 
         ]
 
     def get_stream_url(self, obj: Track) -> str | None:
@@ -136,7 +133,7 @@ class ReleaseSerializer(serializers.ModelSerializer):
     available_download_formats = serializers.SerializerMethodField()
     
     product_info_id = serializers.IntegerField(source='product_info.id', read_only=True, allow_null=True)
-    listen_count = serializers.IntegerField(read_only=True) # Added listen_count
+    listen_count = serializers.IntegerField(read_only=True) 
 
     class Meta:
         model = Release
@@ -149,20 +146,20 @@ class ReleaseSerializer(serializers.ModelSerializer):
             'genre_names', 
             'is_published', 'is_visible',
             'tracks',
-            'download_file', 
+            # 'download_file', # REMOVED download_file
             'pricing_model', 
             'pricing_model_display',
             'price', 
             'currency', 
             'minimum_price_nyp',
             'available_download_formats',
-            'listen_count', # Added listen_count
+            'listen_count', 
             'created_at', 'updated_at'
         ]
         read_only_fields = [
             'is_visible', 'release_type_display', 'genres_data', 'artist', 
             'pricing_model_display', 'available_download_formats',
-            'product_info_id', 'listen_count' # Added listen_count
+            'product_info_id', 'listen_count' 
         ]
 
     def get_available_download_formats(self, obj: Release):
@@ -268,13 +265,14 @@ class ReleaseSerializer(serializers.ModelSerializer):
              instance.cover_art = cover_art_data
              validated_data.pop('cover_art')
 
-        download_file_data = validated_data.get('download_file', Ellipsis)
-        if download_file_data is None: 
-            instance.download_file = None
-            if 'download_file' in validated_data: validated_data.pop('download_file')
-        elif download_file_data is not Ellipsis and download_file_data is not False:
-            instance.download_file = download_file_data
-            if 'download_file' in validated_data: validated_data.pop('download_file')
+        # REMOVED download_file logic
+        # download_file_data = validated_data.get('download_file', Ellipsis)
+        # if download_file_data is None: 
+        #     instance.download_file = None
+        #     if 'download_file' in validated_data: validated_data.pop('download_file')
+        # elif download_file_data is not Ellipsis and download_file_data is not False:
+        #     instance.download_file = download_file_data
+        #     if 'download_file' in validated_data: validated_data.pop('download_file')
         
         pricing_model = validated_data.get('pricing_model', instance.pricing_model)
 
