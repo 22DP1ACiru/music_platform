@@ -53,16 +53,15 @@ export interface ReleaseSummary {
   listen_count?: number;
 }
 
-// Updated/New CarouselSlide Type
 export interface CarouselSlide {
-  id: string | number; // Can be Highlight ID or a special string like "welcome-slide"
-  type: "welcome" | "release"; // To differentiate a generic welcome from a release highlight
-  title: string; // Effective title (carousel_title or release.title)
-  subtitle?: string; // carousel_subtitle or release.artist.name
-  description?: string; // carousel_description
-  imageUrl?: string | null; // effective_image_url
-  linkUrl?: string; // URL to the release detail page
-  releaseObject?: ReleaseDetail | ReleaseSummary; // Optional: full release data if needed for more actions
+  id: string | number;
+  type: "welcome" | "release";
+  title: string;
+  subtitle?: string;
+  description?: string;
+  imageUrl?: string | null;
+  linkUrl?: string;
+  releaseObject?: ReleaseDetail | ReleaseSummary;
 }
 
 export interface HighlightItem {
@@ -72,11 +71,11 @@ export interface HighlightItem {
   release_title: string;
   release_artist_name: string;
   effective_title: string;
-  carousel_subtitle?: string | null;
-  carousel_description?: string | null;
+  title: string; // Previously carousel_title
+  subtitle?: string | null; // Previously carousel_subtitle
+  description?: string | null; // Previously carousel_description
   effective_image_url: string | null;
   order: number;
-  // Potentially add other fields if needed by frontend logic, e.g., for admin view
 }
 
 export interface GeneratedDownloadStatus {

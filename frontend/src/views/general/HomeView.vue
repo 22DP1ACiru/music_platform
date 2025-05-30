@@ -38,27 +38,26 @@ async function fetchHighlights() {
   isLoadingHighlights.value = true;
   errorHighlights.value = null;
   try {
-    const response = await axios.get<PaginatedResponse<HighlightItem>>( // Use HighlightItem for raw API response
+    const response = await axios.get<PaginatedResponse<HighlightItem>>(
       "/highlights/"
     );
-    const activeHighlights = response.data.results; // Already filtered by backend
+    const activeHighlights = response.data.results;
 
     const highlightSlides: CarouselSlide[] = activeHighlights.map((item) => ({
       type: "release",
-      id: `highlight-${item.id}`, // Use Highlight ID for key
-      title: item.effective_title, // Use effective_title from serializer
-      subtitle: item.carousel_subtitle || item.release_artist_name, // Fallback to artist name
-      imageUrl: item.effective_image_url, // Use effective_image_url from serializer
-      description: item.carousel_description || undefined, // Optional
-      linkUrl: `/releases/${item.release_id}`, // Link to the release
-      // releaseObject: item.release, // The HighlightSerializer doesn't nest the full release by default
+      id: `highlight-${item.id}`,
+      title: item.effective_title,
+      subtitle: item.subtitle || item.release_artist_name, // Use item.subtitle (new name)
+      imageUrl: item.effective_image_url,
+      description: item.description || undefined, // Use item.description (new name)
+      linkUrl: `/releases/${item.release_id}`,
     }));
 
     carouselItems.value = [welcomeSlide, ...highlightSlides];
   } catch (err) {
     console.error("HomeView: Failed to fetch highlights:", err);
     errorHighlights.value = "Could not load featured highlights.";
-    carouselItems.value = [welcomeSlide]; // Show welcome slide even if highlights fail
+    carouselItems.value = [welcomeSlide];
   } finally {
     isLoadingHighlights.value = false;
   }

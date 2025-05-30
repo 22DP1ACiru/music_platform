@@ -298,18 +298,17 @@ class CommentSerializer(serializers.ModelSerializer):
         read_only_fields = ['user']
 
 class HighlightSerializer(serializers.ModelSerializer):
-    # release = ReleaseSerializer(read_only=True) # Full release detail can be too much, make it simpler
     release_id = serializers.IntegerField(source='release.id', read_only=True)
     release_title = serializers.CharField(source='release.title', read_only=True)
     release_artist_name = serializers.CharField(source='release.artist.name', read_only=True)
     
-    # Use methods from the model to get effective title and image
     effective_title = serializers.CharField(source='get_effective_title', read_only=True)
     effective_image_url = serializers.SerializerMethodField()
     
-    # Keep carousel_subtitle and carousel_description as they are specific to the highlight
-    # custom_carousel_image is not directly exposed, effective_image_url handles it.
-    # created_by = serializers.StringRelatedField(read_only=True)
+    # Directly use the renamed model fields for output
+    title = serializers.CharField(source='title', read_only=True, allow_blank=True)
+    subtitle = serializers.CharField(source='subtitle', read_only=True, allow_blank=True)
+    description = serializers.CharField(source='description', read_only=True, allow_blank=True)
 
     class Meta:
         model = Highlight
@@ -318,17 +317,15 @@ class HighlightSerializer(serializers.ModelSerializer):
             'release_id', 
             'release_title',
             'release_artist_name',
-            'effective_title', # This will be the main title for the carousel
-            'carousel_subtitle', 
-            'carousel_description', 
-            'effective_image_url', # This will be the main image for the carousel
+            'effective_title', 
+            'title', # Expose the direct title field
+            'subtitle', 
+            'description', 
+            'effective_image_url', 
             'order',
-            'display_start_datetime', # Frontend might not need these directly
-            'display_end_datetime',   # But useful for admin or debugging
-            'is_active',              #
-            # 'created_by', 
-            # 'created_at', 
-            # 'updated_at'
+            'display_start_datetime', 
+            'display_end_datetime',   
+            'is_active',              
         ]
     
     def get_effective_image_url(self, obj: Highlight):

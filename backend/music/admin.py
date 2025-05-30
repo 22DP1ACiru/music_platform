@@ -76,7 +76,7 @@ class CommentAdmin(admin.ModelAdmin):
 class HighlightAdmin(admin.ModelAdmin):
     list_display = (
         'release_title_admin', 
-        'carousel_title_display',
+        'highlight_title_display', # Renamed method
         'is_active', 
         'display_start_datetime', 
         'display_end_datetime', 
@@ -88,9 +88,9 @@ class HighlightAdmin(admin.ModelAdmin):
     search_fields = (
         'release__title', 
         'release__artist__name', 
-        'carousel_title', 
-        'carousel_subtitle', 
-        'carousel_description'
+        'title', # Updated field name
+        'subtitle', # Updated field name
+        'description' # Updated field name
     )
     autocomplete_fields = ['release', 'created_by']
     readonly_fields = ('created_at', 'updated_at')
@@ -98,15 +98,15 @@ class HighlightAdmin(admin.ModelAdmin):
         (None, {
             'fields': ('release', 'is_active', 'order')
         }),
-        ('Carousel Content (Overrides Release Info)', {
-            'fields': ('carousel_title', 'carousel_subtitle', 'carousel_description', 'custom_carousel_image')
+        ('Highlight Content (Overrides Release Info)', { # Updated section title
+            'fields': ('title', 'subtitle', 'description', 'custom_carousel_image') # Updated field names
         }),
         ('Display Schedule', {
             'fields': ('display_start_datetime', 'display_end_datetime')
         }),
         ('Admin Info', {
             'fields': ('created_by', 'created_at', 'updated_at'),
-            'classes': ('collapse',) # Collapsible for less frequently edited fields
+            'classes': ('collapse',) 
         })
     )
 
@@ -115,13 +115,13 @@ class HighlightAdmin(admin.ModelAdmin):
     release_title_admin.short_description = 'Release'
     release_title_admin.admin_order_field = 'release__title'
 
-    def carousel_title_display(self,obj):
-        return obj.carousel_title or f"(Uses Release Title: {obj.release.title[:30]}...)"
-    carousel_title_display.short_description = "Carousel Title"
+    def highlight_title_display(self,obj): # Renamed method
+        return obj.title or f"(Uses Release Title: {obj.release.title[:30]}...)"
+    highlight_title_display.short_description = "Highlight Title" # Updated description
 
 
     def save_model(self, request, obj, form, change):
-        if not obj.pk: # If new object is being created
+        if not obj.pk: 
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
 

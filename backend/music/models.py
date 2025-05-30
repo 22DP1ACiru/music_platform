@@ -51,7 +51,6 @@ def generated_release_download_path(instance, filename):
     unique_id = instance.unique_identifier or uuid.uuid4()
     return f'generated_downloads/release_{release_id_for_path}/{unique_id}_{filename}'
 
-# Path for custom highlight images
 def highlight_custom_image_path(instance, filename):
     highlight_id_for_path = instance.id if instance.id else "new_highlight"
     return f'highlights/{highlight_id_for_path}/{filename}'
@@ -366,13 +365,12 @@ class Comment(models.Model):
 class Highlight(models.Model):
     release = models.ForeignKey(Release, on_delete=models.CASCADE, related_name='highlights')
     
-    # Carousel specific content overrides
-    carousel_title = models.CharField(max_length=200, blank=True, 
-                                      help_text="Optional: Carousel title override. Defaults to release title.")
-    carousel_subtitle = models.CharField(max_length=200, blank=True,
-                                         help_text="Optional: Subtitle for the carousel slide.")
-    carousel_description = models.TextField(blank=True, 
-                                            help_text="Optional: Description for the carousel slide.")
+    title = models.CharField(max_length=200, blank=True, 
+                             help_text="Optional: Highlight title. Defaults to release title.")
+    subtitle = models.CharField(max_length=200, blank=True,
+                                help_text="Optional: Subtitle for the highlight.")
+    description = models.TextField(blank=True, 
+                                   help_text="Optional: Description for the highlight.")
     custom_carousel_image = models.ImageField(
         upload_to=highlight_custom_image_path, 
         null=True, 
@@ -381,7 +379,6 @@ class Highlight(models.Model):
         help_text="Optional: Custom image for carousel. Defaults to release cover art."
     )
 
-    # Display control
     display_start_datetime = models.DateTimeField(default=timezone.now,
                                                 help_text="When this highlight should start being displayed.")
     display_end_datetime = models.DateTimeField(null=True, blank=True,
@@ -390,24 +387,22 @@ class Highlight(models.Model):
     is_active = models.BooleanField(default=True, help_text="Manually activate or deactivate this highlight.")
     order = models.PositiveIntegerField(default=0, help_text="Order for display (e.g., 0 is first).")
     
-    # Admin tracking
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
         on_delete=models.SET_NULL, 
         null=True, 
-        related_name='created_highlights', # Changed related_name
+        related_name='created_highlights',
         help_text="Admin/Staff user who created this highlight."
     )
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True) # Renamed from highlighted_at
     updated_at = models.DateTimeField(auto_now=True)
 
-
     def __str__(self):
-        effective_title = self.carousel_title or self.release.title
+        effective_title = self.get_effective_title()
         return f"Highlight: {effective_title}"
 
     def get_effective_title(self):
-        return self.carousel_title or self.release.title
+        return self.title or self.release.title # Use renamed field
 
     def get_effective_image_url(self):
         if self.custom_carousel_image and hasattr(self.custom_carousel_image, 'url'):
@@ -417,7 +412,7 @@ class Highlight(models.Model):
         return None
 
     class Meta:
-        ordering = ['order', '-display_start_datetime', '-created_at'] # Updated ordering
+        ordering = ['order', '-display_start_datetime', '-created_at']
 
 class GeneratedDownload(models.Model):
     class StatusChoices(models.TextChoices):
