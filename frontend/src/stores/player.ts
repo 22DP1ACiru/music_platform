@@ -14,7 +14,7 @@ interface PersistedPlayerState {
 }
 
 const PLAYER_STORAGE_KEY = "vaultwavePlayerState";
-const MIN_LOGGABLE_SEGMENT_MS = 2000; // Minimum segment duration in milliseconds to log
+const MIN_LOGGABLE_SEGMENT_MS = 2000;
 
 export const usePlayerStore = defineStore("player", () => {
   const loadInitialState = (): Partial<PersistedPlayerState> => {
@@ -54,7 +54,7 @@ export const usePlayerStore = defineStore("player", () => {
   );
   const duration = ref(0);
 
-  const volume = ref<number>(initialState.persistedVolume ?? 0.75);
+  const volumeInternal = ref<number>(initialState.persistedVolume ?? 0.75);
   const isMutedInternal = ref<boolean>(initialState.persistedIsMuted ?? false);
   const repeatMode = ref<"none" | "one" | "all">(
     initialState.persistedRepeatMode ?? "none"
@@ -82,6 +82,13 @@ export const usePlayerStore = defineStore("player", () => {
   });
 
   const isMuted = computed(() => isMutedInternal.value);
+  const volume = computed(() => volumeInternal.value);
+
+  const isEffectivelyAudible = computed(() => {
+    return (
+      isPlaying.value && !isMutedInternal.value && volumeInternal.value > 0
+    );
+  });
 
   function savePlayerStateToLocalStorage(
     options: { preservePersistedTime?: boolean } = {}
@@ -114,7 +121,7 @@ export const usePlayerStore = defineStore("player", () => {
       persistedQueue: queue.value,
       persistedQueueIndex: currentQueueIndex.value,
       persistedCurrentTime: timeToPersist,
-      persistedVolume: volume.value,
+      persistedVolume: volumeInternal.value,
       persistedIsMuted: isMutedInternal.value,
       persistedRepeatMode: repeatMode.value,
     };
@@ -135,7 +142,6 @@ export const usePlayerStore = defineStore("player", () => {
     segmentDurationMs: number
   ) {
     if (segmentDurationMs < MIN_LOGGABLE_SEGMENT_MS) {
-      // Use the constant
       console.log(
         `PlayerStore: Skipping log for short segment (${segmentDurationMs}ms, min: ${MIN_LOGGABLE_SEGMENT_MS}ms) for track ${trackId}`
       );
@@ -176,9 +182,14 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   function handleUnmutedSegmentStart() {
+    if (unmutedSegmentStartTime.value) {
+      handleUnmutedSegmentEnd(
+        "starting new segment (precautionary end in handleUnmutedSegmentStart)"
+      );
+    }
+
     if (
-      isPlaying.value &&
-      !isMutedInternal.value &&
+      isEffectivelyAudible.value &&
       currentTrack.value &&
       currentTrack.value.id
     ) {
@@ -188,15 +199,35 @@ export const usePlayerStore = defineStore("player", () => {
       unmutedSegmentStartTime.value = Date.now();
       currentTrackIdForLogging.value = currentTrack.value.id;
     } else {
-      if (unmutedSegmentStartTime.value) {
-        console.log(
-          "PlayerStore: Conditions not met for new unmuted segment, ending any previous one."
-        );
-        handleUnmutedSegmentEnd("conditions not met for start");
-      }
+      unmutedSegmentStartTime.value = null;
       currentTrackIdForLogging.value = currentTrack.value?.id || null;
     }
   }
+
+  // +++ NEW ACTION FOR SEEKING +++
+  function handleSeekOperation() {
+    console.log("PlayerStore: Seek operation detected.");
+    if (unmutedSegmentStartTime.value) {
+      handleUnmutedSegmentEnd("seek operation");
+    }
+    // After ending the old segment, if the track is still effectively audible, start a new one.
+    // This relies on isEffectivelyAudible being true *after* the seek completes and currentTime is updated.
+    // The AudioPlayer.vue will update currentTime, and then if playback resumes/continues,
+    // the isEffectivelyAudible watcher should trigger handleUnmutedSegmentStart.
+    // For robustness, we can also try to start it here if conditions seem right *immediately* after.
+    // However, this might be premature if isPlaying is false during the drag.
+    // The isEffectivelyAudible watcher is generally better.
+    // Let's ensure that if isPlaying is true AND conditions are met after seek, it starts.
+    // The `isSeeking` flag in AudioPlayer.vue helps to not update store's currentTime during drag.
+    // Once mouseup happens, `isSeeking` becomes false. If `isPlaying` is true, `onTimeUpdate` fires,
+    // and `isEffectivelyAudible` should then correctly trigger `handleUnmutedSegmentStart`.
+
+    // To be absolutely sure, especially if playback doesn't pause during seek:
+    if (isEffectivelyAudible.value) {
+      handleUnmutedSegmentStart();
+    }
+  }
+  // +++ END NEW ACTION +++
 
   let currentTimeSaveTimeout: number | undefined;
   watch(currentTime, (newTime) => {
@@ -211,48 +242,49 @@ export const usePlayerStore = defineStore("player", () => {
   watch(
     currentTrack,
     (newTrack, oldTrack) => {
-      if (oldTrack && oldTrack.id) {
-        handleUnmutedSegmentEnd("track changed");
-      }
       currentTrackIdForLogging.value = newTrack?.id || null;
-      if (newTrack) {
-      } else {
-        unmutedSegmentStartTime.value = null;
+      if (!newTrack && unmutedSegmentStartTime.value) {
+        handleUnmutedSegmentEnd("track became null");
       }
       savePlayerStateToLocalStorage({ preservePersistedTime: !newTrack });
     },
     { deep: true }
   );
 
-  watch(isPlaying, (playing, wasPlaying) => {
+  watch(isEffectivelyAudible, (newlyAudible, wasAudible) => {
     if (currentTrack.value) {
-      if (playing && !isMutedInternal.value) {
+      if (newlyAudible && !wasAudible) {
         handleUnmutedSegmentStart();
-      } else if (!playing && unmutedSegmentStartTime.value) {
+      } else if (!newlyAudible && wasAudible && unmutedSegmentStartTime.value) {
         handleUnmutedSegmentEnd(
-          playing ? "became muted while playing (unexpected)" : "paused/stopped"
+          isPlaying.value
+            ? isMutedInternal.value
+              ? "muted"
+              : "volume zero"
+            : "paused/stopped"
         );
       }
-    }
-    if (!playing && currentTrack.value) {
-      clearTimeout(currentTimeSaveTimeout);
-      savePlayerStateToLocalStorage({ preservePersistedTime: false });
-    } else {
-      savePlayerStateToLocalStorage({ preservePersistedTime: true });
+    } else if (!newlyAudible && unmutedSegmentStartTime.value) {
+      handleUnmutedSegmentEnd("no current track and not audible");
     }
   });
 
-  function setMuted(muted: boolean) {
-    const oldMuteState = isMutedInternal.value;
-    isMutedInternal.value = muted;
+  watch(isPlaying, (playing) => {
+    savePlayerStateToLocalStorage(
+      !playing && currentTrack.value
+        ? { preservePersistedTime: false }
+        : { preservePersistedTime: true }
+    );
+  });
 
-    if (oldMuteState !== muted && currentTrack.value && isPlaying.value) {
-      if (muted) {
-        handleUnmutedSegmentEnd("muted");
-      } else {
-        handleUnmutedSegmentStart();
-      }
-    }
+  function setMuted(muted: boolean) {
+    isMutedInternal.value = muted;
+    savePlayerStateToLocalStorage({ preservePersistedTime: true });
+  }
+
+  function setVolume(vol: number) {
+    const newVolume = Math.max(0, Math.min(1, vol));
+    volumeInternal.value = newVolume;
     savePlayerStateToLocalStorage({ preservePersistedTime: true });
   }
 
@@ -264,20 +296,44 @@ export const usePlayerStore = defineStore("player", () => {
     { deep: true }
   );
 
-  watch([volume, repeatMode], () => {
+  watch([repeatMode], () => {
     savePlayerStateToLocalStorage({ preservePersistedTime: true });
   });
 
   function _startPlayback(track: PlayerTrackInfo) {
-    currentTrack.value = track;
+    const oldTrackId = currentTrack.value?.id;
+
     if (
-      currentQueueIndex.value !== -1 &&
-      queue.value[currentQueueIndex.value]?.id === track.id
+      oldTrackId &&
+      oldTrackId !== track.id &&
+      unmutedSegmentStartTime.value
     ) {
-    } else {
+      handleUnmutedSegmentEnd(`_startPlayback for new track: ${track.title}`);
+    } else if (
+      oldTrackId &&
+      oldTrackId === track.id &&
+      unmutedSegmentStartTime.value
+    ) {
+      handleUnmutedSegmentEnd(
+        `_startPlayback replaying same track: ${track.title}`
+      );
+    }
+
+    currentTrack.value = track;
+    currentTrackIdForLogging.value = track.id;
+
+    if (
+      currentQueueIndex.value === -1 ||
+      queue.value[currentQueueIndex.value]?.id !== track.id
+    ) {
       currentTime.value = 0;
     }
     isPlaying.value = true;
+
+    // Directly attempt to start segment after state is set
+    if (isEffectivelyAudible.value) {
+      handleUnmutedSegmentStart();
+    }
   }
 
   function setQueueAndPlay(tracks: PlayerTrackInfo[], startIndex: number = 0) {
@@ -289,12 +345,10 @@ export const usePlayerStore = defineStore("player", () => {
 
     queue.value = [...tracks];
     currentQueueIndex.value = startIndex;
-    currentTime.value = 0;
     _startPlayback(queue.value[startIndex]);
   }
 
   function playTrack(track: PlayerTrackInfo) {
-    currentTime.value = 0;
     setQueueAndPlay([track], 0);
   }
 
@@ -315,7 +369,6 @@ export const usePlayerStore = defineStore("player", () => {
           : 0;
       if (indexToPlay < queue.value.length) {
         currentQueueIndex.value = indexToPlay;
-        currentTime.value = 0;
         _startPlayback(queue.value[indexToPlay]);
       }
     } else if (currentTrack.value) {
@@ -333,6 +386,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   function playNextInQueue() {
     if (queue.value.length === 0) {
+      if (unmutedSegmentStartTime.value)
+        handleUnmutedSegmentEnd("queue empty, stopping");
       currentTrack.value = null;
       isPlaying.value = false;
       currentQueueIndex.value = -1;
@@ -344,13 +399,14 @@ export const usePlayerStore = defineStore("player", () => {
       if (repeatMode.value === "all") {
         nextIndex = 0;
       } else {
+        if (unmutedSegmentStartTime.value)
+          handleUnmutedSegmentEnd("queue ended, no repeat all");
         isPlaying.value = false;
         if (duration.value > 0) currentTime.value = duration.value;
         return;
       }
     }
     currentQueueIndex.value = nextIndex;
-    currentTime.value = 0;
     _startPlayback(queue.value[nextIndex]);
   }
 
@@ -362,9 +418,17 @@ export const usePlayerStore = defineStore("player", () => {
         currentQueueIndex.value === 0 &&
         repeatMode.value !== "all")
     ) {
+      if (
+        unmutedSegmentStartTime.value &&
+        currentTrack.value &&
+        currentTime.value > 0
+      ) {
+        handleUnmutedSegmentEnd("replay current track");
+      }
       currentTime.value = 0;
       if (currentTrack.value) {
         isPlaying.value = true;
+        if (isEffectivelyAudible.value) handleUnmutedSegmentStart();
       }
       return;
     }
@@ -374,21 +438,32 @@ export const usePlayerStore = defineStore("player", () => {
         prevIndex = queue.value.length - 1;
       } else {
         if (currentTrack.value) {
+          if (
+            unmutedSegmentStartTime.value &&
+            currentTrack.value &&
+            currentTime.value > 0
+          ) {
+            handleUnmutedSegmentEnd("replay current track at start of queue");
+          }
           currentTime.value = 0;
           isPlaying.value = true;
+          if (isEffectivelyAudible.value) handleUnmutedSegmentStart();
         }
         return;
       }
     }
     currentQueueIndex.value = prevIndex;
-    currentTime.value = 0;
     _startPlayback(queue.value[prevIndex]);
   }
 
   function handleTrackEnd() {
+    if (currentTrack.value && unmutedSegmentStartTime.value) {
+      handleUnmutedSegmentEnd("track naturally ended");
+    }
+
     if (repeatMode.value === "one" && currentTrack.value) {
       currentTime.value = 0;
-      isPlaying.value = true;
+      _startPlayback(currentTrack.value);
     } else {
       playNextInQueue();
     }
@@ -399,9 +474,6 @@ export const usePlayerStore = defineStore("player", () => {
   }
   function setDuration(time: number) {
     duration.value = time;
-  }
-  function setVolume(vol: number) {
-    volume.value = Math.max(0, Math.min(1, vol));
   }
 
   function toggleMute() {
@@ -439,7 +511,6 @@ export const usePlayerStore = defineStore("player", () => {
   function playTrackFromQueueByIndex(index: number) {
     if (index >= 0 && index < queue.value.length) {
       currentQueueIndex.value = index;
-      currentTime.value = 0;
       _startPlayback(queue.value[index]);
     }
   }
@@ -448,6 +519,14 @@ export const usePlayerStore = defineStore("player", () => {
     if (indexToRemove < 0 || indexToRemove >= queue.value.length) return;
     const isRemovingCurrentTrack = currentQueueIndex.value === indexToRemove;
     const wasPlaying = isPlaying.value;
+
+    if (
+      isRemovingCurrentTrack &&
+      currentTrack.value &&
+      unmutedSegmentStartTime.value
+    ) {
+      handleUnmutedSegmentEnd("removed current track from queue");
+    }
 
     queue.value.splice(indexToRemove, 1);
 
@@ -459,11 +538,12 @@ export const usePlayerStore = defineStore("player", () => {
       let newIndexToPlay = indexToRemove;
       if (newIndexToPlay >= queue.value.length) newIndexToPlay = 0;
       currentQueueIndex.value = newIndexToPlay;
-      currentTime.value = 0;
       if (wasPlaying) _startPlayback(queue.value[newIndexToPlay]);
       else {
         currentTrack.value = queue.value[newIndexToPlay];
+        currentTrackIdForLogging.value = currentTrack.value.id;
         duration.value = currentTrack.value.duration || 0;
+        currentTime.value = 0;
       }
     } else if (indexToRemove < currentQueueIndex.value) {
       currentQueueIndex.value--;
@@ -471,7 +551,7 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   function resetPlayerState(fullReset = true) {
-    if (currentTrack.value) {
+    if (currentTrack.value && unmutedSegmentStartTime.value) {
       handleUnmutedSegmentEnd("player reset");
     }
     currentTrack.value = null;
@@ -484,7 +564,7 @@ export const usePlayerStore = defineStore("player", () => {
     unmutedSegmentStartTime.value = null;
 
     if (fullReset) {
-      volume.value = 0.75;
+      volumeInternal.value = 0.75;
       isMutedInternal.value = false;
       repeatMode.value = "none";
     }
@@ -498,7 +578,7 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   window.addEventListener("beforeunload", () => {
-    if (currentTrack.value) {
+    if (currentTrack.value && unmutedSegmentStartTime.value) {
       handleUnmutedSegmentEnd("window unload");
     }
     if (currentTrack.value && isPlaying.value) {
@@ -543,5 +623,6 @@ export const usePlayerStore = defineStore("player", () => {
     playTrackFromQueueByIndex,
     removeTrackFromQueue,
     resetPlayerState,
+    handleSeekOperation, // Expose the new action
   };
 });

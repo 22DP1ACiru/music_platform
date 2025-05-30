@@ -33,25 +33,16 @@ def cover_art_path(instance, filename):
     return f'cover_art/{artist_id_for_path}/{release_id_for_path}/{filename}'
 
 def track_audio_path(instance, filename):
-    # Ensure instance.release and instance.release.artist exist for path generation
     artist_id_for_path = instance.release.artist_id if instance.release and instance.release.artist_id else "unknown_artist"
     release_id_for_path = instance.release_id if instance.release_id else "unknown_release"
     
-    # Generate a unique filename using UUID to ensure controlled length and uniqueness
     _, ext = os.path.splitext(filename)
-    # Sanitize extension: remove leading dot if present, ensure it's just the extension.
     clean_ext = ext.lstrip('.').lower()
-    if not clean_ext: # Default to .mp3 if no extension or problematic
+    if not clean_ext: 
         clean_ext = 'mp3' 
         
     unique_filename = f"{uuid.uuid4()}.{clean_ext}"
-    
-    # The instance.id might not be available on first save if the file is processed before initial save with ID.
-    # However, Django usually saves the model, gets an ID, then saves the file.
-    # If instance.id is None here, it means the file is being named *before* the initial save that assigns an ID.
-    # Using "new_track_temp" for unsaved instances.
     track_id_component = instance.id if instance.id else "new_track_temp"
-
     return f'tracks/{artist_id_for_path}/{release_id_for_path}/{track_id_component}/{unique_filename}'
 
 def release_download_path(instance, filename):
@@ -268,22 +259,21 @@ class Track(models.Model):
             self.codec_name = None; self.bit_rate = None; self.sample_rate = None; self.channels = None; self.is_lossless = None;
         except FileNotFoundError:
             logger.error(f"Track {self.id or self.title}: ffprobe not found.")
-            return False # Indicate failure if ffprobe isn't available
+            return False 
         except json.JSONDecodeError:
             logger.error(f"Track {self.id or self.title}: Failed to parse ffprobe JSON for {self.audio_file.name}.")
-        except Exception as e: # Catch any other exception during ffprobe execution
+        except Exception as e: 
             logger.error(f"Track {self.id or self.title}: Unexpected ffprobe error for {self.audio_file.name}: {e}")
 
 
         new_duration = None
         try:
-            # Ensure file is opened in binary mode for Mutagen
             with self.audio_file.storage.open(self.audio_file.name, 'rb') as f:
                 audio_metadata_obj = MutagenFile(f)
                 if audio_metadata_obj and hasattr(audio_metadata_obj, 'info') and audio_metadata_obj.info and hasattr(audio_metadata_obj.info, 'length') and audio_metadata_obj.info.length > 0:
                     new_duration = round(audio_metadata_obj.info.length)
                     logger.info(f"Track {self.id or self.title}: Mutagen duration: {new_duration}s")
-                else: # Fallback to ffprobe duration if mutagen fails or returns no length
+                else: 
                     if audio_stream and 'duration' in audio_stream:
                         duration_str = audio_stream.get('duration')
                         if duration_str: new_duration = round(float(duration_str))
@@ -294,16 +284,16 @@ class Track(models.Model):
                         logger.info(f"Track {self.id or self.title}: ffprobe format duration: {new_duration}s (mutagen failed/no length).")
                     else:
                          logger.warning(f"Track {self.id or self.title}: Mutagen & ffprobe couldn't extract duration from {self.audio_file.name}.")
-        except MutagenError as e: # Catch specific Mutagen errors
+        except MutagenError as e: 
             logger.error(f"Track {self.id or self.title}: MutagenError reading duration for {self.audio_file.name}: {e}")
-        except Exception as e: # Catch other errors like file not found if storage path is incorrect
+        except Exception as e: 
             logger.error(f"Track {self.id or self.title}: Error reading for duration with Mutagen/ffprobe fallback for {self.audio_file.name}: {e}")
 
 
         if self.duration_in_seconds != new_duration:
             self.duration_in_seconds = new_duration
-            return True # Metadata changed
-        return True # Metadata extraction attempted, even if no change to duration
+            return True 
+        return True 
 
     def save(self, *args, **kwargs):
         logger.info(f"Track.save() started for track PK '{self.pk}' - Title: '{self.title}'")
@@ -314,66 +304,38 @@ class Track(models.Model):
         if current_audio_file_name:
             if is_new_instance or self._original_audio_file_name_on_load != current_audio_file_name:
                 file_changed = True
-        elif not current_audio_file_name and self._original_audio_file_name_on_load: # File was removed
+        elif not current_audio_file_name and self._original_audio_file_name_on_load: 
             file_changed = True 
 
-        # If the file was removed, clear its metadata
         if file_changed and not current_audio_file_name: 
             self.duration_in_seconds = None; self.codec_name = None; self.bit_rate = None
             self.sample_rate = None; self.channels = None; self.is_lossless = None
             logger.info(f"Track PK '{self.pk}': File cleared, metadata reset.")
-            super().save(*args, **kwargs) # Save cleared metadata
-            self._original_audio_file_name_on_load = None # Update original name tracking
+            super().save(*args, **kwargs) 
+            self._original_audio_file_name_on_load = None 
             logger.info(f"Track.save() finished early for cleared file on track PK '{self.pk}'.")
             return
-
-        # For new instances or changed files, the ID might not be set yet when `track_audio_path` is first called.
-        # Django's FileField handling:
-        # 1. Model instance is created (but not yet saved to DB if new).
-        # 2. `upload_to` callable might be invoked.
-        # 3. Model instance `save()` is called.
-        # 4. If it's a new instance, it gets an ID.
-        # 5. The file itself is then saved to storage using the path from `upload_to`.
-        # So, if `track_audio_path` relies on `instance.id`, it needs to be called *after* the initial save for new instances.
-        # The `FileField` itself handles this. Our `_original_audio_file_name_on_load` helps detect if the file field was *changed*.
         
-        # Save the instance first (especially if new, to get an ID for path generation)
-        # If it's an update and only metadata changed, this save is fine.
-        # If file also changed, this first save updates scalar fields, then file is saved, then metadata extracted.
         if not is_new_instance and not file_changed:
-             # If not new and file hasn't changed, only save if other fields changed (passed in update_fields)
-             # or save normally if no update_fields given.
              super().save(*args, **kwargs)
-        else: # New instance or file changed
-            # For new instances, we need to save to get an ID *before* `extract_audio_metadata` if path depends on ID.
-            # However, `extract_audio_metadata` needs the file to be at its final path.
-            # Standard Django flow:
-            # 1. `super().save()` without file op.
-            # 2. Then file is written by `FileField` descriptor.
-            # 3. Then we extract.
-            # If `file_changed` is true, `super().save()` will handle writing the new file to its path.
-            # After that, the file exists at `self.audio_file.path` for metadata extraction.
+        else: 
             super().save(*args, **kwargs) 
 
 
-        # Update original file tracking after save
         self._original_audio_file_name_on_load = self.audio_file.name if self.audio_file else None
 
         metadata_fields_to_update = []
         
-        # Extract metadata if file changed OR if it's a new instance and metadata isn't already populated
         if file_changed and self.audio_file and self.audio_file.name:
             logger.info(f"Track PK '{self.pk}': File changed to '{self.audio_file.name}'. Extracting metadata.")
             
-            # Store current metadata values before extraction to see if they change
             old_metadata = {
                 'duration_in_seconds': self.duration_in_seconds, 'codec_name': self.codec_name,
                 'bit_rate': self.bit_rate, 'sample_rate': self.sample_rate,
                 'channels': self.channels, 'is_lossless': self.is_lossless
             }
-            self.extract_audio_metadata() # This updates instance fields
+            self.extract_audio_metadata() 
 
-            # Check which fields actually changed
             for field_name, old_value in old_metadata.items():
                 if getattr(self, field_name) != old_value:
                     metadata_fields_to_update.append(field_name)
@@ -384,14 +346,11 @@ class Track(models.Model):
                 logger.info(f"Track PK '{self.pk}': Metadata extracted but no changes detected to metadata fields.")
 
         elif is_new_instance and self.audio_file and self.audio_file.name and self.codec_name is None: 
-            # This case is for when it's a brand new track, just saved, and metadata hasn't been populated.
             logger.info(f"Track PK '{self.pk}': New instance, metadata not yet set. Extracting and saving metadata.")
-            self.extract_audio_metadata() # Populates fields
-            # Assume all metadata fields might have been updated from None
+            self.extract_audio_metadata() 
             metadata_fields_to_update = ['duration_in_seconds', 'codec_name', 'bit_rate', 'sample_rate', 'channels', 'is_lossless']
             
         if metadata_fields_to_update:
-            # Call save again, but only update the metadata fields to avoid recursion or re-processing file
             super().save(update_fields=metadata_fields_to_update)
             
         logger.info(f"Track.save() finished for track PK '{self.pk}'.")
@@ -488,53 +447,37 @@ class ListenEvent(models.Model):
         Release,
         on_delete=models.CASCADE,
         related_name='listen_events',
-        null=True, # Auto-populated in save
+        null=True, 
         db_index=True
     )
-    # Timestamp from frontend for when this specific segment started
     listen_start_timestamp_utc = models.DateTimeField(
         help_text="UTC timestamp when this unmuted listening segment started."
     )
-    # Duration from frontend for this specific segment
     reported_listen_duration_ms = models.PositiveIntegerField(
         help_text="Duration of this unmuted listening segment in milliseconds, reported by client."
     )
-    # Timestamp of when this record was created in the DB
     listened_at = models.DateTimeField(
         auto_now_add=True, 
         help_text="Timestamp when this event was logged by the backend."
     )
-    is_significant = models.BooleanField(
-        default=False, 
-        db_index=True,
-        help_text="True if this listen event meets the criteria for a significant listen."
-    )
-    is_processed_for_totals = models.BooleanField(
-        default=False,
-        db_index=True,
-        help_text="Helper flag for batch aggregation tasks, if implemented."
-    )
+    # `is_significant` and `is_processed_for_totals` fields are removed as per the revised plan
 
     class Meta:
         ordering = ['-listened_at']
         indexes = [
-            # Removed redundant indexes from previous thought process,
-            # db_index=True on individual fields is often sufficient for simple lookups.
-            # Composite indexes can be added later if query patterns demand it.
-            models.Index(fields=['track', 'is_significant', 'listened_at']),
-            models.Index(fields=['release', 'is_significant', 'listened_at']),
-            models.Index(fields=['user', 'is_significant', 'listened_at']),
+            models.Index(fields=['track', 'listened_at']),
+            models.Index(fields=['release', 'listened_at']),
+            models.Index(fields=['user', 'listened_at']),
         ]
 
     def __str__(self):
         user_display = self.user.username if self.user else "Anonymous"
-        significance = "Significant" if self.is_significant else "Partial"
-        return f"{significance} listen for '{self.track.title}' by {user_display} at {self.listened_at.strftime('%Y-%m-%d %H:%M')}"
+        # Since only significant listens are stored, we can assume it's significant.
+        return f"Significant listen for '{self.track.title}' by {user_display} at {self.listened_at.strftime('%Y-%m-%d %H:%M')}"
 
     def save(self, *args, **kwargs):
-        if self.track and not self.release: # Auto-populate release from track
+        if self.track and not self.release: 
             self.release = self.track.release
-        # The calculation for `is_significant` will be done in the view that creates this event.
         super().save(*args, **kwargs)
 
 # --- Signal Receivers ---

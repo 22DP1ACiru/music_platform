@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, computed, nextTick, onUnmounted } from "vue";
 import { usePlayerStore } from "@/stores/player";
-import PlayerQueue from "@/components/player/PlayerQueue.vue"; // Updated import path
+import PlayerQueue from "@/components/player/PlayerQueue.vue";
 
 const playerStore = usePlayerStore();
 const audioPlayer = ref<HTMLAudioElement | null>(null);
@@ -37,7 +37,7 @@ function formatTime(secs: number): string {
 const checkTextOverflow = () => {
   isTitleOverflowing.value = false;
   isArtistOverflowing.value = false;
-  if (!hasActiveTrack.value) return; // Don't check if no track
+  if (!hasActiveTrack.value) return;
 
   nextTick(() => {
     if (titleContainerRef.value && titleTextContentRef.value) {
@@ -86,14 +86,14 @@ const syncAudioElementState = () => {
 
 const tryToPlayAudio = () => {
   if (!audioPlayer.value || !audioPlayer.value.src || !hasActiveTrack.value) {
-    // Added !hasActiveTrack check
-    if (playerStore.isPlaying) playerStore.pauseTrack(); // Ensure store reflects inability to play
+    if (playerStore.isPlaying) playerStore.pauseTrack();
     return;
   }
   syncAudioElementState();
 
   if (playerStore.isPlaying && audioPlayer.value.paused) {
     if (audioPlayer.value.readyState >= 3) {
+      // HAVE_FUTURE_DATA or more
       audioPlayer.value.play().catch((e) => {
         console.warn(
           "Play failed, possibly due to user interaction policy:",
@@ -103,6 +103,10 @@ const tryToPlayAudio = () => {
           playerStore.pauseTrack();
         }
       });
+    } else {
+      console.log("AudioPlayer: Waiting for more data to play...");
+      // It might be beneficial to listen for 'canplay' or 'canplaythrough' here if auto-play on load is desired
+      // and user interaction has already occurred.
     }
   } else if (!playerStore.isPlaying && !audioPlayer.value.paused) {
     audioPlayer.value.pause();
@@ -111,7 +115,6 @@ const tryToPlayAudio = () => {
 
 const onLoadedMetadata = () => {
   if (audioPlayer.value && hasActiveTrack.value) {
-    // Check hasActiveTrack
     const currentAudioDuration = audioPlayer.value.duration;
     playerStore.setDuration(currentAudioDuration);
     syncAudioElementState();
@@ -144,14 +147,12 @@ const onLoadedMetadata = () => {
     }
     checkTextOverflow();
   } else if (audioPlayer.value && !hasActiveTrack.value) {
-    // No active track, ensure duration is 0
     playerStore.setDuration(0);
   }
 };
 
 const onCanPlay = () => {
   if (audioPlayer.value && hasActiveTrack.value) {
-    // Check hasActiveTrack
     syncAudioElementState();
     tryToPlayAudio();
   }
@@ -159,20 +160,20 @@ const onCanPlay = () => {
 
 const onTimeUpdate = () => {
   if (audioPlayer.value && !isSeeking.value && hasActiveTrack.value)
-    // Check hasActiveTrack
     playerStore.setCurrentTime(audioPlayer.value.currentTime);
 };
 
 const onVolumeChange = () => {
   if (audioPlayer.value) {
+    // Update store only if it's different to avoid loops
     if (playerStore.volume !== audioPlayer.value.volume)
-      playerStore.setVolume(audioPlayer.value.volume);
+      playerStore.setVolume(audioPlayer.value.volume); // Use the new setter
     if (playerStore.isMuted !== audioPlayer.value.muted)
-      playerStore.setMuted(audioPlayer.value.muted);
+      playerStore.setMuted(audioPlayer.value.muted); // Use the new setter
   }
 };
 const onEnded = () => {
-  if (hasActiveTrack.value) playerStore.handleTrackEnd(); // Check hasActiveTrack
+  if (hasActiveTrack.value) playerStore.handleTrackEnd();
 };
 
 watch(
@@ -183,23 +184,22 @@ watch(
 
     if (audioPlayer.value) {
       if (newUrl) {
-        // If there's a new URL (meaning a track is selected)
         if (newUrl !== audioPlayer.value.src) {
           audioPlayer.value.src = newUrl;
-          syncAudioElementState();
+          syncAudioElementState(); // Sync before load
           audioPlayer.value.load();
+          // tryToPlayAudio will be called by onCanPlay if isPlaying is true
         } else if (playerStore.isPlaying && audioPlayer.value.paused) {
+          // If src is same, but player is paused and store wants play (e.g. replay)
           tryToPlayAudio();
         }
       } else {
-        // No new URL (no track selected)
         audioPlayer.value.pause();
         audioPlayer.value.src = "";
-        playerStore.setDuration(0); // Explicitly set duration to 0
-        playerStore.setCurrentTime(0); // And current time
+        playerStore.setDuration(0);
+        playerStore.setCurrentTime(0);
       }
     }
-    // Check text overflow needs to happen after potential DOM updates due to track info change
     nextTick(checkTextOverflow);
   },
   { flush: "post" }
@@ -209,12 +209,9 @@ watch(
   () => playerStore.isPlaying,
   (playing) => {
     if (!audioPlayer.value) return;
-    // Only attempt to play/pause if there is an active track
     if (hasActiveTrack.value || !playing) {
-      // Allow pause even if no track (defensive)
       nextTick(tryToPlayAudio);
     } else if (playing && !hasActiveTrack.value) {
-      // If store says play but no track, force store to pause
       playerStore.pauseTrack();
     }
   }
@@ -231,7 +228,11 @@ watch(
     ) {
       const delta = Math.abs(audioPlayer.value.currentTime - newStoreTime);
       if (delta > 0.8) {
+        // Threshold to prevent jitter from minor discrepancies
         if (newStoreTime >= 0 && newStoreTime <= playerStore.duration) {
+          console.log(
+            `AudioPlayer: Syncing audio element time to store's ${newStoreTime} from ${audioPlayer.value.currentTime}`
+          );
           audioPlayer.value.currentTime = newStoreTime;
         }
       }
@@ -260,15 +261,12 @@ watch(
   hasActiveTrack,
   (newHasActiveTrack) => {
     if (!newHasActiveTrack) {
-      // If track becomes inactive, ensure internal player state is clean
       if (audioPlayer.value) {
         audioPlayer.value.pause();
-        // audioPlayer.value.src = ""; // This is handled by currentTrackUrl watcher
       }
       playerStore.setDuration(0);
       playerStore.setCurrentTime(0);
     }
-    // Ensure text overflow is re-checked when track status changes
     checkTextOverflow();
   },
   { immediate: true }
@@ -277,8 +275,9 @@ watch(
 const handleProgressSeek = (event: Event) => {
   if (audioPlayer.value && playerStore.duration > 0 && hasActiveTrack.value) {
     const newTime = parseFloat((event.target as HTMLInputElement).value);
-    audioPlayer.value.currentTime = newTime;
-    playerStore.setCurrentTime(newTime);
+    audioPlayer.value.currentTime = newTime; // Directly set audio element's time
+    playerStore.setCurrentTime(newTime); // Update store's time
+    // playerStore.handleSeekOperation(); // Call new action for seek
   }
 };
 const onSeekMouseDown = () => {
@@ -286,19 +285,25 @@ const onSeekMouseDown = () => {
   if (hasActiveTrack.value) isSeeking.value = true;
 };
 const onSeekMouseUp = () => {
-  isSeeking.value = false;
-  if (audioPlayer.value && hasActiveTrack.value) tryToPlayAudio();
+  if (isSeeking.value) {
+    // Only if a seek was in progress
+    isSeeking.value = false;
+    if (audioPlayer.value && hasActiveTrack.value) {
+      playerStore.handleSeekOperation(); // Call on mouseup to confirm seek end
+      tryToPlayAudio(); // Attempt to resume/start playback if applicable
+    }
+  }
 };
+
 const handleTogglePlayPauseClick = () => {
   if (!userHasInteracted.value) userHasInteracted.value = true;
   if (hasActiveTrack.value) playerStore.togglePlayPause();
 };
 const handleVolumeSeek = (event: Event) => {
-  // Volume can be adjusted even if no track is playing
   if (!userHasInteracted.value) userHasInteracted.value = true;
   const newVolume = parseFloat((event.target as HTMLInputElement).value);
-  playerStore.setVolume(newVolume);
-  if (newVolume > 0 && playerStore.isMuted) playerStore.setMuted(false);
+  playerStore.setVolume(newVolume); // Use the setter
+  if (newVolume > 0 && playerStore.isMuted) playerStore.setMuted(false); // Use the setter
 };
 const toggleQueuePopup = () => (showQueuePopup.value = !showQueuePopup.value);
 
@@ -307,16 +312,18 @@ onMounted(() => {
   if (audioPlayer.value) {
     syncAudioElementState();
     if (playerStore.currentTrackUrl) {
-      // implies hasActiveTrack is true or will soon be
       if (audioPlayer.value.src !== playerStore.currentTrackUrl) {
         audioPlayer.value.src = playerStore.currentTrackUrl;
+        // No explicit audioPlayer.value.load() here; let onloadedmetadata handle it if src changes.
+        // Or rely on the watcher for currentTrackUrl
       } else {
+        // Src is same, check if metadata is loaded (e.g. on page refresh with persisted state)
         if (audioPlayer.value.readyState >= 1) {
-          onLoadedMetadata();
+          // HAVE_METADATA
+          onLoadedMetadata(); // Manually call if metadata might already be there
         }
       }
     } else {
-      // No track URL on mount
       playerStore.setDuration(0);
       playerStore.setCurrentTime(0);
     }
@@ -528,8 +535,6 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   color: var(--c-player-text, #333);
 }
 
-/* No longer need .audio-player-bar-placeholder as bar is always shown */
-
 .player-content {
   display: flex;
   width: 100%;
@@ -556,10 +561,10 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
 }
 .cover-art-small.placeholder {
   border: 1px dashed var(--c-cover-placeholder-border, #aaa);
-  display: flex; /* Ensure placeholder icon/text can be centered */
+  display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.8em; /* Example for text inside placeholder */
+  font-size: 0.8em;
 }
 
 .track-details {
@@ -575,17 +580,15 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   width: 100%;
   overflow: hidden;
   white-space: nowrap;
-  height: 1.3em; /* Ensure consistent height */
+  height: 1.3em;
 }
 
 .title-container.no-track-info span {
   font-style: italic;
-  color: var(
-    --c-player-artist
-  ); /* Use a slightly dimmer color for placeholder */
+  color: var(--c-player-artist);
 }
 .artist-container.no-track-info {
-  height: 1.1em; /* Consistent height for artist line */
+  height: 1.1em;
 }
 
 .text-animate-wrapper {
@@ -690,10 +693,7 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
 }
 .progress-bar:disabled {
   cursor: not-allowed;
-  background: var(
-    --c-progress-thumb-disabled-border,
-    #ccc
-  ); /* More subtle disabled track */
+  background: var(--c-progress-thumb-disabled-border, #ccc);
 }
 .progress-bar::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -710,7 +710,7 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   background: var(--c-progress-thumb-disabled-bg, #999);
   border-color: var(--c-progress-thumb-disabled-border, #ccc);
   cursor: not-allowed;
-  width: 12px; /* Smaller thumb when disabled */
+  width: 12px;
   height: 12px;
 }
 .progress-bar::-moz-range-thumb {

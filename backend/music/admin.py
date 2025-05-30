@@ -1,8 +1,8 @@
 from django.contrib import admin
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent # Added ListenEvent
-from django.utils import timezone # For admin action
-from django.db import models # For Q objects in admin action (if still needed)
-import logging # For admin action logging
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent 
+from django.utils import timezone 
+from django.db import models 
+import logging 
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,10 @@ class ReleaseAdmin(admin.ModelAdmin):
     search_fields = ('title', 'artist__name', 'genres__name') 
     inlines = [TrackInline]
     filter_horizontal = ('genres',) 
-    readonly_fields = ('listen_count',) # Add listen_count as readonly
+    readonly_fields = ('listen_count',) 
     fieldsets = (
         (None, {
-            'fields': ('title', 'artist', 'release_type', 'release_date', 'cover_art', 'genres', 'is_published', 'listen_count') # Added listen_count
+            'fields': ('title', 'artist', 'release_type', 'release_date', 'cover_art', 'genres', 'is_published', 'listen_count') 
         }),
         ('Musician-Uploaded Download & Pricing', { 
             'fields': ('download_file', 'pricing_model', 'price', 'currency', 'minimum_price_nyp'),
@@ -53,11 +53,11 @@ class TrackAdmin(admin.ModelAdmin):
     list_display = ('title', 'release', 'track_number', 'duration_in_seconds', 'codec_name', 'is_lossless', 'listen_count') 
     list_filter = ('release__artist', 'is_lossless', 'codec_name', 'sample_rate') 
     search_fields = ('title', 'release__title', 'release__artist__name', 'genres__name')
-    readonly_fields = ('duration_in_seconds', 'codec_name', 'bit_rate', 'sample_rate', 'channels', 'is_lossless', 'listen_count') # Added listen_count
+    readonly_fields = ('duration_in_seconds', 'codec_name', 'bit_rate', 'sample_rate', 'channels', 'is_lossless', 'listen_count') 
     filter_horizontal = ('genres',)
     fieldsets = (
         (None, {
-            'fields': ('release', 'title', 'track_number', 'audio_file', 'genres', 'listen_count') # Added listen_count
+            'fields': ('release', 'title', 'track_number', 'audio_file', 'genres', 'listen_count') 
         }),
         ('Audio Metadata (Auto-populated)', {
             'classes': ('collapse',), 
@@ -118,10 +118,10 @@ class ListenEventAdmin(admin.ModelAdmin):
         'user_display', 
         'listen_start_timestamp_utc',
         'reported_listen_duration_ms',
-        'is_significant',
-        'listened_at' # Backend record time
+        # 'is_significant', # Removed as only significant ones are stored
+        'listened_at' 
     )
-    list_filter = ('is_significant', 'listened_at', 'track__release__artist', 'user')
+    list_filter = ('listened_at', 'track__release__artist', 'user') # Removed 'is_significant'
     search_fields = ('track__title', 'release__title', 'user__username')
     readonly_fields = (
         'user', 
@@ -130,8 +130,8 @@ class ListenEventAdmin(admin.ModelAdmin):
         'listen_start_timestamp_utc', 
         'reported_listen_duration_ms', 
         'listened_at',
-        'is_significant',
-        'is_processed_for_totals'
+        # 'is_significant', # Removed
+        # 'is_processed_for_totals' # Removed
     )
     list_select_related = ('user', 'track', 'release', 'track__release__artist')
 

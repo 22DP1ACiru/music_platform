@@ -2,12 +2,12 @@ from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent # Added ListenEvent
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent 
 from .serializers import (
     GenreSerializer, ArtistSerializer, ReleaseSerializer,
     TrackSerializer, CommentSerializer, HighlightSerializer,
     GeneratedDownloadRequestSerializer, GeneratedDownloadStatusSerializer,
-    ListenSegmentLogSerializer # Added ListenSegmentLogSerializer
+    ListenSegmentLogSerializer 
 )
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser, IsAuthenticated
 from music.permissions import IsOwnerOrReadOnly, CanViewTrack, CanEditTrack
@@ -17,12 +17,12 @@ from django.http import FileResponse, Http404, HttpResponseForbidden
 import os
 import mimetypes 
 from django.db import models as django_models
-from django.db.models import F # For atomic updates
+from django.db.models import F 
 from rest_framework.decorators import action, api_view, permission_classes as drf_permission_classes 
 from rest_framework.permissions import IsAuthenticated as DRFIsAuthenticated 
 import logging
 
-from .tasks import generate_release_download_zip
+from .tasks import generate_release_download_zip, process_listen_segment_task # Import the new task
 
 logger = logging.getLogger(__name__)
 
@@ -86,15 +86,14 @@ class ReleaseViewSet(viewsets.ModelViewSet):
             if release.pricing_model in [Release.PricingModel.PAID, Release.PricingModel.NAME_YOUR_PRICE]:
                 if not request.user.is_authenticated: 
                      return Response({"detail": "Authentication required to download priced items."}, status=status.HTTP_401_UNAUTHORIZED)
-                # TODO: Actual purchase check logic here (e.g., check UserLibraryItem)
-                from library.models import UserLibraryItem # Local import
+                from library.models import UserLibraryItem 
                 if not UserLibraryItem.objects.filter(user=request.user, release=release).exists():
                      return Response({"detail": "You must own this release to download it."}, status=status.HTTP_403_FORBIDDEN)
-                can_download = True # If owned, can download
+                can_download = True 
             else: 
                 return Response({"detail": "You do not have permission to download this release."}, status=status.HTTP_403_FORBIDDEN)
         
-        if not can_download: # Final check after all logic
+        if not can_download: 
              return Response({"detail": "Download conditions not met."}, status=status.HTTP_403_FORBIDDEN)
 
 
@@ -138,8 +137,8 @@ class TrackViewSet(viewsets.ModelViewSet):
             permission_classes = [permissions.IsAuthenticatedOrReadOnly]
         elif self.action == 'create':
             permission_classes = [permissions.IsAuthenticated]
-        elif self.action == 'log_listen_segment': # New action permission
-            permission_classes = [permissions.AllowAny] # Or IsAuthenticated if only logged-in users can log listens
+        elif self.action == 'log_listen_segment': 
+            permission_classes = [permissions.AllowAny] 
         else: 
             permission_classes = [permissions.IsAuthenticatedOrReadOnly, CanViewTrack, CanEditTrack]
         return [permission() for permission in permission_classes]
@@ -167,51 +166,36 @@ class TrackViewSet(viewsets.ModelViewSet):
                 return qs.filter(release__is_published=True, release__release_date__lte=timezone.now()).distinct()
         return qs 
 
-    # +++ NEW ACTION +++
     @action(detail=True, methods=['post'], serializer_class=ListenSegmentLogSerializer)
     def log_listen_segment(self, request, pk=None):
-        track = self.get_object()
+        track = self.get_object() # pk here is track_id
         serializer = ListenSegmentLogSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
-        segment_start_timestamp_utc = data['segment_start_timestamp_utc']
+        
+        user_id_to_log = None
+        if request.user.is_authenticated:
+            user_id_to_log = request.user.id
+
+        # Convert datetime to ISO string for Celery task (JSON serializable)
+        segment_start_timestamp_utc_iso = data['segment_start_timestamp_utc'].isoformat()
         segment_duration_ms = data['segment_duration_ms']
         
-        is_significant = False
-        if track.duration_in_seconds:
-            if track.duration_in_seconds >= 30:
-                if segment_duration_ms >= 30000:
-                    is_significant = True
-            else: # Track is less than 30 seconds
-                if segment_duration_ms >= (track.duration_in_seconds * 1000 * 0.9):
-                    is_significant = True
-        
-        # Determine user for the ListenEvent
-        user_to_log = None
-        if request.user.is_authenticated:
-            user_to_log = request.user
-
-        ListenEvent.objects.create(
-            user=user_to_log,
-            track=track,
-            release=track.release, # Auto-populated from track
-            listen_start_timestamp_utc=segment_start_timestamp_utc,
-            reported_listen_duration_ms=segment_duration_ms,
-            is_significant=is_significant
+        # Send to Celery task
+        process_listen_segment_task.delay(
+            user_id_to_log,
+            track.id,
+            segment_start_timestamp_utc_iso,
+            segment_duration_ms
         )
-
-        if is_significant:
-            # Atomically increment listen counts
-            Track.objects.filter(pk=track.pk).update(listen_count=F('listen_count') + 1)
-            Release.objects.filter(pk=track.release.pk).update(listen_count=F('listen_count') + 1)
-            logger.info(f"Significant listen logged for track ID {track.id}. Counts updated.")
-        else:
-            logger.info(f"Partial (non-significant) listen segment logged for track ID {track.id}.")
             
-        return Response({'status': 'listen segment logged', 'significant': is_significant}, status=status.HTTP_201_CREATED)
-    # +++ END NEW ACTION +++
+        # Respond quickly to the client
+        return Response(
+            {'status': 'listen segment received and queued for processing'}, 
+            status=status.HTTP_202_ACCEPTED
+        )
 
 
 class CommentViewSet(viewsets.ModelViewSet):

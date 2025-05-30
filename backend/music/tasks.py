@@ -2,6 +2,9 @@ from celery import shared_task
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime # For parsing ISO string from task args
+from django.contrib.auth import get_user_model
+from django.db.models import F
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 import zipfile
@@ -9,11 +12,13 @@ import os
 import tempfile
 import logging
 import shutil 
-from django.db.models import Q # Import Q
+from django.db.models import Q 
 
-from .models import Release, GeneratedDownload, Track 
+from .models import Release, GeneratedDownload, Track, ListenEvent # Added ListenEvent
 
 logger = logging.getLogger(__name__)
+User = get_user_model()
+
 
 @shared_task(bind=True)
 def generate_release_download_zip(self, generated_download_id):
@@ -43,8 +48,8 @@ def generate_release_download_zip(self, generated_download_id):
                 original_file_path = track_obj.audio_file.path 
                 original_file_name_from_path = os.path.basename(original_file_path)
                 
-                track_original_format_ext = track_obj.codec_name # Use the more reliable codec_name
-                if track_original_format_ext in ['pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'pcm_f32le']: # Map various PCM types to 'wav' for extension
+                track_original_format_ext = track_obj.codec_name 
+                if track_original_format_ext in ['pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'pcm_f32le']: 
                     track_original_format_ext = 'wav'
 
 
@@ -79,7 +84,7 @@ def generate_release_download_zip(self, generated_download_id):
                         
                         elif requested_format_key == GeneratedDownload.DownloadFormatChoices.MP3_192:
                             target_ext = "mp3"
-                            if track_obj.codec_name == "mp3" and (track_obj.bit_rate is None or track_obj.bit_rate >= 180): # Adjusted for 192k
+                            if track_obj.codec_name == "mp3" and (track_obj.bit_rate is None or track_obj.bit_rate >= 180): 
                                 logger.info(f"Track '{track_obj.title}' is already MP3 of sufficient quality for 192k. Using original.")
                             else:
                                 converted_file_in_temp = os.path.join(temp_dir_path, f"{track_arcname_base}.{target_ext}")
@@ -156,7 +161,6 @@ def generate_release_download_zip(self, generated_download_id):
                 download_request.download_file.save(zip_file_name, django_file, save=False) 
             
             download_request.status = GeneratedDownload.StatusChoices.READY
-            # Change expiry to 1 hour
             download_request.expires_at = timezone.now() + timezone.timedelta(hours=1) 
             download_request.save() 
             logger.info(f"Download Request ID {download_request.id} is READY. File: {download_request.download_file.name}. Expires at: {download_request.expires_at}")
@@ -181,9 +185,6 @@ def generate_release_download_zip(self, generated_download_id):
 
 @shared_task(name="cleanup_generated_downloads")
 def cleanup_generated_downloads_task():
-    """
-    Celery task to periodically clean up old/failed GeneratedDownload entries and files.
-    """
     now = timezone.now()
     items_to_cleanup = GeneratedDownload.objects.filter(
         Q(status=GeneratedDownload.StatusChoices.FAILED) |
@@ -201,29 +202,26 @@ def cleanup_generated_downloads_task():
         file_deleted_successfully = False
         if item.download_file and item.download_file.name:
             try:
-                item.download_file.delete(save=False) # Delete file from storage
+                item.download_file.delete(save=False) 
                 file_deleted_successfully = True
                 logger.info(f"[Celery Task] Deleted file {item.download_file.name} for GeneratedDownload ID {item.id}")
             except Exception as e:
                 logger.error(f"[Celery Task] Failed to delete file for GeneratedDownload ID {item.id}: {e}")
                 item.failure_reason = (item.failure_reason or "") + f"\nFile deletion error: {e}"
         
-        # Update status to EXPIRED, even if file deletion failed or no file was present
-        # (to prevent reprocessing by this task if status was FAILED or READY but expired)
         item.status = GeneratedDownload.StatusChoices.EXPIRED
         
-        # Add note about cleanup action only if file existed and was targeted for deletion
-        if item.download_file.name : # Check if there was a file to begin with
+        if item.download_file.name : 
              if file_deleted_successfully:
                 item.failure_reason = (item.failure_reason or "") + f"\nFile cleaned up by periodic task (original status: {original_status})."
-             else: # File existed but deletion failed
+             else: 
                 item.failure_reason = (item.failure_reason or "") + f"\nFile cleanup FAILED by periodic task (original status: {original_status})."
-        else: # No file associated, just marking as EXPIRED
+        else: 
             item.failure_reason = (item.failure_reason or "") + f"\nMarked EXPIRED by periodic task (original status: {original_status}, no file found)."
 
 
         try:
-            item.save(update_fields=['status', 'download_file', 'failure_reason']) # download_file field is updated to None by delete(save=False)
+            item.save(update_fields=['status', 'download_file', 'failure_reason']) 
             count_cleaned += 1
         except Exception as e_save:
             logger.error(f"[Celery Task] Failed to update status for GeneratedDownload ID {item.id} after cleanup attempt: {e_save}")
@@ -231,3 +229,60 @@ def cleanup_generated_downloads_task():
     
     logger.info(f"[Celery Task] Cleanup finished. Cleaned records: {count_cleaned}. Failed to update records: {count_failed_to_clean}.")
     return f"Cleaned {count_cleaned} items. Failed to update {count_failed_to_clean} items."
+
+# +++ NEW CELERY TASK +++
+@shared_task(name="music.process_listen_segment")
+def process_listen_segment_task(user_id, track_id, segment_start_timestamp_utc_iso, segment_duration_ms):
+    logger.info(f"Celery Task: Processing listen segment for track_id={track_id}, user_id={user_id}, start={segment_start_timestamp_utc_iso}, duration_ms={segment_duration_ms}")
+    try:
+        track = Track.objects.select_related('release').get(pk=track_id)
+    except Track.DoesNotExist:
+        logger.error(f"Celery Task: Track with ID {track_id} not found. Cannot process listen segment.")
+        return
+
+    user_instance = None
+    if user_id:
+        try:
+            user_instance = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            logger.warning(f"Celery Task: User with ID {user_id} not found for listen segment. Logging as anonymous if applicable.")
+            # Depending on strictness, you might choose to not log or log as truly anonymous (user=None)
+            # For now, if user_id is provided but user not found, we'll proceed with user=None.
+
+    is_significant = False
+    if track.duration_in_seconds: # Ensure track duration is known
+        required_listen_duration_ms = 0
+        if track.duration_in_seconds >= 30:
+            required_listen_duration_ms = 30000 # 30 seconds
+        else:
+            required_listen_duration_ms = track.duration_in_seconds * 1000 * 0.9 # 90% of track length
+        
+        if segment_duration_ms >= required_listen_duration_ms:
+            is_significant = True
+    
+    if is_significant:
+        try:
+            parsed_start_time = parse_datetime(segment_start_timestamp_utc_iso)
+            if not parsed_start_time:
+                logger.error(f"Celery Task: Could not parse segment_start_timestamp_utc_iso: {segment_start_timestamp_utc_iso}. Using current time.")
+                parsed_start_time = timezone.now() # Fallback, though this isn't ideal
+            
+            ListenEvent.objects.create(
+                user=user_instance,
+                track=track,
+                # release is auto-populated by model's save method
+                listen_start_timestamp_utc=parsed_start_time,
+                reported_listen_duration_ms=segment_duration_ms
+            )
+            
+            # Atomically increment listen counts
+            Track.objects.filter(pk=track.pk).update(listen_count=F('listen_count') + 1)
+            if track.release: # Ensure release exists
+                Release.objects.filter(pk=track.release.pk).update(listen_count=F('listen_count') + 1)
+            
+            logger.info(f"Celery Task: Significant listen processed and logged for track ID {track.id}. Counts updated.")
+        except Exception as e:
+            logger.exception(f"Celery Task: Error creating ListenEvent or updating counts for track {track.id}: {e}")
+    else:
+        logger.info(f"Celery Task: Listen segment for track ID {track.id} (duration: {segment_duration_ms}ms) was not significant. Not logged.")
+# +++ END NEW CELERY TASK +++
