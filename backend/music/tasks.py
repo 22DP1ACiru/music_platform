@@ -2,9 +2,10 @@ from celery import shared_task
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime # For parsing ISO string from task args
+from django.utils.dateparse import parse_datetime 
 from django.contrib.auth import get_user_model
 from django.db.models import F
+from django.db.models import Q 
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 import zipfile
@@ -12,16 +13,23 @@ import os
 import tempfile
 import logging
 import shutil 
-from django.db.models import Q 
+from datetime import timedelta 
 
-from .models import Release, GeneratedDownload, Track, ListenEvent # Added ListenEvent
+from .models import Release, GeneratedDownload, Track, ListenEvent 
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+# Factor to multiply track duration by for the debounce window.
+# 1.0 means debounce for the length of the track.
+# 0.5 would mean debounce for half the track's length.
+# Set to 0 if you want no debouncing beyond the duration significance itself for a user.
+SIGNIFICANT_LISTEN_DEBOUNCE_FACTOR = 1.0 
+
 
 @shared_task(bind=True)
 def generate_release_download_zip(self, generated_download_id):
+    # ... (generate_release_download_zip code remains the same)
     try:
         download_request = GeneratedDownload.objects.select_related('release__artist').get(id=generated_download_id)
         download_request.status = GeneratedDownload.StatusChoices.PROCESSING
@@ -185,6 +193,7 @@ def generate_release_download_zip(self, generated_download_id):
 
 @shared_task(name="cleanup_generated_downloads")
 def cleanup_generated_downloads_task():
+    # ... (cleanup_generated_downloads_task code remains the same)
     now = timezone.now()
     items_to_cleanup = GeneratedDownload.objects.filter(
         Q(status=GeneratedDownload.StatusChoices.FAILED) |
@@ -230,59 +239,95 @@ def cleanup_generated_downloads_task():
     logger.info(f"[Celery Task] Cleanup finished. Cleaned records: {count_cleaned}. Failed to update records: {count_failed_to_clean}.")
     return f"Cleaned {count_cleaned} items. Failed to update {count_failed_to_clean} items."
 
-# +++ NEW CELERY TASK +++
+
 @shared_task(name="music.process_listen_segment")
 def process_listen_segment_task(user_id, track_id, segment_start_timestamp_utc_iso, segment_duration_ms):
     logger.info(f"Celery Task: Processing listen segment for track_id={track_id}, user_id={user_id}, start={segment_start_timestamp_utc_iso}, duration_ms={segment_duration_ms}")
+    
+    if not user_id:
+        logger.info(f"Celery Task: Anonymous user_id={user_id}. Listen not tracked as per policy.")
+        return
+
     try:
         track = Track.objects.select_related('release').get(pk=track_id)
     except Track.DoesNotExist:
         logger.error(f"Celery Task: Track with ID {track_id} not found. Cannot process listen segment.")
         return
 
-    user_instance = None
-    if user_id:
-        try:
-            user_instance = User.objects.get(pk=user_id)
-        except User.DoesNotExist:
-            logger.warning(f"Celery Task: User with ID {user_id} not found for listen segment. Logging as anonymous if applicable.")
-            # Depending on strictness, you might choose to not log or log as truly anonymous (user=None)
-            # For now, if user_id is provided but user not found, we'll proceed with user=None.
-
-    is_significant = False
-    if track.duration_in_seconds: # Ensure track duration is known
+    try:
+        user_instance = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        logger.error(f"Celery Task: User with ID {user_id} not found. Cannot process listen segment for track_id={track_id}.")
+        return
+    
+    is_duration_significant = False
+    if track.duration_in_seconds and track.duration_in_seconds > 0: # Ensure duration_in_seconds is positive
         required_listen_duration_ms = 0
         if track.duration_in_seconds >= 30:
-            required_listen_duration_ms = 30000 # 30 seconds
+            required_listen_duration_ms = 30000 
         else:
-            required_listen_duration_ms = track.duration_in_seconds * 1000 * 0.9 # 90% of track length
+            required_listen_duration_ms = track.duration_in_seconds * 1000 * 0.9 
         
         if segment_duration_ms >= required_listen_duration_ms:
-            is_significant = True
+            is_duration_significant = True
+    else: # Track has no duration or zero duration, cannot be significant by this rule
+        logger.warning(f"Celery Task: Track ID {track.id} has no duration or zero duration. Segment cannot be duration-significant.")
+        is_duration_significant = False # Explicitly false
     
-    if is_significant:
-        try:
-            parsed_start_time = parse_datetime(segment_start_timestamp_utc_iso)
-            if not parsed_start_time:
-                logger.error(f"Celery Task: Could not parse segment_start_timestamp_utc_iso: {segment_start_timestamp_utc_iso}. Using current time.")
-                parsed_start_time = timezone.now() # Fallback, though this isn't ideal
-            
-            ListenEvent.objects.create(
-                user=user_instance,
-                track=track,
-                # release is auto-populated by model's save method
-                listen_start_timestamp_utc=parsed_start_time,
-                reported_listen_duration_ms=segment_duration_ms
-            )
-            
-            # Atomically increment listen counts
-            Track.objects.filter(pk=track.pk).update(listen_count=F('listen_count') + 1)
-            if track.release: # Ensure release exists
-                Release.objects.filter(pk=track.release.pk).update(listen_count=F('listen_count') + 1)
-            
-            logger.info(f"Celery Task: Significant listen processed and logged for track ID {track.id}. Counts updated.")
-        except Exception as e:
-            logger.exception(f"Celery Task: Error creating ListenEvent or updating counts for track {track.id}: {e}")
+    if not is_duration_significant:
+        logger.info(f"Celery Task: Listen segment for track ID {track.id} (user: {user_instance.username}, duration: {segment_duration_ms}ms) was not duration-significant. Not creating ListenEvent record.")
+        return
+
+    # Segment IS duration-significant. Now check debounce for this user and track.
+    # Calculate dynamic debounce window based on track duration
+    if track.duration_in_seconds and track.duration_in_seconds > 0 : # Ensure positive duration
+        dynamic_debounce_seconds = track.duration_in_seconds * SIGNIFICANT_LISTEN_DEBOUNCE_FACTOR
+        # Ensure a minimum sensible debounce, e.g., 5 minutes, to avoid too frequent counts even for short songs if factor is small
+        # Or, just use the calculated value. For 1.0 factor, it is the track length.
+        # For extremely short tracks (e.g. 10s), this means debounce window is 10s.
+        # Let's add a MINIMUM debounce window for very short tracks if the factor results in too small a window.
+        # For example, if track_duration * factor < 60s, use 60s.
+        # For now, let's stick to the direct factor multiplication.
+        if dynamic_debounce_seconds < 1: # Ensure it's at least 1 second
+            dynamic_debounce_seconds = 1
+
+        dynamic_debounce_window = timedelta(seconds=dynamic_debounce_seconds)
     else:
-        logger.info(f"Celery Task: Listen segment for track ID {track.id} (duration: {segment_duration_ms}ms) was not significant. Not logged.")
-# +++ END NEW CELERY TASK +++
+        # Fallback to a fixed window if track duration is somehow unavailable or zero
+        logger.warning(f"Celery Task: Track ID {track.id} has no/zero duration. Using fixed debounce window for user {user_instance.username}.")
+        dynamic_debounce_window = timedelta(minutes=10) # Fallback fixed window (e.g., 10 minutes)
+
+    debounce_time_threshold = timezone.now() - dynamic_debounce_window
+    
+    recently_counted_for_public_stats = ListenEvent.objects.filter(
+        track=track, 
+        user=user_instance, 
+        listened_at__gte=debounce_time_threshold 
+    ).exists()
+
+    if recently_counted_for_public_stats:
+        logger.info(f"Celery Task: Duration-significant listen for track ID {track.id} by user {user_instance.username} is within dynamic debounce window ({dynamic_debounce_window}). Not creating new ListenEvent or incrementing public counts.")
+        return 
+
+    try:
+        parsed_start_time = parse_datetime(segment_start_timestamp_utc_iso)
+        effective_listen_start_time = parsed_start_time
+        if not parsed_start_time:
+            logger.error(f"Celery Task: Could not parse segment_start_timestamp_utc_iso: {segment_start_timestamp_utc_iso}. Using current time minus duration as fallback for ListenEvent.")
+            effective_listen_start_time = timezone.now() - timedelta(milliseconds=segment_duration_ms)
+        
+        ListenEvent.objects.create(
+            user=user_instance,
+            track=track,
+            listen_start_timestamp_utc=effective_listen_start_time,
+            reported_listen_duration_ms=segment_duration_ms
+        )
+        
+        Track.objects.filter(pk=track.pk).update(listen_count=F('listen_count') + 1)
+        if track.release: 
+            Release.objects.filter(pk=track.release.pk).update(listen_count=F('listen_count') + 1)
+        
+        logger.info(f"Celery Task: Significant, non-debounced listen processed, ListenEvent created, and public counts incremented for track ID {track.id} by user {user_instance.username}.")
+
+    except Exception as e:
+        logger.exception(f"Celery Task: Error creating ListenEvent or updating counts for track {track.id}: {e}")
