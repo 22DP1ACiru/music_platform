@@ -464,6 +464,50 @@ class GeneratedDownload(models.Model):
             models.Index(fields=['status', 'expires_at']),
         ]
 
+# +++ NEW MODEL +++
+class ListenEvent(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, # Or CASCADE if you want to delete listens when user is deleted
+        null=True, # Allow anonymous listens
+        blank=True,
+        related_name='listen_events'
+    )
+    track = models.ForeignKey(
+        Track,
+        on_delete=models.CASCADE, # If a track is deleted, its listen events are deleted
+        related_name='listen_events'
+    )
+    release = models.ForeignKey(
+        Release,
+        on_delete=models.CASCADE, # If a release is deleted, its listen events are deleted
+        related_name='listen_events',
+        null=True # Should be populated, but allow null temporarily if track.release isn't set on save
+    )
+    listened_at = models.DateTimeField(auto_now_add=True)
+    # Optional: for more granular tracking
+    # session_id = models.CharField(max_length=255, null=True, blank=True, db_index=True, help_text="For anonymous or session-based tracking")
+    # listen_duration_ms = models.PositiveIntegerField(null=True, blank=True, help_text="How long the track was played in milliseconds")
+
+    class Meta:
+        ordering = ['-listened_at']
+        indexes = [
+            models.Index(fields=['track', 'listened_at']),
+            models.Index(fields=['release', 'listened_at']),
+            models.Index(fields=['user', 'listened_at']),
+        ]
+
+    def __str__(self):
+        user_display = self.user.username if self.user else "Anonymous"
+        return f"Track '{self.track.title}' listened to by {user_display} at {self.listened_at.strftime('%Y-%m-%d %H:%M')}"
+
+    def save(self, *args, **kwargs):
+        if self.track and not self.release: # Auto-populate release from track
+            self.release = self.track.release
+        super().save(*args, **kwargs)
+# +++ END NEW MODEL +++
+
+
 # --- Signal Receivers ---
 @receiver(pre_save, sender=Artist)
 def artist_pre_save_delete_old_picture(sender, instance, **kwargs):

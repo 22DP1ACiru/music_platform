@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload # Added GeneratedDownload
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent # Added ListenEvent
 from django.utils import timezone # For admin action
 from django.db import models # For Q objects in admin action (if still needed)
 import logging # For admin action logging
@@ -113,3 +113,30 @@ class GeneratedDownloadAdmin(admin.ModelAdmin):
                     logger.error(f"Admin action: Failed to cleanup generated file for {item.id}: {e}")
         self.message_user(request, f"Attempted cleanup for {items_to_cleanup.count()} items. Successfully cleaned up files for {count} items.")
     cleanup_expired_files.short_description = "Cleanup selected failed/expired download files"
+
+# +++ NEW ADMIN REGISTRATION +++
+@admin.register(ListenEvent)
+class ListenEventAdmin(admin.ModelAdmin):
+    list_display = ('track_title', 'release_title', 'user_display', 'listened_at')
+    list_filter = ('listened_at', 'user', 'release__artist')
+    search_fields = ('track__title', 'release__title', 'user__username')
+    readonly_fields = ('user', 'track', 'release', 'listened_at')
+    list_select_related = ('user', 'track', 'release', 'release__artist') # Optimization
+
+    def track_title(self, obj):
+        return obj.track.title
+    track_title.short_description = 'Track'
+    track_title.admin_order_field = 'track__title'
+
+    def release_title(self, obj):
+        if obj.release:
+            return obj.release.title
+        return '-'
+    release_title.short_description = 'Release'
+    release_title.admin_order_field = 'release__title'
+
+    def user_display(self, obj):
+        return obj.user.username if obj.user else "Anonymous"
+    user_display.short_description = 'User'
+    user_display.admin_order_field = 'user__username'
+# +++ END NEW ADMIN REGISTRATION +++
