@@ -37,7 +37,7 @@ class ReleaseAdmin(admin.ModelAdmin):
         (None, {
             'fields': ('title', 'artist', 'release_type', 'release_date', 'cover_art', 'genres', 'is_published', 'listen_count') 
         }),
-        ('Pricing & Download (Generated)', { # Updated section title
+        ('Pricing & Download (Generated)', { 
             'fields': ('pricing_model', 'price', 'currency', 'minimum_price_nyp'),
             'description': "Configure pricing. Downloads are auto-generated from track files."
         }),
@@ -74,9 +74,56 @@ class CommentAdmin(admin.ModelAdmin):
 
 @admin.register(Highlight)
 class HighlightAdmin(admin.ModelAdmin):
-    list_display = ('release', 'highlighted_by', 'highlighted_at', 'is_active', 'order')
-    list_filter = ('is_active', 'highlighted_by')
-    search_fields = ('release__title', 'release__artist__name')
+    list_display = (
+        'release_title_admin', 
+        'carousel_title_display',
+        'is_active', 
+        'display_start_datetime', 
+        'display_end_datetime', 
+        'order', 
+        'created_by',
+        'created_at'
+    )
+    list_filter = ('is_active', 'created_by', 'release__artist')
+    search_fields = (
+        'release__title', 
+        'release__artist__name', 
+        'carousel_title', 
+        'carousel_subtitle', 
+        'carousel_description'
+    )
+    autocomplete_fields = ['release', 'created_by']
+    readonly_fields = ('created_at', 'updated_at')
+    fieldsets = (
+        (None, {
+            'fields': ('release', 'is_active', 'order')
+        }),
+        ('Carousel Content (Overrides Release Info)', {
+            'fields': ('carousel_title', 'carousel_subtitle', 'carousel_description', 'custom_carousel_image')
+        }),
+        ('Display Schedule', {
+            'fields': ('display_start_datetime', 'display_end_datetime')
+        }),
+        ('Admin Info', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',) # Collapsible for less frequently edited fields
+        })
+    )
+
+    def release_title_admin(self, obj):
+        return obj.release.title
+    release_title_admin.short_description = 'Release'
+    release_title_admin.admin_order_field = 'release__title'
+
+    def carousel_title_display(self,obj):
+        return obj.carousel_title or f"(Uses Release Title: {obj.release.title[:30]}...)"
+    carousel_title_display.short_description = "Carousel Title"
+
+
+    def save_model(self, request, obj, form, change):
+        if not obj.pk: # If new object is being created
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
 
 @admin.register(GeneratedDownload)
 class GeneratedDownloadAdmin(admin.ModelAdmin):

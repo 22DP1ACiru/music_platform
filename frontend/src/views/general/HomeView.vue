@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue"; // Removed computed as it's not used here
+import { ref, onMounted } from "vue";
 import axios from "axios";
 import HighlightsCarousel from "@/components/home/HighlightsCarousel.vue";
 import ReleaseCardSmall from "@/components/release/ReleaseCardSmall.vue";
@@ -14,15 +14,15 @@ interface PaginatedResponse<T> {
 
 const carouselItems = ref<CarouselSlide[]>([]);
 const latestReleases = ref<ReleaseSummary[]>([]);
-const popularReleases = ref<ReleaseSummary[]>([]); // New ref for popular releases
+const popularReleases = ref<ReleaseSummary[]>([]);
 
 const isLoadingHighlights = ref(true);
 const isLoadingReleases = ref(true);
-const isLoadingPopular = ref(true); // New loading state
+const isLoadingPopular = ref(true);
 
 const errorHighlights = ref<string | null>(null);
 const errorReleases = ref<string | null>(null);
-const errorPopular = ref<string | null>(null); // New error state
+const errorPopular = ref<string | null>(null);
 
 const welcomeSlide: CarouselSlide = {
   type: "welcome",
@@ -38,28 +38,27 @@ async function fetchHighlights() {
   isLoadingHighlights.value = true;
   errorHighlights.value = null;
   try {
-    const response = await axios.get<PaginatedResponse<HighlightItem>>(
+    const response = await axios.get<PaginatedResponse<HighlightItem>>( // Use HighlightItem for raw API response
       "/highlights/"
     );
-    const activeHighlights = response.data.results.filter(
-      (h) => h.is_active && h.release.is_published
-    );
+    const activeHighlights = response.data.results; // Already filtered by backend
 
     const highlightSlides: CarouselSlide[] = activeHighlights.map((item) => ({
       type: "release",
-      id: `highlight-${item.id}`,
-      title: item.release.title,
-      subtitle: item.release.artist.name,
-      imageUrl: item.release.cover_art,
-      linkUrl: `/releases/${item.release.id}`,
-      releaseObject: item.release,
+      id: `highlight-${item.id}`, // Use Highlight ID for key
+      title: item.effective_title, // Use effective_title from serializer
+      subtitle: item.carousel_subtitle || item.release_artist_name, // Fallback to artist name
+      imageUrl: item.effective_image_url, // Use effective_image_url from serializer
+      description: item.carousel_description || undefined, // Optional
+      linkUrl: `/releases/${item.release_id}`, // Link to the release
+      // releaseObject: item.release, // The HighlightSerializer doesn't nest the full release by default
     }));
 
     carouselItems.value = [welcomeSlide, ...highlightSlides];
   } catch (err) {
     console.error("HomeView: Failed to fetch highlights:", err);
     errorHighlights.value = "Could not load featured highlights.";
-    carouselItems.value = [welcomeSlide];
+    carouselItems.value = [welcomeSlide]; // Show welcome slide even if highlights fail
   } finally {
     isLoadingHighlights.value = false;
   }
@@ -70,7 +69,7 @@ async function fetchLatestReleases() {
   errorReleases.value = null;
   try {
     const response = await axios.get<PaginatedResponse<ReleaseSummary>>(
-      "/releases/?limit=6&ordering=-release_date" // Explicitly order by release_date
+      "/releases/?limit=6&ordering=-release_date"
     );
     latestReleases.value = response.data.results;
   } catch (err) {
@@ -86,10 +85,8 @@ async function fetchPopularReleases() {
   errorPopular.value = null;
   try {
     const response = await axios.get<PaginatedResponse<ReleaseSummary>>(
-      "/releases/?limit=6&ordering=-listen_count" // Order by listen_count descending
+      "/releases/?limit=6&ordering=-listen_count"
     );
-    // Filter out releases with 0 listens for the "Popular" section,
-    // or handle this on the backend if preferred (e.g., listen_count__gt=0)
     popularReleases.value = response.data.results.filter(
       (r) => (r.listen_count || 0) > 0
     );
@@ -104,7 +101,7 @@ async function fetchPopularReleases() {
 onMounted(() => {
   fetchHighlights();
   fetchLatestReleases();
-  fetchPopularReleases(); // Fetch popular releases
+  fetchPopularReleases();
 });
 </script>
 

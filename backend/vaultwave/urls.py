@@ -8,7 +8,7 @@ from rest_framework.routers import DefaultRouter
 from users.views import UserViewSet, UserProfileViewSet, RegisterView
 from music.views import (
     GenreViewSet, ArtistViewSet, ReleaseViewSet,
-    TrackViewSet, CommentViewSet, HighlightViewSet,
+    TrackViewSet, CommentViewSet, HighlightViewSet, # HighlightViewSet is already imported
     stream_track_audio, GeneratedDownloadStatusViewSet
 )
 # Removed: from playlists.views import PlaylistViewSet # Router handles this now
@@ -30,9 +30,9 @@ router.register(r'profiles', UserProfileViewSet, basename='userprofile')
 router.register(r'genres', GenreViewSet)
 router.register(r'artists', ArtistViewSet)
 router.register(r'releases', ReleaseViewSet, basename='release') 
-router.register(r'tracks', TrackViewSet, basename='track') # Ensure 'track' (singular) for basename if it's for single track operations
+router.register(r'tracks', TrackViewSet, basename='track') 
 router.register(r'comments', CommentViewSet)
-router.register(r'highlights', HighlightViewSet)
+router.register(r'highlights', HighlightViewSet, basename='highlight') # Added basename='highlight'
 
 # router.register(r'playlists', PlaylistViewSet, basename='playlist') # Remove this line
 
@@ -46,7 +46,7 @@ urlpatterns = [
     path('api/', include(router.urls)), 
     
     # Include app-specific URLs directly
-    path('api/playlists/', include('playlists.urls')), # ADD THIS LINE
+    path('api/playlists/', include('playlists.urls')), 
     path('api/library/', include('library.urls')),
     path('api/cart/', include('cart.urls')),
     path('api/music/', include('music.urls')), 

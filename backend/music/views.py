@@ -10,7 +10,7 @@ from .serializers import (
     ListenSegmentLogSerializer 
 )
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser, IsAuthenticated 
-from rest_framework.filters import SearchFilter, OrderingFilter # Import SearchFilter
+from rest_framework.filters import SearchFilter, OrderingFilter 
 from django_filters.rest_framework import DjangoFilterBackend 
 
 from music.permissions import IsOwnerOrReadOnly, CanViewTrack, CanEditTrack
@@ -20,7 +20,7 @@ import os
 import mimetypes 
 from django.db import models as django_models 
 from django.db.models import Prefetch 
-from django.db.models import F 
+from django.db.models import F, Q 
 from rest_framework.decorators import action, api_view, permission_classes as drf_permission_classes 
 from rest_framework.permissions import IsAuthenticated as DRFIsAuthenticated 
 import logging
@@ -34,7 +34,6 @@ class GenreViewSet(viewsets.ModelViewSet):
     queryset = Genre.objects.all().order_by('name')
     serializer_class = GenreSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
-    # Optionally add search to Genres too
     filter_backends = [SearchFilter, DjangoFilterBackend]
     search_fields = ['name']
     filterset_fields = ['name']
@@ -44,10 +43,10 @@ class ArtistViewSet(viewsets.ModelViewSet):
     queryset = Artist.objects.all()
     serializer_class = ArtistSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    filter_backends = [SearchFilter, OrderingFilter, DjangoFilterBackend] # Added SearchFilter
-    search_fields = ['name', 'bio', 'location', 'user__username'] # Fields to search against
-    ordering_fields = ['name'] # Allow ordering by name
-    filterset_fields = ['location'] # Allow filtering by location
+    filter_backends = [SearchFilter, OrderingFilter, DjangoFilterBackend] 
+    search_fields = ['name', 'bio', 'location', 'user__username'] 
+    ordering_fields = ['name'] 
+    filterset_fields = ['location'] 
     
     def perform_create(self, serializer):
         if Artist.objects.filter(user=self.request.user).exists():
@@ -57,14 +56,14 @@ class ArtistViewSet(viewsets.ModelViewSet):
 class ReleaseViewSet(viewsets.ModelViewSet):
     serializer_class = ReleaseSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    filter_backends = [DjangoFilterBackend, OrderingFilter, SearchFilter] # Added SearchFilter
-    filterset_fields = ['artist', 'genres', 'release_type', 'artist__name'] # Added artist__name for filtering
+    filter_backends = [DjangoFilterBackend, OrderingFilter, SearchFilter] 
+    filterset_fields = ['artist', 'genres', 'release_type', 'artist__name'] 
     search_fields = [
         'title', 
         'artist__name', 
-        'tracks__title', # Search in track titles related to the release
-        'genres__name'   # Search in genre names related to the release
-    ] # Fields to search against
+        'tracks__title', 
+        'genres__name'   
+    ] 
     ordering_fields = ['release_date', 'listen_count', 'title'] 
     ordering = ['-release_date'] 
 
@@ -158,7 +157,6 @@ class ReleaseViewSet(viewsets.ModelViewSet):
 
 class TrackViewSet(viewsets.ModelViewSet):
     serializer_class = TrackSerializer
-    # Add SearchFilter for tracks as well if needed later
     filter_backends = [DjangoFilterBackend, OrderingFilter, SearchFilter]
     filterset_fields = ['release', 'genres', 'release__artist__name']
     search_fields = ['title', 'release__title', 'release__artist__name', 'genres__name']
@@ -236,14 +234,24 @@ class CommentViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
 class HighlightViewSet(viewsets.ReadOnlyModelViewSet): 
-    queryset = Highlight.objects.filter(is_active=True).select_related(
-        'release__artist' 
-    ).prefetch_related(
-        'release__genres', 
-        Prefetch('release__tracks', queryset=Track.objects.prefetch_related('genres')) 
-    ).order_by('order', '-highlighted_at')
     serializer_class = HighlightSerializer
     permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        now = timezone.now()
+        return Highlight.objects.filter(
+            is_active=True,
+            release__is_published=True, 
+            release__release_date__lte=now, 
+            display_start_datetime__lte=now
+        ).filter(
+            Q(display_end_datetime__isnull=True) | Q(display_end_datetime__gte=now)
+        ).select_related(
+            'release__artist' 
+        ).prefetch_related(
+            'release__genres', 
+            Prefetch('release__tracks', queryset=Track.objects.prefetch_related('genres')) 
+        ).order_by('order', '-display_start_datetime')
 
 
 def stream_track_audio(request, track_id):

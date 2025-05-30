@@ -146,7 +146,6 @@ class ReleaseSerializer(serializers.ModelSerializer):
             'genre_names', 
             'is_published', 'is_visible',
             'tracks',
-            # 'download_file', # REMOVED download_file
             'pricing_model', 
             'pricing_model_display',
             'price', 
@@ -264,15 +263,6 @@ class ReleaseSerializer(serializers.ModelSerializer):
         elif cover_art_data is not Ellipsis and cover_art_data is not False : 
              instance.cover_art = cover_art_data
              validated_data.pop('cover_art')
-
-        # REMOVED download_file logic
-        # download_file_data = validated_data.get('download_file', Ellipsis)
-        # if download_file_data is None: 
-        #     instance.download_file = None
-        #     if 'download_file' in validated_data: validated_data.pop('download_file')
-        # elif download_file_data is not Ellipsis and download_file_data is not False:
-        #     instance.download_file = download_file_data
-        #     if 'download_file' in validated_data: validated_data.pop('download_file')
         
         pricing_model = validated_data.get('pricing_model', instance.pricing_model)
 
@@ -308,12 +298,45 @@ class CommentSerializer(serializers.ModelSerializer):
         read_only_fields = ['user']
 
 class HighlightSerializer(serializers.ModelSerializer):
-    release = ReleaseSerializer(read_only=True) 
-    highlighted_by = serializers.StringRelatedField()
+    # release = ReleaseSerializer(read_only=True) # Full release detail can be too much, make it simpler
+    release_id = serializers.IntegerField(source='release.id', read_only=True)
+    release_title = serializers.CharField(source='release.title', read_only=True)
+    release_artist_name = serializers.CharField(source='release.artist.name', read_only=True)
+    
+    # Use methods from the model to get effective title and image
+    effective_title = serializers.CharField(source='get_effective_title', read_only=True)
+    effective_image_url = serializers.SerializerMethodField()
+    
+    # Keep carousel_subtitle and carousel_description as they are specific to the highlight
+    # custom_carousel_image is not directly exposed, effective_image_url handles it.
+    # created_by = serializers.StringRelatedField(read_only=True)
 
     class Meta:
         model = Highlight
-        fields = ['id', 'release', 'highlighted_by', 'highlighted_at', 'is_active', 'order']
+        fields = [
+            'id', 
+            'release_id', 
+            'release_title',
+            'release_artist_name',
+            'effective_title', # This will be the main title for the carousel
+            'carousel_subtitle', 
+            'carousel_description', 
+            'effective_image_url', # This will be the main image for the carousel
+            'order',
+            'display_start_datetime', # Frontend might not need these directly
+            'display_end_datetime',   # But useful for admin or debugging
+            'is_active',              #
+            # 'created_by', 
+            # 'created_at', 
+            # 'updated_at'
+        ]
+    
+    def get_effective_image_url(self, obj: Highlight):
+        request = self.context.get('request')
+        image_url = obj.get_effective_image_url()
+        if image_url and request:
+            return request.build_absolute_uri(image_url)
+        return None
 
 class GeneratedDownloadRequestSerializer(serializers.Serializer):
     requested_format = serializers.ChoiceField(choices=GeneratedDownload.DownloadFormatChoices.choices)

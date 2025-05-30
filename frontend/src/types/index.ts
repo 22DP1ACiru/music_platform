@@ -1,7 +1,7 @@
 export interface ArtistInfo {
   id: number;
   name: string;
-  user_id: number; // ID of the User model that owns this Artist
+  user_id: number;
   artist_picture?: string | null;
 }
 
@@ -18,7 +18,7 @@ export interface TrackInfoFromApi {
   artist_name?: string;
   release_title?: string;
   release_cover_art?: string | null;
-  listen_count?: number; // Added listen_count
+  listen_count?: number;
 }
 
 export interface ReleaseDetail {
@@ -40,39 +40,43 @@ export interface ReleaseDetail {
   currency: string | null;
   minimum_price_nyp: string | null;
   available_download_formats: { value: string; label: string }[];
-  listen_count?: number; // Added listen_count
+  listen_count?: number;
 }
 
-// New Type for Release Summary (used in ReleaseListView and ReleaseCardSmall)
 export interface ReleaseSummary {
   id: number;
   title: string;
   artist: ArtistInfo | null;
   cover_art: string | null;
   release_type: string;
-  release_type_display?: string; // Make optional as it might not always be present
-  listen_count?: number; // Added listen_count for consistency if needed
+  release_type_display?: string;
+  listen_count?: number;
 }
 
-// Type for items in the Highlight Carousel
+// Updated/New CarouselSlide Type
 export interface CarouselSlide {
-  type: "welcome" | "release";
-  id: string | number;
-  title: string;
-  subtitle?: string;
-  imageUrl?: string | null;
-  description?: string;
-  linkUrl?: string;
-  releaseObject?: ReleaseSummary | ReleaseDetail;
+  id: string | number; // Can be Highlight ID or a special string like "welcome-slide"
+  type: "welcome" | "release"; // To differentiate a generic welcome from a release highlight
+  title: string; // Effective title (carousel_title or release.title)
+  subtitle?: string; // carousel_subtitle or release.artist.name
+  description?: string; // carousel_description
+  imageUrl?: string | null; // effective_image_url
+  linkUrl?: string; // URL to the release detail page
+  releaseObject?: ReleaseDetail | ReleaseSummary; // Optional: full release data if needed for more actions
 }
 
-// Type for Highlight data coming from the backend
 export interface HighlightItem {
+  // This is the raw data from /api/highlights/
   id: number;
-  release: ReleaseDetail;
-  highlighted_at: string;
-  is_active: boolean;
+  release_id: number;
+  release_title: string;
+  release_artist_name: string;
+  effective_title: string;
+  carousel_subtitle?: string | null;
+  carousel_description?: string | null;
+  effective_image_url: string | null;
   order: number;
+  // Potentially add other fields if needed by frontend logic, e.g., for admin view
 }
 
 export interface GeneratedDownloadStatus {
@@ -133,7 +137,6 @@ export interface Cart {
   updated_at: string;
 }
 
-// --- CHAT TYPES ---
 export interface UserChatInfo {
   id: number;
   username: string;
@@ -188,7 +191,6 @@ export type ReplyMessagePayload = Pick<
   CreateMessagePayload,
   "text" | "attachment" | "message_type"
 >;
-// --- END CHAT TYPES ---
 
 export interface OrderItemDetail {
   id: number;
@@ -211,11 +213,10 @@ export interface OrderDetail {
   items: OrderItemDetail[];
 }
 
-// --- PLAYLIST TYPES ---
 export interface Playlist {
   id: number;
   title: string;
-  owner: string; // Username
+  owner: string;
   tracks: TrackInfoFromApi[];
   track_count: number;
   cover_art: string | null;
@@ -225,4 +226,3 @@ export interface Playlist {
   updated_at: string;
   artist?: ArtistInfo;
 }
-// --- END PLAYLIST TYPES ---

@@ -45,12 +45,16 @@ def track_audio_path(instance, filename):
     track_id_component = instance.id if instance.id else "new_track_temp"
     return f'tracks/{artist_id_for_path}/{release_id_for_path}/{track_id_component}/{unique_filename}'
 
-# REMOVED: release_download_path function as the field is being removed
 
 def generated_release_download_path(instance, filename):
     release_id_for_path = instance.release.id if instance.release else "unknown_release"
     unique_id = instance.unique_identifier or uuid.uuid4()
     return f'generated_downloads/release_{release_id_for_path}/{unique_id}_{filename}'
+
+# Path for custom highlight images
+def highlight_custom_image_path(instance, filename):
+    highlight_id_for_path = instance.id if instance.id else "new_highlight"
+    return f'highlights/{highlight_id_for_path}/{filename}'
 
 
 class Genre(models.Model):
@@ -101,14 +105,6 @@ class Release(models.Model):
     genres = models.ManyToManyField(Genre, blank=True, related_name='releases')
     is_published = models.BooleanField(default=True, help_text="If unchecked, release is a draft.")
     
-    # REMOVED: download_file field
-    # download_file = models.FileField(
-    #     upload_to=release_download_path, 
-    #     null=True, 
-    #     blank=True, 
-    #     help_text="The downloadable file for the release (e.g., ZIP archive) uploaded by the musician."
-    # )
-
     pricing_model = models.CharField(
         max_length=10, 
         choices=PricingModel.choices, 
@@ -157,12 +153,6 @@ class Release(models.Model):
             if self.minimum_price_nyp is not None and self.minimum_price_nyp < Decimal('0.00'):
                 raise ValidationError({'minimum_price_nyp': "Minimum 'Name Your Price' cannot be negative."})
         
-        # REMOVED: Validation related to download_file as it's being removed
-        # if self.download_file and self.pricing_model not in [self.PricingModel.FREE, self.PricingModel.PAID, self.PricingModel.NAME_YOUR_PRICE]:
-        #      raise ValidationError("Download file provided but pricing model is unclear or not set for downloads.")
-        # if self.download_file and not self.pricing_model:
-        #      raise ValidationError({'pricing_model': "A pricing model must be selected if a download file is provided."})
-
 
     def save(self, *args, **kwargs):
         if self.pricing_model != self.PricingModel.PAID:
@@ -375,14 +365,59 @@ class Comment(models.Model):
 
 class Highlight(models.Model):
     release = models.ForeignKey(Release, on_delete=models.CASCADE, related_name='highlights')
-    highlighted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='+')
-    highlighted_at = models.DateTimeField(auto_now_add=True)
-    is_active = models.BooleanField(default=True)
-    order = models.PositiveIntegerField(default=0, help_text="Optional ordering for highlights display")
+    
+    # Carousel specific content overrides
+    carousel_title = models.CharField(max_length=200, blank=True, 
+                                      help_text="Optional: Carousel title override. Defaults to release title.")
+    carousel_subtitle = models.CharField(max_length=200, blank=True,
+                                         help_text="Optional: Subtitle for the carousel slide.")
+    carousel_description = models.TextField(blank=True, 
+                                            help_text="Optional: Description for the carousel slide.")
+    custom_carousel_image = models.ImageField(
+        upload_to=highlight_custom_image_path, 
+        null=True, 
+        blank=True,
+        validators=[validate_image_not_gif_utility],
+        help_text="Optional: Custom image for carousel. Defaults to release cover art."
+    )
+
+    # Display control
+    display_start_datetime = models.DateTimeField(default=timezone.now,
+                                                help_text="When this highlight should start being displayed.")
+    display_end_datetime = models.DateTimeField(null=True, blank=True,
+                                              help_text="Optional: When this highlight should stop being displayed. Leave blank for indefinite.")
+    
+    is_active = models.BooleanField(default=True, help_text="Manually activate or deactivate this highlight.")
+    order = models.PositiveIntegerField(default=0, help_text="Order for display (e.g., 0 is first).")
+    
+    # Admin tracking
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        related_name='created_highlights', # Changed related_name
+        help_text="Admin/Staff user who created this highlight."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
     def __str__(self):
-        return f"Highlight for {self.release.title}"
+        effective_title = self.carousel_title or self.release.title
+        return f"Highlight: {effective_title}"
+
+    def get_effective_title(self):
+        return self.carousel_title or self.release.title
+
+    def get_effective_image_url(self):
+        if self.custom_carousel_image and hasattr(self.custom_carousel_image, 'url'):
+            return self.custom_carousel_image.url
+        if self.release.cover_art and hasattr(self.release.cover_art, 'url'):
+            return self.release.cover_art.url
+        return None
+
     class Meta:
-        ordering = ['-highlighted_at']
+        ordering = ['order', '-display_start_datetime', '-created_at'] # Updated ordering
 
 class GeneratedDownload(models.Model):
     class StatusChoices(models.TextChoices):
@@ -483,9 +518,7 @@ def artist_pre_save_delete_old_picture(sender, instance, **kwargs):
 @receiver(pre_save, sender=Release)
 def release_pre_save_delete_old_cover(sender, instance, **kwargs):
     delete_file_if_changed(sender, instance, 'cover_art')
-    # REMOVED: delete_file_if_changed for 'download_file' as it's removed from model
-    # delete_file_if_changed(sender, instance, 'download_file') 
-
+    
 @receiver(pre_save, sender=Track)
 def track_pre_save_delete_old_audio(sender, instance, **kwargs):
     delete_file_if_changed(sender, instance, 'audio_file')
@@ -493,6 +526,10 @@ def track_pre_save_delete_old_audio(sender, instance, **kwargs):
 @receiver(pre_save, sender=GeneratedDownload) 
 def generated_download_pre_save_delete_old_file(sender, instance, **kwargs):
     delete_file_if_changed(sender, instance, 'download_file')
+
+@receiver(pre_save, sender=Highlight)
+def highlight_pre_save_delete_old_custom_image(sender, instance, **kwargs):
+    delete_file_if_changed(sender, instance, 'custom_carousel_image')
 
 
 @receiver(post_delete, sender=Artist)
@@ -502,9 +539,7 @@ def artist_post_delete_cleanup_picture(sender, instance, **kwargs):
 @receiver(post_delete, sender=Release)
 def release_post_delete_cleanup_cover_and_download(sender, instance, **kwargs):
     delete_file_on_instance_delete(instance.cover_art)
-    # REMOVED: delete_file_on_instance_delete for 'download_file'
-    # delete_file_on_instance_delete(instance.download_file) 
-
+    
 @receiver(post_delete, sender=Track)
 def track_post_delete_cleanup_audio(sender, instance, **kwargs):
     delete_file_on_instance_delete(instance.audio_file)
@@ -512,3 +547,7 @@ def track_post_delete_cleanup_audio(sender, instance, **kwargs):
 @receiver(post_delete, sender=GeneratedDownload) 
 def generated_download_post_delete_cleanup_file(sender, instance, **kwargs):
     delete_file_on_instance_delete(instance.download_file)
+
+@receiver(post_delete, sender=Highlight)
+def highlight_post_delete_cleanup_custom_image(sender, instance, **kwargs):
+    delete_file_on_instance_delete(instance.custom_carousel_image)
