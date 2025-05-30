@@ -12,11 +12,13 @@ from .serializers import (
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser, IsAuthenticated 
 from music.permissions import IsOwnerOrReadOnly, CanViewTrack, CanEditTrack
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
 from django.http import FileResponse, Http404, HttpResponseForbidden
 import os
 import mimetypes 
-from django.db import models as django_models
+from django.db import models as django_models 
+from django.db.models import Prefetch # Import Prefetch
 from django.db.models import F 
 from rest_framework.decorators import action, api_view, permission_classes as drf_permission_classes 
 from rest_framework.permissions import IsAuthenticated as DRFIsAuthenticated 
@@ -45,25 +47,41 @@ class ArtistViewSet(viewsets.ModelViewSet):
 class ReleaseViewSet(viewsets.ModelViewSet):
     serializer_class = ReleaseSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    filter_backends = [DjangoFilterBackend]
+    filter_backends = [DjangoFilterBackend, OrderingFilter] 
     filterset_fields = ['artist', 'genres', 'release_type'] 
+    ordering_fields = ['release_date', 'listen_count', 'title'] 
+    ordering = ['-release_date'] 
 
     def get_queryset(self):
         user = self.request.user
-        base_queryset = Release.objects.select_related('artist').prefetch_related('tracks', 'genres')
-        visible_releases = base_queryset.filter(is_published=True, release_date__lte=timezone.now())
+        
+        # Define the prefetch for tracks with their genres
+        # This ensures tracks are fetched efficiently, and then their genres.
+        prefetch_tracks_with_genres = Prefetch(
+            'tracks',
+            queryset=Track.objects.prefetch_related('genres')
+        )
 
+        base_queryset = Release.objects.select_related('artist').prefetch_related(
+            'genres', prefetch_tracks_with_genres # Use the defined Prefetch object
+        )
+
+        visible_to_all_q = django_models.Q(is_published=True, release_date__lte=timezone.now())
+        
         if user.is_authenticated:
-            if user.is_staff: 
-                return base_queryset.all().order_by('-release_date')
-            try:
-                user_artist = Artist.objects.get(user=user)
-                queryset = (visible_releases | base_queryset.filter(artist=user_artist)).distinct()
-            except Artist.DoesNotExist:
-                queryset = visible_releases
+            if user.is_staff:
+                queryset = base_queryset.all()
+            else:
+                user_artist_q = django_models.Q(artist__user=user)
+                # Using .distinct() is important here due to the OR condition with potential prefetches
+                # that might introduce multiple paths to the same Release.
+                queryset = base_queryset.filter(visible_to_all_q | user_artist_q).distinct()
         else:
-            queryset = visible_releases
-        return queryset.order_by('-release_date')
+            queryset = base_queryset.filter(visible_to_all_q)
+        
+        # DRF's OrderingFilter will apply ordering based on request or ViewSet's 'ordering' attribute.
+        return queryset
+
 
     def perform_create(self, serializer):
         try:
@@ -138,7 +156,7 @@ class TrackViewSet(viewsets.ModelViewSet):
         elif self.action == 'create':
             permission_classes = [permissions.IsAuthenticated]
         elif self.action == 'log_listen_segment': 
-            permission_classes = [permissions.IsAuthenticated] # <<< CHANGED HERE
+            permission_classes = [permissions.IsAuthenticated] 
         else: 
             permission_classes = [permissions.IsAuthenticatedOrReadOnly, CanViewTrack, CanEditTrack]
         return [permission() for permission in permission_classes]
@@ -168,7 +186,6 @@ class TrackViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], serializer_class=ListenSegmentLogSerializer)
     def log_listen_segment(self, request, pk=None):
-        # request.user is guaranteed to be authenticated here by IsAuthenticated permission
         track = self.get_object() 
         serializer = ListenSegmentLogSerializer(data=request.data)
         if not serializer.is_valid():
@@ -176,7 +193,7 @@ class TrackViewSet(viewsets.ModelViewSet):
 
         data = serializer.validated_data
         
-        user_id_to_log = request.user.id # No need to check is_authenticated again
+        user_id_to_log = request.user.id 
 
         segment_start_timestamp_utc_iso = data['segment_start_timestamp_utc'].isoformat()
         segment_duration_ms = data['segment_duration_ms']
@@ -203,9 +220,13 @@ class CommentViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
 class HighlightViewSet(viewsets.ReadOnlyModelViewSet): 
+    # Ensure HighlightViewSet also prefetches efficiently if ReleaseSerializer is deep
     queryset = Highlight.objects.filter(is_active=True).select_related(
-        'release__artist' 
-    ).prefetch_related('release__genres').order_by('order', '-highlighted_at')
+        'release__artist' # Essential for subtitle in carousel
+    ).prefetch_related(
+        'release__genres', # For release details
+        Prefetch('release__tracks', queryset=Track.objects.prefetch_related('genres')) # For available_download_formats
+    ).order_by('order', '-highlighted_at')
     serializer_class = HighlightSerializer
     permission_classes = [permissions.AllowAny]
 

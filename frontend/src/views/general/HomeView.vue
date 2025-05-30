@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted } from "vue"; // Removed computed as it's not used here
 import axios from "axios";
 import HighlightsCarousel from "@/components/home/HighlightsCarousel.vue";
 import ReleaseCardSmall from "@/components/release/ReleaseCardSmall.vue";
@@ -14,20 +14,24 @@ interface PaginatedResponse<T> {
 
 const carouselItems = ref<CarouselSlide[]>([]);
 const latestReleases = ref<ReleaseSummary[]>([]);
+const popularReleases = ref<ReleaseSummary[]>([]); // New ref for popular releases
+
 const isLoadingHighlights = ref(true);
 const isLoadingReleases = ref(true);
+const isLoadingPopular = ref(true); // New loading state
+
 const errorHighlights = ref<string | null>(null);
 const errorReleases = ref<string | null>(null);
+const errorPopular = ref<string | null>(null); // New error state
 
 const welcomeSlide: CarouselSlide = {
   type: "welcome",
   id: "welcome-slide",
   title: "Welcome to Vaultwave!",
   subtitle: "Your New Home for Music Discovery & Commerce",
-  imageUrl: null, // Or a generic welcome image URL
+  imageUrl: null,
   description:
     "Explore unique releases, support artists directly, and build your digital music collection. Vaultwave connects fans with the music they love.",
-  // linkUrl: '/about' // Optional link for the welcome slide
 };
 
 async function fetchHighlights() {
@@ -38,7 +42,7 @@ async function fetchHighlights() {
       "/highlights/"
     );
     const activeHighlights = response.data.results.filter(
-      (h) => h.is_active && h.release.is_published // Ensure highlight is active and release is published
+      (h) => h.is_active && h.release.is_published
     );
 
     const highlightSlides: CarouselSlide[] = activeHighlights.map((item) => ({
@@ -55,7 +59,7 @@ async function fetchHighlights() {
   } catch (err) {
     console.error("HomeView: Failed to fetch highlights:", err);
     errorHighlights.value = "Could not load featured highlights.";
-    carouselItems.value = [welcomeSlide]; // Show welcome slide even if highlights fail
+    carouselItems.value = [welcomeSlide];
   } finally {
     isLoadingHighlights.value = false;
   }
@@ -65,9 +69,8 @@ async function fetchLatestReleases() {
   isLoadingReleases.value = true;
   errorReleases.value = null;
   try {
-    // Assuming /api/releases/ is already ordered by latest
     const response = await axios.get<PaginatedResponse<ReleaseSummary>>(
-      "/releases/?limit=12" // Fetch, for example, the latest 12 releases
+      "/releases/?limit=6&ordering=-release_date" // Explicitly order by release_date
     );
     latestReleases.value = response.data.results;
   } catch (err) {
@@ -78,9 +81,30 @@ async function fetchLatestReleases() {
   }
 }
 
+async function fetchPopularReleases() {
+  isLoadingPopular.value = true;
+  errorPopular.value = null;
+  try {
+    const response = await axios.get<PaginatedResponse<ReleaseSummary>>(
+      "/releases/?limit=6&ordering=-listen_count" // Order by listen_count descending
+    );
+    // Filter out releases with 0 listens for the "Popular" section,
+    // or handle this on the backend if preferred (e.g., listen_count__gt=0)
+    popularReleases.value = response.data.results.filter(
+      (r) => (r.listen_count || 0) > 0
+    );
+  } catch (err) {
+    console.error("HomeView: Failed to fetch popular releases:", err);
+    errorPopular.value = "Could not load popular releases at this time.";
+  } finally {
+    isLoadingPopular.value = false;
+  }
+}
+
 onMounted(() => {
   fetchHighlights();
   fetchLatestReleases();
+  fetchPopularReleases(); // Fetch popular releases
 });
 </script>
 
@@ -116,7 +140,7 @@ onMounted(() => {
       <div v-else class="releases-grid">
         <ReleaseCardSmall
           v-for="release in latestReleases"
-          :key="release.id"
+          :key="`latest-${release.id}`"
           :release="release"
         />
       </div>
@@ -124,8 +148,21 @@ onMounted(() => {
 
     <section class="popular-releases-section">
       <h2>Popular Releases</h2>
-      <div class="placeholder-message">
-        <p>Listen tracking coming soon to show popular releases!</p>
+      <div v-if="isLoadingPopular" class="loading-placeholder">
+        Loading Popular Releases...
+      </div>
+      <div v-else-if="errorPopular" class="error-message">
+        {{ errorPopular }}
+      </div>
+      <div v-else-if="popularReleases.length === 0" class="empty-message">
+        Nothing is popular yet! Start listening to some tracks.
+      </div>
+      <div v-else class="releases-grid">
+        <ReleaseCardSmall
+          v-for="release in popularReleases"
+          :key="`popular-${release.id}`"
+          :release="release"
+        />
       </div>
     </section>
   </div>
@@ -135,11 +172,11 @@ onMounted(() => {
 .home-view {
   display: flex;
   flex-direction: column;
-  gap: 3rem; /* Space between sections */
+  gap: 3rem;
 }
 
 .highlights-section {
-  margin-bottom: 2rem; /* Space below carousel */
+  margin-bottom: 2rem;
 }
 
 .latest-releases-section h2,
@@ -160,6 +197,7 @@ onMounted(() => {
 .loading-placeholder,
 .empty-message,
 .placeholder-message {
+  /* Combined for similar styling */
   text-align: center;
   padding: 2rem;
   font-style: italic;
