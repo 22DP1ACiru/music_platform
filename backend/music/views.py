@@ -1,5 +1,5 @@
 from django.shortcuts import render, get_object_or_404
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status 
 from rest_framework.response import Response
 from django.utils import timezone
 from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent 
@@ -9,7 +9,7 @@ from .serializers import (
     GeneratedDownloadRequestSerializer, GeneratedDownloadStatusSerializer,
     ListenSegmentLogSerializer 
 )
-from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser, IsAuthenticated
+from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser, IsAuthenticated 
 from music.permissions import IsOwnerOrReadOnly, CanViewTrack, CanEditTrack
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
@@ -22,7 +22,7 @@ from rest_framework.decorators import action, api_view, permission_classes as dr
 from rest_framework.permissions import IsAuthenticated as DRFIsAuthenticated 
 import logging
 
-from .tasks import generate_release_download_zip, process_listen_segment_task # Import the new task
+from .tasks import generate_release_download_zip, process_listen_segment_task 
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ class TrackViewSet(viewsets.ModelViewSet):
         elif self.action == 'create':
             permission_classes = [permissions.IsAuthenticated]
         elif self.action == 'log_listen_segment': 
-            permission_classes = [permissions.AllowAny] 
+            permission_classes = [permissions.IsAuthenticated] # <<< CHANGED HERE
         else: 
             permission_classes = [permissions.IsAuthenticatedOrReadOnly, CanViewTrack, CanEditTrack]
         return [permission() for permission in permission_classes]
@@ -168,30 +168,26 @@ class TrackViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], serializer_class=ListenSegmentLogSerializer)
     def log_listen_segment(self, request, pk=None):
-        track = self.get_object() # pk here is track_id
+        # request.user is guaranteed to be authenticated here by IsAuthenticated permission
+        track = self.get_object() 
         serializer = ListenSegmentLogSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
         
-        user_id_to_log = None
-        if request.user.is_authenticated:
-            user_id_to_log = request.user.id
+        user_id_to_log = request.user.id # No need to check is_authenticated again
 
-        # Convert datetime to ISO string for Celery task (JSON serializable)
         segment_start_timestamp_utc_iso = data['segment_start_timestamp_utc'].isoformat()
         segment_duration_ms = data['segment_duration_ms']
         
-        # Send to Celery task
         process_listen_segment_task.delay(
-            user_id_to_log,
+            user_id_to_log, 
             track.id,
             segment_start_timestamp_utc_iso,
             segment_duration_ms
         )
             
-        # Respond quickly to the client
         return Response(
             {'status': 'listen segment received and queued for processing'}, 
             status=status.HTTP_202_ACCEPTED
@@ -233,9 +229,8 @@ def stream_track_audio(request, track_id):
         except Artist.DoesNotExist:
             pass 
     
-    if not can_stream: 
-        if release.is_published and release.release_date <= timezone.now():
-            can_stream = True
+    if not can_stream and release.is_published and release.release_date <= timezone.now():
+        can_stream = True
             
     if not can_stream:
         print(f"DEBUG: Permission denied for track {track_id}. User: {request.user}") 

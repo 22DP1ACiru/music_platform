@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import type { PlayerTrackInfo } from "@/types";
 import axios from "axios";
+import { useAuthStore } from "./auth"; // Import AuthStore
 
 interface PersistedPlayerState {
   persistedTrack: PlayerTrackInfo | null;
@@ -17,6 +18,8 @@ const PLAYER_STORAGE_KEY = "vaultwavePlayerState";
 const MIN_LOGGABLE_SEGMENT_MS = 2000;
 
 export const usePlayerStore = defineStore("player", () => {
+  const authStore = useAuthStore(); // Initialize AuthStore
+
   const loadInitialState = (): Partial<PersistedPlayerState> => {
     const storedStateRaw = localStorage.getItem(PLAYER_STORAGE_KEY);
     if (storedStateRaw) {
@@ -141,6 +144,15 @@ export const usePlayerStore = defineStore("player", () => {
     segmentStartTimeMs: number,
     segmentDurationMs: number
   ) {
+    // +++ ADD AUTHENTICATION CHECK +++
+    if (!authStore.isLoggedIn) {
+      console.log(
+        "PlayerStore: User not logged in. Skipping listen segment log."
+      );
+      return;
+    }
+    // +++ END AUTHENTICATION CHECK +++
+
     if (segmentDurationMs < MIN_LOGGABLE_SEGMENT_MS) {
       console.log(
         `PlayerStore: Skipping log for short segment (${segmentDurationMs}ms, min: ${MIN_LOGGABLE_SEGMENT_MS}ms) for track ${trackId}`
@@ -173,6 +185,7 @@ export const usePlayerStore = defineStore("player", () => {
         `PlayerStore: Unmuted segment ended for track ${currentTrackIdForLogging.value}. Reason: ${reason}. Duration: ${durationMs}ms.`
       );
       logListenSegment(
+        // This will now check for auth internally
         currentTrackIdForLogging.value,
         unmutedSegmentStartTime.value,
         durationMs
@@ -204,30 +217,15 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
-  // +++ NEW ACTION FOR SEEKING +++
   function handleSeekOperation() {
     console.log("PlayerStore: Seek operation detected.");
     if (unmutedSegmentStartTime.value) {
       handleUnmutedSegmentEnd("seek operation");
     }
-    // After ending the old segment, if the track is still effectively audible, start a new one.
-    // This relies on isEffectivelyAudible being true *after* the seek completes and currentTime is updated.
-    // The AudioPlayer.vue will update currentTime, and then if playback resumes/continues,
-    // the isEffectivelyAudible watcher should trigger handleUnmutedSegmentStart.
-    // For robustness, we can also try to start it here if conditions seem right *immediately* after.
-    // However, this might be premature if isPlaying is false during the drag.
-    // The isEffectivelyAudible watcher is generally better.
-    // Let's ensure that if isPlaying is true AND conditions are met after seek, it starts.
-    // The `isSeeking` flag in AudioPlayer.vue helps to not update store's currentTime during drag.
-    // Once mouseup happens, `isSeeking` becomes false. If `isPlaying` is true, `onTimeUpdate` fires,
-    // and `isEffectivelyAudible` should then correctly trigger `handleUnmutedSegmentStart`.
-
-    // To be absolutely sure, especially if playback doesn't pause during seek:
     if (isEffectivelyAudible.value) {
       handleUnmutedSegmentStart();
     }
   }
-  // +++ END NEW ACTION +++
 
   let currentTimeSaveTimeout: number | undefined;
   watch(currentTime, (newTime) => {
@@ -330,7 +328,6 @@ export const usePlayerStore = defineStore("player", () => {
     }
     isPlaying.value = true;
 
-    // Directly attempt to start segment after state is set
     if (isEffectivelyAudible.value) {
       handleUnmutedSegmentStart();
     }
@@ -623,6 +620,6 @@ export const usePlayerStore = defineStore("player", () => {
     playTrackFromQueueByIndex,
     removeTrackFromQueue,
     resetPlayerState,
-    handleSeekOperation, // Expose the new action
+    handleSeekOperation,
   };
 });
