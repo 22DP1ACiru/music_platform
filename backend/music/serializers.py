@@ -305,10 +305,10 @@ class HighlightSerializer(serializers.ModelSerializer):
     effective_title = serializers.CharField(source='get_effective_title', read_only=True)
     effective_image_url = serializers.SerializerMethodField()
     
-    # Directly use the renamed model fields for output
-    title = serializers.CharField(source='title', read_only=True, allow_blank=True)
-    subtitle = serializers.CharField(source='subtitle', read_only=True, allow_blank=True)
-    description = serializers.CharField(source='description', read_only=True, allow_blank=True)
+    # Directly use the renamed model fields for output - remove source if field name matches
+    title = serializers.CharField(read_only=True, allow_blank=True)
+    subtitle = serializers.CharField(read_only=True, allow_blank=True)
+    description = serializers.CharField(read_only=True, allow_blank=True)
 
     class Meta:
         model = Highlight
@@ -318,7 +318,7 @@ class HighlightSerializer(serializers.ModelSerializer):
             'release_title',
             'release_artist_name',
             'effective_title', 
-            'title', # Expose the direct title field
+            'title', 
             'subtitle', 
             'description', 
             'effective_image_url', 

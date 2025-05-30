@@ -54,7 +54,6 @@ const resetAutoPlay = () => {
 
 onMounted(() => {
   if (props.items.length > 0) {
-    // Ensure items are present before starting
     startAutoPlay();
   }
 });
@@ -73,19 +72,23 @@ onUnmounted(() => {
   >
     <transition name="slide-fade" mode="out-in">
       <div :key="currentSlide.id" class="carousel-slide">
-        <img
-          v-if="currentSlide.imageUrl"
-          :src="currentSlide.imageUrl"
-          :alt="currentSlide.title"
-          class="slide-image"
-        />
-        <div v-else class="slide-image-placeholder">
-          <span v-if="currentSlide.type === 'welcome'">🎶</span>
-          <span v-else>🎧</span>
+        <div class="slide-image-container">
+          <img
+            v-if="currentSlide.imageUrl"
+            :src="currentSlide.imageUrl"
+            :alt="currentSlide.title"
+            class="slide-image"
+          />
+          <div v-else class="slide-image-placeholder">
+            <span v-if="currentSlide.type === 'welcome'">🎶</span>
+            <span v-else>🎧</span>
+          </div>
         </div>
 
         <div class="slide-content">
-          <h2 class="slide-title">{{ currentSlide.title }}</h2>
+          <h2 class="slide-title truncate-text" :style="{ '--line-clamp': 2 }">
+            {{ currentSlide.title }}
+          </h2>
           <p v-if="currentSlide.subtitle" class="slide-subtitle">
             {{ currentSlide.subtitle }}
           </p>
@@ -108,7 +111,7 @@ onUnmounted(() => {
       class="carousel-control prev"
       aria-label="Previous slide"
     >
-      &#10094;
+      ❮
     </button>
     <button
       v-if="items.length > 1"
@@ -116,7 +119,7 @@ onUnmounted(() => {
       class="carousel-control next"
       aria-label="Next slide"
     >
-      &#10095;
+      ❯
     </button>
 
     <div v-if="items.length > 1" class="carousel-dots">
@@ -131,39 +134,44 @@ onUnmounted(() => {
       ></span>
     </div>
   </div>
-  <div v-else class="carousel-empty">
-    <!-- Placeholder or message when no items -->
-  </div>
+  <div v-else class="carousel-empty"></div>
 </template>
 
 <style scoped>
 .highlights-carousel {
   position: relative;
   width: 100%;
-  min-height: 300px; /* Minimum height */
-  max-height: 450px; /* Maximum height */
+  min-height: 350px;
+  max-height: 500px;
   overflow: hidden;
   border-radius: 8px;
   background-color: var(--color-background-mute);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  display: flex; /* Added for centering placeholder */
-  align-items: center; /* Added for centering placeholder */
-  justify-content: center; /* Added for centering placeholder */
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .carousel-slide {
   width: 100%;
-  height: 100%; /* Make slide take full height of carousel */
-  display: flex; /* Use flex for layout */
-  position: absolute; /* For transitions */
+  height: 100%;
+  display: flex;
+  position: absolute;
   top: 0;
   left: 0;
 }
 
+.slide-image-container {
+  width: 45%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
 .slide-image,
 .slide-image-placeholder {
-  width: 50%; /* Image takes half the width */
-  height: 100%; /* Image takes full height */
+  width: 100%;
+  height: 100%;
   object-fit: cover;
 }
 
@@ -172,7 +180,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 5rem; /* Adjust icon size */
+  font-size: 4.5rem;
   color: var(--color-text-light);
 }
 .slide-image-placeholder span {
@@ -180,36 +188,60 @@ onUnmounted(() => {
 }
 
 .slide-content {
-  width: 50%; /* Content takes the other half */
-  padding: 2rem;
+  width: 55%;
+  padding: 1.5rem 70px 1.5rem 2rem; /* Adjusted padding: T R B L */
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  align-items: flex-start; /* Align text to the left */
+  justify-content: center; /* Center content vertically in the available space */
+  align-items: flex-start;
   color: var(--color-text);
   text-align: left;
   box-sizing: border-box;
-  overflow-y: auto;
+  overflow: hidden;
+}
+
+.truncate-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--line-clamp);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  /* These help with wrapping before clamping, especially for long words */
+  overflow-wrap: break-word;
+  word-wrap: break-word; /* Legacy */
+  word-break: break-word; /* More control than break-all */
 }
 
 .slide-content .slide-title {
-  font-size: 2.2em;
+  font-size: 1.9em; /* Slightly reduced */
   font-weight: bold;
   color: var(--color-heading);
-  margin: 0 0 0.5rem 0;
+  margin: 0 0 0.4rem 0;
+  line-height: 1.2; /* Tightened line-height slightly */
+  /* CSS Line clamp will handle the 2 lines. No max-height here. */
 }
 
 .slide-content .slide-subtitle {
-  font-size: 1.2em;
+  font-size: 1.05em; /* Slightly reduced */
   color: var(--color-text);
-  margin: 0 0 1rem 0;
+  margin: 0 0 0.6rem 0;
+  line-height: 1.3;
+  /* This will take up to 2 lines if text is long enough, but won't show "..." */
+  /* If it exceeds 2 lines visually due to char limit, it will just overflow (hidden by .slide-content) */
+  /* or wrap if there's space */
+  /* To enforce ellipsis for subtitle if it's too long for 2 lines: */
+  /* Apply .truncate-text class and :style="{ '--line-clamp': 2 }" to the <p> element */
 }
 
 .slide-content .slide-description {
-  font-size: 1em;
-  line-height: 1.6;
-  margin: 0 0 1.5rem 0;
+  font-size: 0.9em; /* Slightly reduced */
+  line-height: 1.45;
+  margin: 0 0 1rem 0;
   color: var(--color-text-light);
+  /* This will take up to 3-4 lines if text is long enough, but won't show "..." */
+  /* To enforce ellipsis for description if it's too long: */
+  /* Apply .truncate-text class and :style="{ '--line-clamp': 3 or 4 }" to the <p> element */
 }
 
 .slide-link {
@@ -217,19 +249,27 @@ onUnmounted(() => {
   background-color: var(--color-accent);
   color: white;
   text-decoration: none;
-  border-radius: 4px;
+  border-radius: 5px;
   font-weight: 500;
-  transition: background-color 0.2s;
+  transition: background-color 0.2s ease-in-out, transform 0.1s ease-in-out;
+  margin-top: auto;
+  align-self: flex-start;
+  border: none;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 .slide-link:hover {
   background-color: var(--color-accent-hover);
+  transform: translateY(-1px);
+}
+.slide-link:active {
+  transform: translateY(0px);
 }
 
 .carousel-control {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  background-color: rgba(0, 0, 0, 0.4);
+  background-color: rgba(30, 30, 30, 0.5);
   color: white;
   border: none;
   padding: 0.8rem;
@@ -237,16 +277,17 @@ onUnmounted(() => {
   font-size: 1.5rem;
   z-index: 10;
   border-radius: 50%;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.2s;
+  transition: background-color 0.2s ease-in-out;
 }
 .carousel-control:hover {
-  background-color: rgba(0, 0, 0, 0.7);
+  background-color: rgba(0, 0, 0, 0.8);
 }
+
 .carousel-control.prev {
   left: 1rem;
 }
@@ -260,25 +301,26 @@ onUnmounted(() => {
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 0.5rem;
+  gap: 0.6rem;
   z-index: 10;
 }
 .dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background-color: rgba(255, 255, 255, 0.5);
+  background-color: rgba(255, 255, 255, 0.4);
+  border: 1px solid rgba(0, 0, 0, 0.2);
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: background-color 0.2s ease-in-out, transform 0.2s ease-in-out;
 }
 .dot.active {
   background-color: white;
+  transform: scale(1.1);
 }
 .dot:hover {
-  background-color: rgba(255, 255, 255, 0.8);
+  background-color: rgba(255, 255, 255, 0.7);
 }
 
-/* Transition for slides */
 .slide-fade-enter-active,
 .slide-fade-leave-active {
   transition: opacity 0.8s ease;
@@ -297,40 +339,67 @@ onUnmounted(() => {
 
 @media (max-width: 768px) {
   .highlights-carousel {
-    min-height: 350px; /* Adjust for smaller screens */
-    max-height: 500px;
+    min-height: auto;
+    max-height: none;
+    height: 450px;
   }
   .carousel-slide {
-    flex-direction: column; /* Stack image and content */
+    flex-direction: column;
   }
-  .slide-image,
-  .slide-image-placeholder,
+  .slide-image-container,
   .slide-content {
-    width: 100%; /* Both take full width */
+    width: 100%;
   }
-  .slide-image,
-  .slide-image-placeholder {
-    height: 55%; /* Image takes a portion of the height */
-    max-height: 250px;
+  .slide-image-container {
+    height: 40%;
   }
   .slide-content {
-    height: 45%; /* Content takes remaining height */
-    padding: 1.5rem;
-    align-items: center; /* Center content on small screens */
-    text-align: center;
+    height: 60%;
+    padding: 1rem 1.5rem;
+    justify-content: center; /* Reverted to center for mobile for overall balance */
+    gap: 0.3rem;
   }
   .slide-content .slide-title {
-    font-size: 1.8em;
+    font-size: 1.3em; /* Further reduced for mobile title */
+    margin-bottom: 0.2rem;
+    line-height: 1.2;
   }
   .slide-content .slide-subtitle {
-    font-size: 1.1em;
+    font-size: 0.85em;
+    margin-bottom: 0.3rem; /* Reduced margin */
+    line-height: 1.25; /* Tighter line height for mobile subtitle */
   }
   .slide-content .slide-description {
-    font-size: 0.9em;
-    margin-bottom: 1rem;
+    font-size: 0.8em; /* Further reduced for mobile description */
+    margin-bottom: 0.5rem; /* Reduced margin */
+    line-height: 1.35;
+    /* Apply line-clamp to description on mobile if it's too long */
+    /* -webkit-line-clamp: 3; // Example, add this to .truncate-text for this element specifically if needed */
   }
   .slide-link {
-    align-self: center;
+    align-self: center; /* Center button on mobile */
+    padding: 0.5rem 1rem;
+    font-size: 0.9em;
+    margin-top: 0.5rem;
+  }
+  .carousel-control {
+    width: 36px;
+    height: 36px;
+    font-size: 1.2rem;
+  }
+  .carousel-control.prev {
+    left: 0.5rem;
+  }
+  .carousel-control.next {
+    right: 0.5rem;
+  }
+
+  .carousel-dots {
+    bottom: 0.75rem;
+  }
+  .dot {
+    width: 10px;
+    height: 10px;
   }
 }
 </style>

@@ -365,12 +365,21 @@ class Comment(models.Model):
 class Highlight(models.Model):
     release = models.ForeignKey(Release, on_delete=models.CASCADE, related_name='highlights')
     
-    title = models.CharField(max_length=200, blank=True, 
-                             help_text="Optional: Highlight title. Defaults to release title.")
-    subtitle = models.CharField(max_length=200, blank=True,
-                                help_text="Optional: Subtitle for the highlight.")
-    description = models.TextField(blank=True, 
-                                   help_text="Optional: Description for the highlight.")
+    title = models.CharField(
+        max_length=70, # Adjusted max_length
+        blank=True, 
+        help_text="Optional: Highlight title (max 70 chars). Defaults to release title."
+    )
+    subtitle = models.CharField(
+        max_length=64, 
+        blank=True,
+        help_text="Optional: Subtitle for the highlight (max 64 chars)."
+    )
+    description = models.TextField(
+        max_length=255, 
+        blank=True, 
+        help_text="Optional: Description for the highlight (max 255 chars)."
+    )
     custom_carousel_image = models.ImageField(
         upload_to=highlight_custom_image_path, 
         null=True, 
@@ -394,7 +403,7 @@ class Highlight(models.Model):
         related_name='created_highlights',
         help_text="Admin/Staff user who created this highlight."
     )
-    created_at = models.DateTimeField(auto_now_add=True) # Renamed from highlighted_at
+    created_at = models.DateTimeField(auto_now_add=True) 
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -402,7 +411,7 @@ class Highlight(models.Model):
         return f"Highlight: {effective_title}"
 
     def get_effective_title(self):
-        return self.title or self.release.title # Use renamed field
+        return self.title or self.release.title 
 
     def get_effective_image_url(self):
         if self.custom_carousel_image and hasattr(self.custom_carousel_image, 'url'):
