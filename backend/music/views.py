@@ -10,15 +10,16 @@ from .serializers import (
     ListenSegmentLogSerializer 
 )
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser, IsAuthenticated 
+from rest_framework.filters import SearchFilter, OrderingFilter # Import SearchFilter
+from django_filters.rest_framework import DjangoFilterBackend 
+
 from music.permissions import IsOwnerOrReadOnly, CanViewTrack, CanEditTrack
-from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
 from django.http import FileResponse, Http404, HttpResponseForbidden
 import os
 import mimetypes 
 from django.db import models as django_models 
-from django.db.models import Prefetch # Import Prefetch
+from django.db.models import Prefetch 
 from django.db.models import F 
 from rest_framework.decorators import action, api_view, permission_classes as drf_permission_classes 
 from rest_framework.permissions import IsAuthenticated as DRFIsAuthenticated 
@@ -33,11 +34,20 @@ class GenreViewSet(viewsets.ModelViewSet):
     queryset = Genre.objects.all().order_by('name')
     serializer_class = GenreSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
+    # Optionally add search to Genres too
+    filter_backends = [SearchFilter, DjangoFilterBackend]
+    search_fields = ['name']
+    filterset_fields = ['name']
+
 
 class ArtistViewSet(viewsets.ModelViewSet):
     queryset = Artist.objects.all()
     serializer_class = ArtistSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
+    filter_backends = [SearchFilter, OrderingFilter, DjangoFilterBackend] # Added SearchFilter
+    search_fields = ['name', 'bio', 'location', 'user__username'] # Fields to search against
+    ordering_fields = ['name'] # Allow ordering by name
+    filterset_fields = ['location'] # Allow filtering by location
     
     def perform_create(self, serializer):
         if Artist.objects.filter(user=self.request.user).exists():
@@ -47,23 +57,27 @@ class ArtistViewSet(viewsets.ModelViewSet):
 class ReleaseViewSet(viewsets.ModelViewSet):
     serializer_class = ReleaseSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    filter_backends = [DjangoFilterBackend, OrderingFilter] 
-    filterset_fields = ['artist', 'genres', 'release_type'] 
+    filter_backends = [DjangoFilterBackend, OrderingFilter, SearchFilter] # Added SearchFilter
+    filterset_fields = ['artist', 'genres', 'release_type', 'artist__name'] # Added artist__name for filtering
+    search_fields = [
+        'title', 
+        'artist__name', 
+        'tracks__title', # Search in track titles related to the release
+        'genres__name'   # Search in genre names related to the release
+    ] # Fields to search against
     ordering_fields = ['release_date', 'listen_count', 'title'] 
     ordering = ['-release_date'] 
 
     def get_queryset(self):
         user = self.request.user
         
-        # Define the prefetch for tracks with their genres
-        # This ensures tracks are fetched efficiently, and then their genres.
         prefetch_tracks_with_genres = Prefetch(
             'tracks',
             queryset=Track.objects.prefetch_related('genres')
         )
 
         base_queryset = Release.objects.select_related('artist').prefetch_related(
-            'genres', prefetch_tracks_with_genres # Use the defined Prefetch object
+            'genres', prefetch_tracks_with_genres 
         )
 
         visible_to_all_q = django_models.Q(is_published=True, release_date__lte=timezone.now())
@@ -73,15 +87,11 @@ class ReleaseViewSet(viewsets.ModelViewSet):
                 queryset = base_queryset.all()
             else:
                 user_artist_q = django_models.Q(artist__user=user)
-                # Using .distinct() is important here due to the OR condition with potential prefetches
-                # that might introduce multiple paths to the same Release.
                 queryset = base_queryset.filter(visible_to_all_q | user_artist_q).distinct()
         else:
             queryset = base_queryset.filter(visible_to_all_q)
         
-        # DRF's OrderingFilter will apply ordering based on request or ViewSet's 'ordering' attribute.
         return queryset
-
 
     def perform_create(self, serializer):
         try:
@@ -148,7 +158,13 @@ class ReleaseViewSet(viewsets.ModelViewSet):
 
 class TrackViewSet(viewsets.ModelViewSet):
     serializer_class = TrackSerializer
-    filterset_fields = ['release', 'genres']
+    # Add SearchFilter for tracks as well if needed later
+    filter_backends = [DjangoFilterBackend, OrderingFilter, SearchFilter]
+    filterset_fields = ['release', 'genres', 'release__artist__name']
+    search_fields = ['title', 'release__title', 'release__artist__name', 'genres__name']
+    ordering_fields = ['track_number', 'title', 'listen_count', 'release__release_date']
+    ordering = ['release__release_date', 'track_number']
+
 
     def get_permissions(self):
         if self.action == 'list':
@@ -220,12 +236,11 @@ class CommentViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
 class HighlightViewSet(viewsets.ReadOnlyModelViewSet): 
-    # Ensure HighlightViewSet also prefetches efficiently if ReleaseSerializer is deep
     queryset = Highlight.objects.filter(is_active=True).select_related(
-        'release__artist' # Essential for subtitle in carousel
+        'release__artist' 
     ).prefetch_related(
-        'release__genres', # For release details
-        Prefetch('release__tracks', queryset=Track.objects.prefetch_related('genres')) # For available_download_formats
+        'release__genres', 
+        Prefetch('release__tracks', queryset=Track.objects.prefetch_related('genres')) 
     ).order_by('order', '-highlighted_at')
     serializer_class = HighlightSerializer
     permission_classes = [permissions.AllowAny]
