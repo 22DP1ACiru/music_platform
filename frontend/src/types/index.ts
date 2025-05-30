@@ -10,14 +10,15 @@ export interface TrackInfoFromApi {
   title: string;
   track_number: number | null;
   duration_in_seconds: number | null;
-  audio_file: string; // This is likely the storage path, not stream URL
-  stream_url: string; // This is the one for playing
+  audio_file: string;
+  stream_url: string;
   genres_data?: { id: number; name: string }[];
-  release_id?: number; // Added
-  artist_id?: number; // Added
-  artist_name?: string; // Added for convenience
-  release_title?: string; // Added for convenience
-  release_cover_art?: string | null; // Added
+  release_id?: number;
+  artist_id?: number;
+  artist_name?: string;
+  release_title?: string;
+  release_cover_art?: string | null;
+  listen_count?: number; // Added listen_count
 }
 
 export interface ReleaseDetail {
@@ -39,6 +40,7 @@ export interface ReleaseDetail {
   currency: string | null;
   minimum_price_nyp: string | null;
   available_download_formats: { value: string; label: string }[];
+  listen_count?: number; // Added listen_count
 }
 
 // New Type for Release Summary (used in ReleaseListView and ReleaseCardSmall)
@@ -49,24 +51,25 @@ export interface ReleaseSummary {
   cover_art: string | null;
   release_type: string;
   release_type_display?: string; // Make optional as it might not always be present
+  listen_count?: number; // Added listen_count for consistency if needed
 }
 
 // Type for items in the Highlight Carousel
 export interface CarouselSlide {
-  type: "welcome" | "release"; // Differentiates static welcome slide from dynamic releases
-  id: string | number; // Unique key for v-for, can be 'welcome-slide' or release.id
+  type: "welcome" | "release";
+  id: string | number;
   title: string;
-  subtitle?: string; // e.g., Artist name for releases, or a tagline for welcome
-  imageUrl?: string | null; // Cover art for releases
-  description?: string; // For the welcome message body
-  linkUrl?: string; // e.g., to release detail page
-  releaseObject?: ReleaseSummary | ReleaseDetail; // Optionally pass the full release for context
+  subtitle?: string;
+  imageUrl?: string | null;
+  description?: string;
+  linkUrl?: string;
+  releaseObject?: ReleaseSummary | ReleaseDetail;
 }
 
 // Type for Highlight data coming from the backend
 export interface HighlightItem {
   id: number;
-  release: ReleaseDetail; // Backend nests the full ReleaseDetail
+  release: ReleaseDetail;
   highlighted_at: string;
   is_active: boolean;
   order: number;
@@ -189,15 +192,14 @@ export type ReplyMessagePayload = Pick<
 
 export interface OrderItemDetail {
   id: number;
-  product_name: string; // Corrected, was product: ProductSummaryForCart
+  product_name: string;
   quantity: number;
   price_at_purchase: string;
-  // item_total: string; // This is a property on backend OrderItem, serializer may or may not include it
 }
 
 export interface OrderDetail {
   id: number;
-  user: string; // username
+  user: string;
   email: string | null;
   status: string;
   status_display: string;
@@ -221,6 +223,6 @@ export interface Playlist {
   is_public: boolean;
   created_at: string;
   updated_at: string;
-  artist?: ArtistInfo; // Added for playlist cards that might show artist if it's an "artist playlist" type
+  artist?: ArtistInfo;
 }
 // --- END PLAYLIST TYPES ---

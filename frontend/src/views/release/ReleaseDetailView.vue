@@ -5,27 +5,26 @@ import axios from "axios";
 import { usePlayerStore } from "@/stores/player";
 import { useAuthStore } from "@/stores/auth";
 import { useLibraryStore } from "@/stores/library";
-import { useCartStore } from "@/stores/cart"; // Import cart store
+import { useCartStore } from "@/stores/cart";
 import type { ReleaseDetail, TrackInfoFromApi, PlayerTrackInfo } from "@/types";
-import BuyModal from "@/components/shop/BuyModal.vue"; // Updated import path
+import BuyModal from "@/components/shop/BuyModal.vue";
 
 const playerStore = usePlayerStore();
 const authStore = useAuthStore();
 const libraryStore = useLibraryStore();
-const cartStore = useCartStore(); // Initialize cart store
+const cartStore = useCartStore();
 const router = useRouter();
 const route = useRoute();
 const release = ref<ReleaseDetail | null>(null);
 const props = defineProps<{ id: string | string[] }>();
 const isLoading = ref(true);
 const error = ref<string | null>(null);
-// Removed nypAmount ref, it's now managed inside BuyModal
 
-const isAddingToLibrary = ref(false); // For FREE items
+const isAddingToLibrary = ref(false);
 const addToLibraryError = ref<string | null>(null);
 
-const showBuyModal = ref(false); // To control modal visibility
-const modalError = ref<string | null>(null); // Error specific to modal operations
+const showBuyModal = ref(false);
+const modalError = ref<string | null>(null);
 
 const isOwner = computed(() => {
   if (!authStore.isLoggedIn || !release.value || !authStore.authUser) {
@@ -65,7 +64,6 @@ const formattedPrice = computed(() => {
   return "";
 });
 
-// This is now primarily for display on ReleaseDetailView, modal has its own logic
 const formattedMinNypPriceDisplay = computed(() => {
   if (
     release.value?.pricing_model === "NYP" &&
@@ -92,7 +90,7 @@ const fetchReleaseDetail = async (id: string | string[]) => {
   }
   isLoading.value = true;
   error.value = null;
-  addToLibraryError.value = null; // Clear previous specific errors
+  addToLibraryError.value = null;
   modalError.value = null;
   release.value = null;
 
@@ -102,11 +100,9 @@ const fetchReleaseDetail = async (id: string | string[]) => {
 
     if (authStore.isLoggedIn) {
       if (libraryStore.libraryItems.length === 0) {
-        // Fetch library if not already loaded
         await libraryStore.fetchLibraryItems();
       }
       if (!cartStore.cart) {
-        // Fetch cart if not already loaded
         await cartStore.fetchCart();
       }
     }
@@ -180,7 +176,6 @@ const goToEditRelease = () => {
   }
 };
 
-// For FREE items or Owner adding to library
 const handleAddFreeItemToLibrary = async () => {
   if (!release.value) return;
   if (!authStore.isLoggedIn) {
@@ -193,10 +188,7 @@ const handleAddFreeItemToLibrary = async () => {
   addToLibraryError.value = null;
   modalError.value = null;
 
-  const success = await libraryStore.addItemToLibrary(
-    release.value.id,
-    "FREE" // Or determine acquisition type based on ownership too if backend logic varies
-  );
+  const success = await libraryStore.addItemToLibrary(release.value.id, "FREE");
   if (success) {
     alert(`${release.value.title} has been added to your library!`);
   } else {
@@ -217,21 +209,18 @@ const openBuyModal = () => {
     (release.value.pricing_model === "PAID" ||
       release.value.pricing_model === "NYP")
   ) {
-    modalError.value = null; // Clear previous modal errors
+    modalError.value = null;
     showBuyModal.value = true;
   }
 };
 
 const handleModalItemAdded = () => {
-  // Item was successfully added to cart (or checkout initiated) via modal
   alert(
     `${release.value?.title} processed successfully! Check your cart or library.`
   );
-  // Re-fetch library to update "In Your Library" status if checkout adds to library immediately
-  // Or if adding to cart should reflect (e.g. disable "Buy" button)
   if (authStore.isLoggedIn) {
     libraryStore.fetchLibraryItems();
-    cartStore.fetchCart(); // Refresh cart state
+    cartStore.fetchCart();
   }
 };
 
@@ -302,12 +291,19 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
             <span v-if="!release.is_published" class="draft-badge">
               (Draft)</span
             >
+            <span
+              v-if="
+                release.listen_count !== undefined && release.listen_count > 0
+              "
+              class="listen-count-meta"
+            >
+              • {{ release.listen_count.toLocaleString() }} plays
+            </span>
           </p>
           <p v-if="release.description" class="description">
             {{ release.description }}
           </p>
 
-          <!-- Acquisition Section -->
           <div class="shop-actions">
             <div class="pricing-info">
               <span v-if="release.pricing_model === 'PAID'" class="price-tag">{{
@@ -325,7 +321,6 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
               >
             </div>
 
-            <!-- Buttons: "Buy", "Add to Library", or status messages -->
             <div v-if="isOwner" class="in-library-message owned-message">
               ✓ This is your release.
             </div>
@@ -456,6 +451,12 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
             </button>
             <span class="track-number">{{ track.track_number || "-" }}.</span>
             <span class="track-title">{{ track.title }}</span>
+            <span
+              v-if="track.listen_count !== undefined && track.listen_count > 0"
+              class="track-listen-count"
+            >
+              ({{ track.listen_count.toLocaleString() }} plays)
+            </span>
             <span class="track-duration">{{
               formatDuration(track.duration_in_seconds)
             }}</span>
@@ -533,6 +534,10 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   color: var(--color-text);
   margin-bottom: 1rem;
 }
+.listen-count-meta {
+  font-style: italic;
+  color: var(--color-text-light);
+}
 .draft-badge {
   color: orange;
   font-weight: bold;
@@ -567,7 +572,7 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 }
 .price-tag.nyp-label {
   color: var(--color-heading);
-  font-size: 1.1em; /* Slightly smaller for NYP label */
+  font-size: 1.1em;
 }
 .price-tag.free-label {
   color: #34a853;
@@ -727,6 +732,12 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 }
 .track-title {
   flex-grow: 1;
+}
+.track-listen-count {
+  font-size: 0.8em;
+  color: var(--color-text-light);
+  margin-left: 0.5em;
+  font-style: italic;
 }
 .track-duration {
   color: var(--color-text-light);

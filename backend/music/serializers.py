@@ -1,7 +1,25 @@
 from rest_framework import serializers
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload 
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent # Added ListenEvent
 from rest_framework.reverse import reverse
 from decimal import Decimal
+from django.utils.dateparse import parse_datetime # For parsing ISO datetime string
+
+# +++ NEW SERIALIZER +++
+class ListenSegmentLogSerializer(serializers.Serializer):
+    segment_start_timestamp_utc = serializers.DateTimeField(
+        help_text="ISO 8601 UTC timestamp when the unmuted segment started playing."
+    )
+    segment_duration_ms = serializers.IntegerField(
+        min_value=0, 
+        help_text="Duration of the unmuted segment in milliseconds."
+    )
+
+    def validate_segment_start_timestamp_utc(self, value):
+        # Ensure it's a valid datetime. DRF DateTimeField usually handles this.
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            raise serializers.ValidationError("Timestamp must be timezone-aware (UTC).")
+        return value
+# +++ END NEW SERIALIZER +++
 
 
 class GenreSerializer(serializers.ModelSerializer):
@@ -21,13 +39,9 @@ class ArtistSerializer(serializers.ModelSerializer):
 class TrackSerializer(serializers.ModelSerializer):
     release_title = serializers.CharField(source='release.title', read_only=True)
     artist_name = serializers.CharField(source='release.artist.name', read_only=True)
-    # Add release_cover_art
     release_cover_art = serializers.ImageField(source='release.cover_art', read_only=True, allow_null=True)
-    # Add release_id for context
     release_id = serializers.IntegerField(source='release.id', read_only=True)
     artist_id = serializers.IntegerField(source='release.artist.id', read_only=True)
-
-
     genres_data = GenreSerializer(source='genres', many=True, read_only=True) 
     genre_names = serializers.ListField(
         child=serializers.CharField(max_length=100, allow_blank=False),
@@ -35,6 +49,7 @@ class TrackSerializer(serializers.ModelSerializer):
         required=False 
     )
     stream_url = serializers.SerializerMethodField() 
+    listen_count = serializers.IntegerField(read_only=True) # Added listen_count
 
     class Meta:
         model = Track
@@ -48,24 +63,23 @@ class TrackSerializer(serializers.ModelSerializer):
             'sample_rate',
             'channels',
             'is_lossless',
-            'release',  # Keep the original release FK for writing if needed elsewhere
-            'release_id', # Added
-            'artist_id', # Added
+            'release', 
+            'release_id', 
+            'artist_id', 
             'release_title', 
             'artist_name',
-            'release_cover_art', # Added
+            'release_cover_art', 
             'genres_data', 
             'genre_names', 
+            'listen_count', # Added listen_count
             'created_at'
         ]
         read_only_fields = [
             'release_id', 'artist_id', 'release_title', 'artist_name', 'release_cover_art', 
             'duration_in_seconds', 'codec_name', 'bit_rate', 'sample_rate', 
-            'channels', 'is_lossless', 'genres_data', 'stream_url'
+            'channels', 'is_lossless', 'genres_data', 'stream_url', 
+            'listen_count' # Added listen_count
         ]
-        # 'release' field itself is now mainly for create/update operations if tracks are not managed via nested routes.
-        # If tracks are always created/updated in context of a release (e.g. inlines in ReleaseAdmin or nested serializer),
-        # the 'release' field for write might be less critical here directly.
 
     def get_stream_url(self, obj: Track) -> str | None:
         request = self.context.get('request')
@@ -122,6 +136,7 @@ class ReleaseSerializer(serializers.ModelSerializer):
     available_download_formats = serializers.SerializerMethodField()
     
     product_info_id = serializers.IntegerField(source='product_info.id', read_only=True, allow_null=True)
+    listen_count = serializers.IntegerField(read_only=True) # Added listen_count
 
     class Meta:
         model = Release
@@ -141,12 +156,13 @@ class ReleaseSerializer(serializers.ModelSerializer):
             'currency', 
             'minimum_price_nyp',
             'available_download_formats',
+            'listen_count', # Added listen_count
             'created_at', 'updated_at'
         ]
         read_only_fields = [
             'is_visible', 'release_type_display', 'genres_data', 'artist', 
             'pricing_model_display', 'available_download_formats',
-            'product_info_id' 
+            'product_info_id', 'listen_count' # Added listen_count
         ]
 
     def get_available_download_formats(self, obj: Release):

@@ -148,6 +148,9 @@ class Release(models.Model):
         default=Decimal('0.00'), 
         help_text="Minimum price for 'Name Your Price' model. Can be 0."
     )
+    
+    listen_count = models.PositiveIntegerField(default=0, help_text="Aggregated significant listens for this release.")
+
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -200,6 +203,8 @@ class Track(models.Model):
     channels = models.PositiveSmallIntegerField(null=True, blank=True, help_text="Number of audio channels (e.g., 1 for mono, 2 for stereo)")
     is_lossless = models.BooleanField(null=True, blank=True, help_text="True if the original uploaded format is lossless")
     
+    listen_count = models.PositiveIntegerField(default=0, help_text="Aggregated significant listens for this track.")
+
     created_at = models.DateTimeField(auto_now_add=True)
     _original_audio_file_name_on_load = None
 
@@ -464,49 +469,73 @@ class GeneratedDownload(models.Model):
             models.Index(fields=['status', 'expires_at']),
         ]
 
-# +++ NEW MODEL +++
 class ListenEvent(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL, # Or CASCADE if you want to delete listens when user is deleted
-        null=True, # Allow anonymous listens
+        on_delete=models.SET_NULL,
+        null=True,
         blank=True,
-        related_name='listen_events'
+        related_name='listen_events',
+        db_index=True
     )
     track = models.ForeignKey(
         Track,
-        on_delete=models.CASCADE, # If a track is deleted, its listen events are deleted
-        related_name='listen_events'
+        on_delete=models.CASCADE,
+        related_name='listen_events',
+        db_index=True
     )
     release = models.ForeignKey(
         Release,
-        on_delete=models.CASCADE, # If a release is deleted, its listen events are deleted
+        on_delete=models.CASCADE,
         related_name='listen_events',
-        null=True # Should be populated, but allow null temporarily if track.release isn't set on save
+        null=True, # Auto-populated in save
+        db_index=True
     )
-    listened_at = models.DateTimeField(auto_now_add=True)
-    # Optional: for more granular tracking
-    # session_id = models.CharField(max_length=255, null=True, blank=True, db_index=True, help_text="For anonymous or session-based tracking")
-    # listen_duration_ms = models.PositiveIntegerField(null=True, blank=True, help_text="How long the track was played in milliseconds")
+    # Timestamp from frontend for when this specific segment started
+    listen_start_timestamp_utc = models.DateTimeField(
+        help_text="UTC timestamp when this unmuted listening segment started."
+    )
+    # Duration from frontend for this specific segment
+    reported_listen_duration_ms = models.PositiveIntegerField(
+        help_text="Duration of this unmuted listening segment in milliseconds, reported by client."
+    )
+    # Timestamp of when this record was created in the DB
+    listened_at = models.DateTimeField(
+        auto_now_add=True, 
+        help_text="Timestamp when this event was logged by the backend."
+    )
+    is_significant = models.BooleanField(
+        default=False, 
+        db_index=True,
+        help_text="True if this listen event meets the criteria for a significant listen."
+    )
+    is_processed_for_totals = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Helper flag for batch aggregation tasks, if implemented."
+    )
 
     class Meta:
         ordering = ['-listened_at']
         indexes = [
-            models.Index(fields=['track', 'listened_at']),
-            models.Index(fields=['release', 'listened_at']),
-            models.Index(fields=['user', 'listened_at']),
+            # Removed redundant indexes from previous thought process,
+            # db_index=True on individual fields is often sufficient for simple lookups.
+            # Composite indexes can be added later if query patterns demand it.
+            models.Index(fields=['track', 'is_significant', 'listened_at']),
+            models.Index(fields=['release', 'is_significant', 'listened_at']),
+            models.Index(fields=['user', 'is_significant', 'listened_at']),
         ]
 
     def __str__(self):
         user_display = self.user.username if self.user else "Anonymous"
-        return f"Track '{self.track.title}' listened to by {user_display} at {self.listened_at.strftime('%Y-%m-%d %H:%M')}"
+        significance = "Significant" if self.is_significant else "Partial"
+        return f"{significance} listen for '{self.track.title}' by {user_display} at {self.listened_at.strftime('%Y-%m-%d %H:%M')}"
 
     def save(self, *args, **kwargs):
         if self.track and not self.release: # Auto-populate release from track
             self.release = self.track.release
+        # The calculation for `is_significant` will be done in the view that creates this event.
         super().save(*args, **kwargs)
-# +++ END NEW MODEL +++
-
 
 # --- Signal Receivers ---
 @receiver(pre_save, sender=Artist)

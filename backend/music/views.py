@@ -2,11 +2,12 @@ from django.shortcuts import render, get_object_or_404
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload
+from .models import Genre, Artist, Release, Track, Comment, Highlight, GeneratedDownload, ListenEvent # Added ListenEvent
 from .serializers import (
     GenreSerializer, ArtistSerializer, ReleaseSerializer,
     TrackSerializer, CommentSerializer, HighlightSerializer,
-    GeneratedDownloadRequestSerializer, GeneratedDownloadStatusSerializer
+    GeneratedDownloadRequestSerializer, GeneratedDownloadStatusSerializer,
+    ListenSegmentLogSerializer # Added ListenSegmentLogSerializer
 )
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAdminUser, IsAuthenticated
 from music.permissions import IsOwnerOrReadOnly, CanViewTrack, CanEditTrack
@@ -16,15 +17,15 @@ from django.http import FileResponse, Http404, HttpResponseForbidden
 import os
 import mimetypes 
 from django.db import models as django_models
-from rest_framework.decorators import action, api_view, permission_classes as drf_permission_classes # Import api_view and permission_classes
-from rest_framework.permissions import IsAuthenticated as DRFIsAuthenticated # Import DRF's IsAuthenticated
+from django.db.models import F # For atomic updates
+from rest_framework.decorators import action, api_view, permission_classes as drf_permission_classes 
+from rest_framework.permissions import IsAuthenticated as DRFIsAuthenticated 
 import logging
 
 from .tasks import generate_release_download_zip
 
 logger = logging.getLogger(__name__)
 
-# ... (all your ViewSets remain the same) ...
 
 class GenreViewSet(viewsets.ModelViewSet):
     queryset = Genre.objects.all().order_by('name')
@@ -71,14 +72,13 @@ class ReleaseViewSet(viewsets.ModelViewSet):
         except Artist.DoesNotExist:
             raise PermissionDenied("You must have an artist profile to create releases.")
 
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated]) # DRF IsAuthenticated
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated]) 
     def request_download(self, request, pk=None):
         release = self.get_object() 
 
         can_download = False
         if release.pricing_model == Release.PricingModel.FREE:
             can_download = True
-        # Ensure release.artist.user exists before accessing user_id
         elif request.user.is_authenticated and hasattr(release.artist, 'user') and release.artist.user and release.artist.user.id == request.user.id: 
             can_download = True
         
@@ -86,10 +86,16 @@ class ReleaseViewSet(viewsets.ModelViewSet):
             if release.pricing_model in [Release.PricingModel.PAID, Release.PricingModel.NAME_YOUR_PRICE]:
                 if not request.user.is_authenticated: 
                      return Response({"detail": "Authentication required to download priced items."}, status=status.HTTP_401_UNAUTHORIZED)
-                # TODO: Actual purchase check logic here
-                pass 
+                # TODO: Actual purchase check logic here (e.g., check UserLibraryItem)
+                from library.models import UserLibraryItem # Local import
+                if not UserLibraryItem.objects.filter(user=request.user, release=release).exists():
+                     return Response({"detail": "You must own this release to download it."}, status=status.HTTP_403_FORBIDDEN)
+                can_download = True # If owned, can download
             else: 
                 return Response({"detail": "You do not have permission to download this release."}, status=status.HTTP_403_FORBIDDEN)
+        
+        if not can_download: # Final check after all logic
+             return Response({"detail": "Download conditions not met."}, status=status.HTTP_403_FORBIDDEN)
 
 
         request_serializer = GeneratedDownloadRequestSerializer(data=request.data)
@@ -131,7 +137,9 @@ class TrackViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             permission_classes = [permissions.IsAuthenticatedOrReadOnly]
         elif self.action == 'create':
-            permission_classes = [permissions.IsAuthenticated] 
+            permission_classes = [permissions.IsAuthenticated]
+        elif self.action == 'log_listen_segment': # New action permission
+            permission_classes = [permissions.AllowAny] # Or IsAuthenticated if only logged-in users can log listens
         else: 
             permission_classes = [permissions.IsAuthenticatedOrReadOnly, CanViewTrack, CanEditTrack]
         return [permission() for permission in permission_classes]
@@ -159,6 +167,52 @@ class TrackViewSet(viewsets.ModelViewSet):
                 return qs.filter(release__is_published=True, release__release_date__lte=timezone.now()).distinct()
         return qs 
 
+    # +++ NEW ACTION +++
+    @action(detail=True, methods=['post'], serializer_class=ListenSegmentLogSerializer)
+    def log_listen_segment(self, request, pk=None):
+        track = self.get_object()
+        serializer = ListenSegmentLogSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        segment_start_timestamp_utc = data['segment_start_timestamp_utc']
+        segment_duration_ms = data['segment_duration_ms']
+        
+        is_significant = False
+        if track.duration_in_seconds:
+            if track.duration_in_seconds >= 30:
+                if segment_duration_ms >= 30000:
+                    is_significant = True
+            else: # Track is less than 30 seconds
+                if segment_duration_ms >= (track.duration_in_seconds * 1000 * 0.9):
+                    is_significant = True
+        
+        # Determine user for the ListenEvent
+        user_to_log = None
+        if request.user.is_authenticated:
+            user_to_log = request.user
+
+        ListenEvent.objects.create(
+            user=user_to_log,
+            track=track,
+            release=track.release, # Auto-populated from track
+            listen_start_timestamp_utc=segment_start_timestamp_utc,
+            reported_listen_duration_ms=segment_duration_ms,
+            is_significant=is_significant
+        )
+
+        if is_significant:
+            # Atomically increment listen counts
+            Track.objects.filter(pk=track.pk).update(listen_count=F('listen_count') + 1)
+            Release.objects.filter(pk=track.release.pk).update(listen_count=F('listen_count') + 1)
+            logger.info(f"Significant listen logged for track ID {track.id}. Counts updated.")
+        else:
+            logger.info(f"Partial (non-significant) listen segment logged for track ID {track.id}.")
+            
+        return Response({'status': 'listen segment logged', 'significant': is_significant}, status=status.HTTP_201_CREATED)
+    # +++ END NEW ACTION +++
+
 
 class CommentViewSet(viewsets.ModelViewSet):
     queryset = Comment.objects.all()
@@ -177,7 +231,6 @@ class HighlightViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 def stream_track_audio(request, track_id):
-    # Using print for debug here as logger might not be configured for console output by default
     print(f"--- stream_track_audio for track_id: {track_id} ---") 
     http_range = request.META.get('HTTP_RANGE')
     print(f"DEBUG: HTTP_RANGE header received: {http_range}") 
@@ -240,20 +293,15 @@ def stream_track_audio(request, track_id):
 
 class GeneratedDownloadStatusViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = GeneratedDownloadStatusSerializer
-    permission_classes = [IsAuthenticated] # DRF IsAuthenticated
+    permission_classes = [IsAuthenticated] 
 
     def get_queryset(self):
         return GeneratedDownload.objects.filter(user=self.request.user).select_related('release')
     
 
-# --- View for serving the actual generated download file ---
-@api_view(['GET']) # Use DRF's api_view decorator
-@drf_permission_classes([DRFIsAuthenticated]) # Apply DRF's IsAuthenticated permission
+@api_view(['GET']) 
+@drf_permission_classes([DRFIsAuthenticated]) 
 def serve_generated_download_file(request, download_uuid):
-    # request.user is now populated by DRF's authentication classes (JWTAuthentication primarily)
-    
-    # Removed: if not request.user.is_authenticated: ... (handled by @drf_permission_classes)
-
     logger.info(f"serve_generated_download_file: User {request.user.username} (ID: {request.user.id}) attempting to download UUID {download_uuid}")
 
     try:
@@ -263,7 +311,6 @@ def serve_generated_download_file(request, download_uuid):
         if download_request.user_id != request.user.id:
             logger.warning(f"serve_generated_download_file: User {request.user.username} (ID: {request.user.id}) "
                            f"attempted to access download UUID {download_uuid} belonging to user ID {download_request.user_id}. Forbidden.")
-            # For DRF views, returning a Response is standard
             return Response({"detail": "Download link not found or invalid (permission denied)."}, status=status.HTTP_403_FORBIDDEN)
 
     except GeneratedDownload.DoesNotExist:
@@ -280,7 +327,7 @@ def serve_generated_download_file(request, download_uuid):
         logger.info(f"serve_generated_download_file: Download ID {download_request.id} has expired (expires_at: {download_request.expires_at}).")
         download_request.status = GeneratedDownload.StatusChoices.EXPIRED
         download_request.save(update_fields=['status'])
-        return Response({"detail": "This download link has expired."}, status=status.HTTP_410_GONE) # 410 Gone is appropriate
+        return Response({"detail": "This download link has expired."}, status=status.HTTP_410_GONE) 
 
     if not download_request.download_file or not download_request.download_file.name:
         logger.error(f"serve_generated_download_file: No file associated with Download ID {download_request.id}.")
@@ -295,10 +342,7 @@ def serve_generated_download_file(request, download_uuid):
 
     try:
         logger.info(f"serve_generated_download_file: Serving file {download_request.download_file.name} for Download ID {download_request.id}.")
-        # FileResponse is fine here, DRF handles wrapping it.
         response = FileResponse(download_request.download_file.open('rb'), as_attachment=True)
-        # Content-Type for ZIP is usually set automatically by FileResponse based on filename or can be explicit.
-        # response['Content-Type'] = 'application/zip' 
         return response
     except FileNotFoundError: 
         logger.error(f"FileNotFound (physical file) for GeneratedDownload ID {download_request.id} at {getattr(download_request.download_file, 'path', 'N/A')}")
