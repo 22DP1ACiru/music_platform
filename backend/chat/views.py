@@ -10,7 +10,7 @@ import mimetypes
 import logging 
 
 from .models import Conversation, Message 
-from music.models import Artist 
+from music.models import Artist, Track # Import Track
 from .serializers import (
     ConversationSerializer, MessageSerializer, CreateMessageSerializer
 )
@@ -71,7 +71,8 @@ class ConversationViewSet(viewsets.ModelViewSet):
             'participants__artist_profile',          
             'messages__sender_user__profile',        
             'messages__sender_user__artist_profile', 
-            'messages__sending_artist'               
+            'messages__sending_artist',
+            'messages__shared_track__release__artist' # For shared track details
         ).annotate(
             last_message_time=Max('messages__timestamp')
         ).order_by('-last_message_time', '-updated_at')
@@ -89,17 +90,15 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
         validated_data = create_serializer.validated_data
         
-        # Current action's sender details
         current_sender_user = request.user
         current_sender_identity_type = validated_data.get('initiator_identity_type', Conversation.IdentityType.USER)
         current_sender_artist_profile = validated_data.get('initiator_artist_profile_instance', None)
 
-        # Current action's recipient details
         recipient_user_id = validated_data.get('recipient_user_id')
         recipient_artist_id = validated_data.get('recipient_artist_id')
         
-        actual_recipient_user_model = None # The User model instance of the other party
-        targeted_recipient_artist_profile = None # If recipient is an Artist profile, this is it
+        actual_recipient_user_model = None 
+        targeted_recipient_artist_profile = None
         
         if recipient_user_id:
             try: actual_recipient_user_model = User.objects.get(id=recipient_user_id)
@@ -112,28 +111,20 @@ class ConversationViewSet(viewsets.ModelViewSet):
             except User.DoesNotExist: return Response({"error": "Artist owner user not found."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         else: return Response({"error": "No recipient specified."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # --- Self-messaging Validations ---
-        if current_sender_user == actual_recipient_user_model: # Both underlying users are the same
+        if current_sender_user == actual_recipient_user_model: 
             is_sender_user_identity = current_sender_identity_type == Conversation.IdentityType.USER
             is_sender_artist_identity = current_sender_identity_type == Conversation.IdentityType.ARTIST
             is_recipient_artist_target = targeted_recipient_artist_profile is not None
 
-            if is_sender_user_identity and not is_recipient_artist_target: # User to Self User
+            if is_sender_user_identity and not is_recipient_artist_target: 
                 return Response({"error": "You cannot send a message to yourself as a user."}, status=status.HTTP_400_BAD_REQUEST)
-            if is_sender_user_identity and is_recipient_artist_target and targeted_recipient_artist_profile.user == current_sender_user: # User to Own Artist
+            if is_sender_user_identity and is_recipient_artist_target and targeted_recipient_artist_profile.user == current_sender_user: 
                 return Response({"error": "You cannot send a message from your user account to your own artist profile."}, status=status.HTTP_400_BAD_REQUEST)
-            if is_sender_artist_identity and current_sender_artist_profile and not is_recipient_artist_target: # Artist to Own User
+            if is_sender_artist_identity and current_sender_artist_profile and not is_recipient_artist_target: 
                 return Response({"error": "You cannot send a message from your artist profile to your own user account."}, status=status.HTTP_400_BAD_REQUEST)
-            if is_sender_artist_identity and current_sender_artist_profile and is_recipient_artist_target and current_sender_artist_profile == targeted_recipient_artist_profile: # Artist to Self Artist
+            if is_sender_artist_identity and current_sender_artist_profile and is_recipient_artist_target and current_sender_artist_profile == targeted_recipient_artist_profile: 
                 return Response({"error": "An artist profile cannot send a message to itself."}, status=status.HTTP_400_BAD_REQUEST)
         
-        # --- Find Existing Conversation ---
-        # A conversation is uniquely defined by the two Users involved and the "channel type"
-        # Channel type is determined by:
-        #   - Who initiated AS what identity (User or specific Artist)
-        #   - Who was targeted AS what identity (User or specific Artist)
-
-        # First, get all conversations involving *exactly* these two users
         conversations_between_users = Conversation.objects.annotate(
             p_count=Count('participants')
         ).filter(
@@ -145,7 +136,6 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
         found_conversation = None
         for conv_candidate in conversations_between_users:
-            # Case A: current_sender initiated this candidate conv, check if identities match
             if conv_candidate.initiator_user == current_sender_user and \
                conv_candidate.initiator_identity_type == current_sender_identity_type and \
                conv_candidate.initiator_artist_profile == current_sender_artist_profile and \
@@ -153,21 +143,13 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 found_conversation = conv_candidate
                 break
             
-            # Case B: actual_recipient_user_model initiated this candidate conv.
-            # Check if the candidate's initiation matches the *inverse* of the current send attempt.
-            #   - candidate's initiator_user must be actual_recipient_user_model
-            #   - candidate's initiator_identity_type must match how actual_recipient_user_model is being targeted now
-            #   - candidate's initiator_artist_profile must match targeted_recipient_artist_profile (if any)
-            #   - candidate's related_artist_recipient must match current_sender_artist_profile (if any)
-            
-            # Determine the identity of the actual_recipient_user_model if they were the initiator
             recipient_as_initiator_identity_type = Conversation.IdentityType.ARTIST if targeted_recipient_artist_profile else Conversation.IdentityType.USER
-            recipient_as_initiator_artist_profile = targeted_recipient_artist_profile # This is their artist profile if they are an artist target
+            recipient_as_initiator_artist_profile = targeted_recipient_artist_profile 
 
             if conv_candidate.initiator_user == actual_recipient_user_model and \
                conv_candidate.initiator_identity_type == recipient_as_initiator_identity_type and \
                conv_candidate.initiator_artist_profile == recipient_as_initiator_artist_profile and \
-               conv_candidate.related_artist_recipient == current_sender_artist_profile: # Target was current sender's artist (if any)
+               conv_candidate.related_artist_recipient == current_sender_artist_profile: 
                 found_conversation = conv_candidate
                 break
         
@@ -186,6 +168,27 @@ class ConversationViewSet(viewsets.ModelViewSet):
         else:
             logger.info(f"FOUND Existing Conversation (ID: {found_conversation.id})")
 
+        shared_track_instance = None
+        if validated_data.get('shared_track_id'):
+            try:
+                # Permission for sharing draft tracks:
+                # If the track's release artist is the current_sender_user, allow sharing even if draft.
+                # Otherwise, track must be part of a published release.
+                track_to_share = Track.objects.select_related('release__artist__user').get(pk=validated_data['shared_track_id'])
+                can_share_track = False
+                if track_to_share.release.is_visible(): # Publicly visible releases
+                    can_share_track = True
+                elif track_to_share.release.artist.user == current_sender_user: # Sender owns the track's release
+                    can_share_track = True
+                
+                if can_share_track:
+                    shared_track_instance = track_to_share
+                else:
+                    return Response({"shared_track_id": "This track cannot be shared at this time (e.g., it's a draft by another artist)."}, status=status.HTTP_400_BAD_REQUEST)
+            except Track.DoesNotExist:
+                return Response({"shared_track_id": "Track to share not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+
         new_message = Message( 
             conversation=found_conversation,
             sender_user=current_sender_user,
@@ -194,6 +197,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             text=validated_data.get('text'),
             attachment=validated_data.get('attachment'),
             message_type=validated_data.get('message_type', Message.MessageType.TEXT),
+            shared_track=shared_track_instance # Assign shared track
         )
         new_message.save()
         
@@ -229,7 +233,25 @@ class ConversationViewSet(viewsets.ModelViewSet):
             'text': request.data.get('text'),
             'attachment': request.data.get('attachment'), 
             'message_type': request.data.get('message_type', Message.MessageType.TEXT),
+            'shared_track': request.data.get('shared_track_id') # Get shared_track_id for reply
         }
+
+        shared_track_instance_reply = None
+        if message_data_for_serializer['shared_track']:
+            try:
+                track_to_share = Track.objects.select_related('release__artist__user').get(pk=message_data_for_serializer['shared_track'])
+                can_share_track = False
+                if track_to_share.release.is_visible():
+                    can_share_track = True
+                elif track_to_share.release.artist.user == requesting_user:
+                    can_share_track = True
+                
+                if can_share_track:
+                    shared_track_instance_reply = track_to_share
+                else:
+                     return Response({"shared_track_id": "This track cannot be shared (reply)."}, status=status.HTTP_400_BAD_REQUEST)
+            except Track.DoesNotExist:
+                return Response({"shared_track_id": "Track to share not found (reply)."}, status=status.HTTP_400_BAD_REQUEST)
         
         message_serializer_context = {'request': request} 
         message_serializer = MessageSerializer(data=message_data_for_serializer, context=message_serializer_context)
@@ -239,7 +261,8 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 sender_user=requesting_user, 
                 conversation=conversation,
                 sender_identity_type=message_sender_identity_type, 
-                sending_artist=message_sending_artist_instance     
+                sending_artist=message_sending_artist_instance,
+                shared_track=shared_track_instance_reply # Pass validated shared_track instance
             )
             conv_serializer = ConversationSerializer(conversation, context={'request': request})
             return Response(conv_serializer.data, status=status.HTTP_201_CREATED)
@@ -248,7 +271,11 @@ class ConversationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='messages')
     def list_messages(self, request, pk=None):
         conversation = self.get_object() 
-        messages = conversation.messages.select_related('sender_user', 'sending_artist').all().order_by('timestamp')
+        messages = conversation.messages.select_related(
+            'sender_user', 
+            'sending_artist', 
+            'shared_track__release__artist' # Prefetch for shared track details
+        ).all().order_by('timestamp')
         
         can_mark_read = False
         if conversation.is_accepted:

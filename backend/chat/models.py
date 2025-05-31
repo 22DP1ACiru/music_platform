@@ -118,10 +118,9 @@ class Message(models.Model):
     class MessageType(models.TextChoices):
         TEXT = 'TEXT', 'Text'
         AUDIO = 'AUDIO', 'Audio Attachment'
-        VOICE = 'VOICE', 'Voice Message'
-        TRACK_SHARE = 'TRACK_SHARE', 'Track Share'
+        VOICE = 'VOICE', 'Voice Message' # New
+        TRACK_SHARE = 'TRACK_SHARE', 'Track Share' # New
 
-    # No change to Message.SenderIdentity needed here, it's fine
     class SenderIdentity(models.TextChoices): 
         USER = 'USER', 'User'
         ARTIST = 'ARTIST', 'Artist'
@@ -139,7 +138,6 @@ class Message(models.Model):
     sender_identity_type = models.CharField(
         max_length=10,
         choices=SenderIdentity.choices,
-        # Default determined by conversation context in save method or view
         help_text="The identity (User or Artist) used by the sender for this message."
     )
     sending_artist = models.ForeignKey(
@@ -153,10 +151,18 @@ class Message(models.Model):
     text = models.TextField(blank=True, null=True)
     attachment = models.FileField(upload_to=chat_attachment_path, blank=True, null=True)
     original_attachment_filename = models.CharField(max_length=255, blank=True, null=True)
+    
     message_type = models.CharField(
         max_length=20,
         choices=MessageType.choices,
         default=MessageType.TEXT
+    )
+    shared_track = models.ForeignKey( # New field for track sharing
+        'music.Track',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='chat_shares',
+        help_text="The track shared in this message, if any."
     )
     
     timestamp = models.DateTimeField(auto_now_add=True)
@@ -176,7 +182,6 @@ class Message(models.Model):
 
     def clean(self): 
         super().clean()
-        # These validations are now more critical as identity is derived
         if self.sender_identity_type == self.SenderIdentity.ARTIST and not self.sending_artist:
             raise ValidationError("If sender_identity_type is ARTIST, sending_artist must be set.")
         if self.sender_identity_type == self.SenderIdentity.ARTIST and self.sending_artist:
@@ -184,26 +189,23 @@ class Message(models.Model):
                 raise ValidationError("Sending artist must belong to the sender user.")
         if self.sender_identity_type == self.SenderIdentity.USER and self.sending_artist:
             raise ValidationError("Sending_artist should not be set if sender_identity_type is USER.")
+        
+        if self.message_type == self.MessageType.TRACK_SHARE and not self.shared_track:
+            raise ValidationError("A track must be specified for 'Track Share' message type.")
+        if self.message_type != self.MessageType.TRACK_SHARE and self.shared_track:
+            raise ValidationError("shared_track should only be set for 'Track Share' message type.")
+        if self.message_type == self.MessageType.TRACK_SHARE and self.attachment:
+            raise ValidationError("Track share messages should not have a direct file attachment.")
+
 
     def save(self, *args, **kwargs):
-        # Determine sender_identity_type and sending_artist based on conversation context
-        # This logic is better placed in the view when the message is created.
-        # The model's save should primarily ensure data integrity if fields are already set.
-        # However, if not set by view, we can try to derive it here.
-        if not self.sender_identity_type: # If not explicitly set by the view
-            if self.conversation.initiator_user == self.sender_user:
-                self.sender_identity_type = self.conversation.initiator_identity_type
-                if self.sender_identity_type == Conversation.IdentityType.ARTIST:
-                    self.sending_artist = self.conversation.initiator_artist_profile
-                else:
-                    self.sending_artist = None
-            else: # Replier is always USER for now
-                self.sender_identity_type = Message.SenderIdentity.USER
-                self.sending_artist = None
-        
-        # Ensure consistency if fields were somehow set directly
         if self.sender_identity_type == Message.SenderIdentity.USER:
             self.sending_artist = None
+        if self.message_type != self.MessageType.TRACK_SHARE:
+            self.shared_track = None
+        if self.message_type == self.MessageType.TRACK_SHARE:
+             self.attachment = None # Ensure no attachment for track shares
+             self.original_attachment_filename = None
 
         self.full_clean()
 
@@ -216,11 +218,17 @@ class Message(models.Model):
                     file_changed = True
             except Message.DoesNotExist: pass 
         elif self.attachment and self.attachment.name: file_changed = True
+
         if self.attachment and self.attachment.name and (is_new or file_changed):
             if not self.original_attachment_filename or file_changed : 
                 self.original_attachment_filename = os.path.basename(self.attachment.name)
-        elif not self.attachment and self.original_attachment_filename: self.original_attachment_filename = None
+        elif not self.attachment and self.original_attachment_filename: 
+             # Only clear original_attachment_filename if there's no attachment *and* it's not a track share
+             if self.message_type != self.MessageType.TRACK_SHARE:
+                self.original_attachment_filename = None
+        
         if not self.sender_user_id: raise ValueError("Message must have a sender_user.")
+        
         if self.message_type == self.MessageType.TEXT and not self.text:
             if not self.attachment: 
                 raise ValueError("Text message cannot be empty if message type is TEXT and no attachment is present.")

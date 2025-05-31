@@ -1,4 +1,3 @@
-# backend/vaultwave/urls.py
 from django.contrib import admin
 from django.urls import path, include 
 from django.conf import settings
@@ -8,12 +7,11 @@ from rest_framework.routers import DefaultRouter
 from users.views import UserViewSet, UserProfileViewSet, RegisterView
 from music.views import (
     GenreViewSet, ArtistViewSet, ReleaseViewSet,
-    TrackViewSet, CommentViewSet, HighlightViewSet, # HighlightViewSet is already imported
+    TrackViewSet, CommentViewSet, HighlightViewSet, 
     stream_track_audio, GeneratedDownloadStatusViewSet
 )
-# Removed: from playlists.views import PlaylistViewSet # Router handles this now
-# from cart.views import CartViewSet 
-# from chat.views import ConversationViewSet 
+from interactions.views import FollowViewSet # New import
+from notifications.views import NotificationViewSet # New import
 
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -32,20 +30,20 @@ router.register(r'artists', ArtistViewSet)
 router.register(r'releases', ReleaseViewSet, basename='release') 
 router.register(r'tracks', TrackViewSet, basename='track') 
 router.register(r'comments', CommentViewSet)
-router.register(r'highlights', HighlightViewSet, basename='highlight') # Added basename='highlight'
-
-# router.register(r'playlists', PlaylistViewSet, basename='playlist') # Remove this line
+router.register(r'highlights', HighlightViewSet, basename='highlight') 
 
 router.register(r'generated-download-status', GeneratedDownloadStatusViewSet, basename='generated-download-status')
+
+# New routers for interactions and notifications
+router.register(r'interactions', FollowViewSet, basename='interaction-follow') # Base name 'interaction-follow' for clarity
+router.register(r'notifications', NotificationViewSet, basename='notification')
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     
-    # Include router-generated URLs for most apps under /api/
     path('api/', include(router.urls)), 
     
-    # Include app-specific URLs directly
     path('api/playlists/', include('playlists.urls')), 
     path('api/library/', include('library.urls')),
     path('api/cart/', include('cart.urls')),
@@ -53,6 +51,7 @@ urlpatterns = [
     path('api/tracks/<int:track_id>/stream/', stream_track_audio, name='track-stream'),
     
     path('api/chat/', include('chat.urls')), 
+    # interactions and notifications are now part of the main router
 
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')), 
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),

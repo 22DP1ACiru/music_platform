@@ -60,6 +60,8 @@ INSTALLED_APPS = [
     'chat',
     'library',
     'cart',
+    'interactions', # New app
+    'notifications', # New app
     'vaultwave'
 ]
 
@@ -70,7 +72,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware', # This is correct for MIDDLEWARE
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
@@ -93,7 +95,7 @@ TEMPLATES = [
                 'django.template.context_processors.debug',
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+                'django.contrib.messages.context_processors.messages', # <--- CORRECTED PATH
             ],
         },
     },
@@ -159,7 +161,7 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60), # Example: 1 hour
     # How long a refresh token is valid for
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),    # Example: 1 week
-    'ROTATE_REFRESH_TOKENS': True, # Get a new refresh token when refreshing
+    'ROTATE_REFRESH_TOKENS': True, # Corrected from ROTATE_REFRESH_TOKES
     'BLACKLIST_AFTER_ROTATION': True, # Add old refresh token to blacklist
     'UPDATE_LAST_LOGIN': True, # Update user's last_login field on token refresh
 

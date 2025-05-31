@@ -5,6 +5,15 @@ from .models import UserProfile
 from music.models import Artist # Import Artist model for ArtistSummarySerializer
 from django.conf import settings
 
+# --- NEW: BasicUserSerializer ---
+class BasicUserSerializer(serializers.ModelSerializer):
+    """
+    A lightweight serializer for basic user information.
+    """
+    class Meta:
+        model = User
+        fields = ['id', 'username'] # Commonly includes id, username, maybe profile picture URL if simple
+
 # A light-weight serializer for embedding basic artist info.
 # This helps avoid potential circular dependencies if the full ArtistSerializer
 # from music.serializers were to import UserSerializer from this file.

@@ -1,6 +1,6 @@
 # Environment variables
 .env
-.env.*.local # Common pattern for framework-specific local overrides
+.env.*.local
 
 # Python / Django
 __pycache__/
@@ -12,16 +12,16 @@ mediafiles
 
 # Node / Vue / Vite
 node_modules/
-dist/          # Build output directory
+dist/
 .npm
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .pnpm-store/
-coverage/      # Test coverage reports
-.DS_Store      # macOS specific
-Thumbs.db      # Windows specific
+coverage/
+.DS_Store
+Thumbs.db
 
 # IDE / Editor directories
 .vscode/
@@ -32,7 +32,7 @@ Thumbs.db      # Windows specific
 # docker-compose.override.yml # If used for local-only overrides
 
 # Celery
-celerybeat-schedule # Celery Beat schedule file
+celerybeat-schedule
 celerybeat.pid
 
 # Operating System files
