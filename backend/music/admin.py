@@ -76,21 +76,23 @@ class CommentAdmin(admin.ModelAdmin):
 class HighlightAdmin(admin.ModelAdmin):
     list_display = (
         'release_title_admin', 
-        'highlight_title_display', # Renamed method
+        'highlight_title_display', 
         'is_active', 
         'display_start_datetime', 
         'display_end_datetime', 
         'order', 
         'created_by',
-        'created_at'
+        'created_at',
+        'link_url_display' # Added link_url
     )
     list_filter = ('is_active', 'created_by', 'release__artist')
     search_fields = (
         'release__title', 
         'release__artist__name', 
-        'title', # Updated field name
-        'subtitle', # Updated field name
-        'description' # Updated field name
+        'title', 
+        'subtitle', 
+        'description',
+        'link_url' # Added link_url
     )
     autocomplete_fields = ['release', 'created_by']
     readonly_fields = ('created_at', 'updated_at')
@@ -98,8 +100,8 @@ class HighlightAdmin(admin.ModelAdmin):
         (None, {
             'fields': ('release', 'is_active', 'order')
         }),
-        ('Highlight Content (Overrides Release Info)', { # Updated section title
-            'fields': ('title', 'subtitle', 'description', 'custom_carousel_image') # Updated field names
+        ('Highlight Content (Overrides Release Info or for Generic Highlight)', { # Updated section title
+            'fields': ('title', 'subtitle', 'description', 'custom_carousel_image', 'link_url') # Added link_url
         }),
         ('Display Schedule', {
             'fields': ('display_start_datetime', 'display_end_datetime')
@@ -111,19 +113,29 @@ class HighlightAdmin(admin.ModelAdmin):
     )
 
     def release_title_admin(self, obj):
-        return obj.release.title
+        if obj.release:
+            return obj.release.title
+        return "(No Release Linked)" # Or any placeholder you prefer
     release_title_admin.short_description = 'Release'
-    release_title_admin.admin_order_field = 'release__title'
+    release_title_admin.admin_order_field = 'release__title' # This might cause issues if release is None, consider removing or handling carefully
 
-    def highlight_title_display(self,obj): # Renamed method
-        return obj.title or f"(Uses Release Title: {obj.release.title[:30]}...)"
-    highlight_title_display.short_description = "Highlight Title" # Updated description
+    def highlight_title_display(self,obj): 
+        return obj.title or (obj.release.title[:30] + "..." if obj.release else "(Generic Highlight - No Title Override)")
+    highlight_title_display.short_description = "Highlight Title"
 
 
     def save_model(self, request, obj, form, change):
         if not obj.pk: 
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
+
+    def link_url_display(self, obj):
+        if obj.link_url:
+            from django.utils.html import format_html
+            return format_html('<a href="{0}" target="_blank">{0}</a>', obj.link_url)
+        return "N/A"
+    link_url_display.short_description = "Link URL"
+
 
 @admin.register(GeneratedDownload)
 class GeneratedDownloadAdmin(admin.ModelAdmin):

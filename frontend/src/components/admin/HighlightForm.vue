@@ -2,7 +2,7 @@
 import { ref, reactive, onMounted, watch, type PropType, computed } from "vue";
 import axios from "axios";
 import type { HighlightItem, ReleaseSummary } from "@/types";
-import ReleaseSelectorModal from "./ReleaseSelectorModal.vue"; // Import the modal
+import ReleaseSelectorModal from "./ReleaseSelectorModal.vue";
 
 interface PaginatedReleasesResponse {
   count: number;
@@ -19,6 +19,7 @@ interface HighlightFormData {
   description: string;
   custom_carousel_image_file: File | null;
   custom_carousel_image_url: string | null;
+  link_url: string | null; // Added link_url
   is_active: boolean;
   order: number;
   display_start_datetime_str: string;
@@ -42,7 +43,6 @@ const props = defineProps({
 
 const emit = defineEmits(["submit-highlight", "cancel-form"]);
 
-// Function to get current local date and time in YYYY-MM-DDTHH:mm format
 const getCurrentLocalDateTimeString = () => {
   const now = new Date();
   const offset = now.getTimezoneOffset();
@@ -58,9 +58,10 @@ const formState = reactive<HighlightFormData>({
   description: "",
   custom_carousel_image_file: null,
   custom_carousel_image_url: null,
+  link_url: null, // Initialize link_url
   is_active: true,
   order: 0,
-  display_start_datetime_str: getCurrentLocalDateTimeString(), // Default to current local time
+  display_start_datetime_str: getCurrentLocalDateTimeString(),
   display_end_datetime_str: null,
 });
 
@@ -68,12 +69,11 @@ const coverArtPreviewUrl = ref<string | null>(null);
 const removeExistingCoverArt = ref(false);
 
 const isReleaseSelectorVisible = ref(false);
-const selectedReleaseDisplay = ref<string | null>(null); // To show chosen release info
+const selectedReleaseDisplay = ref<string | null>(null);
 
 const formatDateTimeForApi = (dateTimeLocalString: string | null) => {
   if (!dateTimeLocalString) return null;
   try {
-    // Input is local, convert to UTC for API
     return new Date(dateTimeLocalString).toISOString();
   } catch (e) {
     return null;
@@ -83,8 +83,7 @@ const formatDateTimeForApi = (dateTimeLocalString: string | null) => {
 const formatDateTimeForInput = (isoString: string | null | undefined) => {
   if (!isoString) return "";
   try {
-    const date = new Date(isoString); // ISO string is UTC
-    // Convert UTC to local time for the input field
+    const date = new Date(isoString);
     const year = date.getFullYear();
     const month = (date.getMonth() + 1).toString().padStart(2, "0");
     const day = date.getDate().toString().padStart(2, "0");
@@ -96,7 +95,6 @@ const formatDateTimeForInput = (isoString: string | null | undefined) => {
   }
 };
 
-// Fetch the full release details if only an ID is present (e.g., on edit mode load)
 async function fetchSelectedReleaseDetails(releaseId: number | null) {
   if (releaseId) {
     try {
@@ -111,7 +109,7 @@ async function fetchSelectedReleaseDetails(releaseId: number | null) {
       selectedReleaseDisplay.value = `Release ID: ${releaseId} (Details unavailable)`;
     }
   } else {
-    selectedReleaseDisplay.value = null;
+    selectedReleaseDisplay.value = "Generic Highlight (No Release Selected)";
   }
 }
 
@@ -125,11 +123,11 @@ watch(
     formState.description = newData?.description || "";
     formState.custom_carousel_image_url =
       newData?.custom_carousel_image || null;
+    formState.link_url = newData?.link_url || null; // Populate link_url
     formState.is_active =
       newData?.is_active !== undefined ? newData.is_active : true;
     formState.order = newData?.order || 0;
 
-    // Set start time: if editing and data has it, format it. Otherwise, default to current.
     formState.display_start_datetime_str =
       props.isEditMode && newData?.display_start_datetime
         ? formatDateTimeForInput(newData.display_start_datetime)
@@ -143,11 +141,7 @@ watch(
     formState.custom_carousel_image_file = null;
     removeExistingCoverArt.value = false;
 
-    if (formState.release) {
-      fetchSelectedReleaseDetails(formState.release);
-    } else {
-      selectedReleaseDisplay.value = null;
-    }
+    fetchSelectedReleaseDetails(formState.release); // Update display based on whether release is present
   },
   { immediate: true, deep: true }
 );
@@ -202,17 +196,43 @@ const triggerRemoveCoverArt = () => {
   coverArtPreviewUrl.value = null;
 };
 
-const handleReleaseSelected = (selectedRelease: ReleaseSummary) => {
-  formState.release = selectedRelease.id;
-  selectedReleaseDisplay.value = `${selectedRelease.title} (by ${
-    selectedRelease.artist?.name || "Unknown Artist"
-  })`;
+const handleReleaseSelected = (selectedRelease: ReleaseSummary | null) => {
+  if (selectedRelease) {
+    formState.release = selectedRelease.id;
+    selectedReleaseDisplay.value = `${selectedRelease.title} (by ${
+      selectedRelease.artist?.name || "Unknown Artist"
+    })`;
+  } else {
+    formState.release = null;
+    selectedReleaseDisplay.value = "Generic Highlight (No Release Selected)";
+  }
   isReleaseSelectorVisible.value = false;
 };
 
 const handleSubmit = () => {
-  if (formState.release === null) {
-    alert("Please select a release.");
+  // Modified the check: if no release, then title is required (backend will validate this)
+  // Frontend could also add more specific checks for generic highlights if needed.
+  // The primary `formState.release === null` alert is removed.
+  if (!formState.release && !formState.title.trim()) {
+    alert(
+      "A Title is required for generic highlights (when no release is selected)."
+    );
+    return;
+  }
+  if (
+    !formState.release &&
+    !formState.custom_carousel_image_file &&
+    !formState.custom_carousel_image_url
+  ) {
+    alert(
+      "A Custom Image is required for generic highlights if no release is selected and no existing image is present."
+    );
+    return;
+  }
+  if (!formState.release && !formState.link_url?.trim()) {
+    alert(
+      "A Link URL is required for generic highlights if no release is selected."
+    );
     return;
   }
 
@@ -220,10 +240,18 @@ const handleSubmit = () => {
   if (formState.id) {
     submissionPayload.append("id", formState.id.toString());
   }
-  submissionPayload.append("release", formState.release.toString());
+  if (formState.release) {
+    // Only append release if it's selected
+    submissionPayload.append("release", formState.release.toString());
+  }
   submissionPayload.append("title", formState.title);
   submissionPayload.append("subtitle", formState.subtitle);
   submissionPayload.append("description", formState.description);
+  if (formState.link_url) {
+    // Only append link_url if provided
+    submissionPayload.append("link_url", formState.link_url);
+  }
+
   submissionPayload.append("is_active", formState.is_active.toString());
   submissionPayload.append("order", formState.order.toString());
 
@@ -264,9 +292,13 @@ const handleSubmit = () => {
 <template>
   <form @submit.prevent="handleSubmit" class="highlight-form">
     <div class="form-group">
-      <label for="highlight-release-display">Release:</label>
+      <label for="highlight-release-display"
+        >Release (Optional, for release-specific highlights):</label
+      >
       <div class="selected-release-display">
-        {{ selectedReleaseDisplay || "No release selected" }}
+        {{
+          selectedReleaseDisplay || "Generic Highlight (No Release Selected)"
+        }}
       </div>
       <button
         type="button"
@@ -274,6 +306,14 @@ const handleSubmit = () => {
         class="select-release-btn"
       >
         {{ formState.release ? "Change Release" : "Select Release" }}
+      </button>
+      <button
+        v-if="formState.release"
+        type="button"
+        @click="handleReleaseSelected(null)"
+        class="select-release-btn clear-release-btn"
+      >
+        Clear Selected Release
       </button>
     </div>
 
@@ -284,15 +324,18 @@ const handleSubmit = () => {
     />
 
     <div class="form-group">
-      <label for="highlight-title"
-        >Highlight Title (Optional - max 70 chars):</label
-      >
+      <label for="highlight-title">Highlight Title (max 70 chars):</label>
       <input
         type="text"
         id="highlight-title"
         v-model="formState.title"
         maxlength="70"
-        placeholder="Defaults to Release Title"
+        :placeholder="
+          formState.release
+            ? 'Defaults to Release Title'
+            : 'Required for generic highlight'
+        "
+        :required="!formState.release"
       />
     </div>
 
@@ -321,9 +364,24 @@ const handleSubmit = () => {
     </div>
 
     <div class="form-group">
-      <label for="highlight-image"
-        >Custom Carousel Image (Optional, JPG/PNG/WEBP):</label
+      <label for="highlight-link-url"
+        >Link URL (e.g., for "Learn More" button):</label
       >
+      <input
+        type="url"
+        id="highlight-link-url"
+        v-model="formState.link_url"
+        placeholder="https://example.com/your-link"
+        :required="!formState.release"
+      />
+      <small v-if="formState.release"
+        >Optional: Overrides default release link.</small
+      >
+      <small v-else>Required for generic highlights.</small>
+    </div>
+
+    <div class="form-group">
+      <label for="highlight-image">Custom Carousel Image (JPG/PNG/WEBP):</label>
       <div class="cover-art-preview-container">
         <img
           v-if="coverArtPreviewUrl"
@@ -331,13 +389,20 @@ const handleSubmit = () => {
           alt="Image Preview"
           class="cover-art-preview"
         />
-        <div v-else class="cover-art-preview placeholder">No Custom Image</div>
+        <div v-else class="cover-art-preview placeholder">
+          {{
+            formState.release
+              ? "Defaults to Release Cover"
+              : "Required for generic highlight"
+          }}
+        </div>
       </div>
       <input
         type="file"
         id="highlight-image"
         @change="handleCoverArtChange"
         accept="image/jpeg,image/png,image/webp"
+        :required="!formState.release && !formState.custom_carousel_image_url"
       />
       <button
         v-if="
@@ -361,6 +426,9 @@ const handleSubmit = () => {
       >
         Custom image will be removed.
       </p>
+      <small v-if="!formState.release"
+        >Required if no Release is selected.</small
+      >
     </div>
 
     <div class="form-group form-group-datetime">
@@ -449,7 +517,7 @@ const handleSubmit = () => {
 .form-group input[type="number"],
 .form-group input[type="file"],
 .form-group input[type="datetime-local"],
-/* .form-group select, Remove select styles */
+.form-group input[type="url"],
 .form-group textarea {
   width: 100%;
   padding: 0.6rem;
@@ -458,6 +526,12 @@ const handleSubmit = () => {
   background-color: var(--color-background-soft);
   color: var(--color-text);
   font-size: 1em;
+}
+.form-group small {
+  display: block;
+  font-size: 0.8em;
+  color: var(--color-text-light);
+  margin-top: 0.25rem;
 }
 .form-group-datetime {
   display: flex;
@@ -472,7 +546,7 @@ const handleSubmit = () => {
   border: 1px solid var(--color-border);
   border-radius: 4px;
   background-color: var(--color-background-mute);
-  min-height: calc(0.6rem * 2 + 1.2em); /* Match input height */
+  min-height: calc(0.6rem * 2 + 1.2em);
   display: flex;
   align-items: center;
   margin-bottom: 0.5rem;
@@ -487,10 +561,20 @@ const handleSubmit = () => {
   border: 1px solid var(--color-border);
   border-radius: 4px;
   cursor: pointer;
+  margin-right: 0.5rem; /* Space between buttons */
 }
 .select-release-btn:hover {
   border-color: var(--color-accent);
   color: var(--color-accent);
+}
+.clear-release-btn {
+  background-color: var(--vt-c-red-soft);
+  border-color: var(--vt-c-red);
+  color: var(--vt-c-red-dark);
+}
+.clear-release-btn:hover {
+  background-color: var(--vt-c-red);
+  color: var(--vt-c-white);
 }
 
 .cover-art-preview-container {

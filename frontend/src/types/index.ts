@@ -55,26 +55,27 @@ export interface ReleaseSummary {
 
 export interface CarouselSlide {
   id: string | number;
-  type: "welcome" | "release";
+  type: "release" | "generic"; // Updated to include generic
   title: string;
   subtitle?: string;
   description?: string;
   imageUrl?: string | null;
-  linkUrl?: string;
-  releaseObject?: ReleaseDetail | ReleaseSummary;
+  linkUrl?: string | null; // Changed to allow null, and made optional
+  releaseObject?: ReleaseDetail | ReleaseSummary; // This might be specific to 'release' type
 }
 
 export interface HighlightItem {
   id: number;
-  release: number;
-  release_title: string;
-  release_artist_name: string;
+  release: number | null; // Made release nullable
+  release_title: string | null; // Made nullable
+  release_artist_name: string | null; // Made nullable
   effective_title: string;
   title: string;
   subtitle?: string | null;
   description?: string | null;
-  effective_image_url: string | null;
   custom_carousel_image: string | null;
+  effective_image_url: string | null;
+  link_url?: string | null; // Added new field
   order: number;
   display_start_datetime: string;
   display_end_datetime: string | null;
@@ -84,7 +85,6 @@ export interface HighlightItem {
   updated_at: string;
 }
 
-// AdminHighlightInfo uses the same structure as HighlightItem from the API.
 export type AdminHighlightInfo = HighlightItem;
 
 export interface GeneratedDownloadStatus {

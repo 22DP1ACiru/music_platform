@@ -102,16 +102,18 @@ const formatDisplayDateTime = (dateTimeString: string | null | undefined) => {
         <tr v-for="highlight in highlights" :key="highlight.id">
           <td>{{ highlight.order }}</td>
           <td>{{ highlight.effective_title }}</td>
-          <td>
+          <td class="release-info-cell">
             <RouterLink
+              v-if="highlight.release"
               :to="{
                 name: 'release-detail',
                 params: { id: highlight.release },
               }"
             >
-              {{ highlight.release_artist_name || "Unknown Artist" }} -
-              {{ highlight.release_title || "(Untitled Release)" }}
+              {{ highlight.release_artist_name || "N/A" }} -
+              {{ highlight.release_title || "(No Release Title)" }}
             </RouterLink>
+            <span v-else class="no-release-text">(Generic Highlight)</span>
           </td>
           <td>{{ highlight.is_active ? "Yes" : "No" }}</td>
           <td>{{ formatDisplayDateTime(highlight.display_start_datetime) }}</td>
@@ -207,18 +209,29 @@ const formatDisplayDateTime = (dateTimeString: string | null | undefined) => {
 .highlights-table tbody tr:hover {
   background-color: var(--color-border-hover);
 }
+
+.release-info-cell .no-release-text {
+  font-style: italic;
+  color: var(--color-text-light);
+}
+
 .actions-cell {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  min-width: 130px; /* Give enough space for buttons */
 }
 .action-button {
-  padding: 0.3em 0.7em;
+  padding: 0.4em 0.8em; /* Slightly increased padding for better clickability */
   font-size: 0.9em;
   border-radius: 4px;
   text-decoration: none;
   cursor: pointer;
   border: 1px solid transparent;
+  transition: background-color 0.2s ease, border-color 0.2s ease; /* Smooth transitions */
+  display: inline-block; /* Ensures proper spacing and alignment */
+  text-align: center;
+  line-height: 1.2; /* Better vertical centering of text */
 }
 .edit-btn {
   background-color: var(--color-background-mute);
@@ -227,6 +240,10 @@ const formatDisplayDateTime = (dateTimeString: string | null | undefined) => {
 }
 .edit-btn:hover {
   border-color: var(--color-accent);
+  background-color: var(
+    --color-accent-soft,
+    #e6f7ff
+  ); /* Lighter accent for hover */
   color: var(--color-accent);
 }
 .delete-btn {
@@ -236,6 +253,7 @@ const formatDisplayDateTime = (dateTimeString: string | null | undefined) => {
 }
 .delete-btn:hover {
   background-color: var(--vt-c-red);
+  border-color: var(--vt-c-red-dark);
   color: white;
 }
 </style>

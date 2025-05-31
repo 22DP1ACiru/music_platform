@@ -237,9 +237,9 @@ class HighlightViewSet(viewsets.ModelViewSet):
     serializer_class = HighlightSerializer
     
     def get_permissions(self):
-        if self.action in ['list', 'retrieve', 'admin_list']: # Added admin_list here for clarity
+        if self.action in ['list', 'retrieve', 'admin_list']: 
             permission_classes = [permissions.AllowAny]
-            if self.action == 'admin_list': # admin_list specifically requires IsAdminUser
+            if self.action == 'admin_list': 
                  permission_classes = [permissions.IsAdminUser]
         else:
             permission_classes = [permissions.IsAdminUser]
@@ -247,39 +247,44 @@ class HighlightViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         now = timezone.now()
-        # For list view (frontend carousel), filter active and visible
-        # This is for the public /api/highlights/ endpoint
-        if self.action == 'list':
-            return Highlight.objects.filter(
-                is_active=True,
+        
+        if self.action == 'list': # Public list for carousel
+            # Conditions for release-specific highlights
+            release_specific_q = Q(
+                release__isnull=False,
                 release__is_published=True, 
-                release__release_date__lte=now, 
+                release__release_date__lte=now
+            )
+            # Conditions for generic highlights (no release linked)
+            generic_q = Q(release__isnull=True)
+
+            # Common conditions for all active highlights
+            common_q = Q(
+                is_active=True,
                 display_start_datetime__lte=now
-            ).filter(
+            ) & (
                 Q(display_end_datetime__isnull=True) | Q(display_end_datetime__gte=now)
+            )
+            
+            return Highlight.objects.filter(
+                common_q & (release_specific_q | generic_q)
             ).select_related(
-                'release__artist' 
+                'release__artist', 'created_by' # Include created_by for safety, though not used in public serializer
             ).prefetch_related(
                 'release__genres', 
                 Prefetch('release__tracks', queryset=Track.objects.prefetch_related('genres')) 
             ).order_by('order', '-display_start_datetime')
         
-        # For admin actions (retrieve, update, delete, and the new admin_list if it used this)
-        # they will see all highlights.
-        # The 'admin_list' action will define its own queryset, so this default is for retrieve/update/delete.
+        # For admin actions (retrieve, update, delete, and admin_list)
         return Highlight.objects.all().select_related(
-            'release__artist', 'created_by' # include created_by
+            'release__artist', 'created_by'
         ).order_by('order', '-created_at')
 
     def perform_create(self, serializer):
-        # Automatically set 'created_by' to the current authenticated user (admin)
         serializer.save(created_by=self.request.user)
 
     @action(detail=False, methods=['get'], url_path='admin-list', permission_classes=[IsAdminUser])
     def admin_list(self, request):
-        """
-        Admin-specific list of all highlights, regardless of active status or dates.
-        """
         queryset = Highlight.objects.all().select_related(
             'release__artist', 'created_by'
         ).order_by('order', '-display_start_datetime', '-created_at')

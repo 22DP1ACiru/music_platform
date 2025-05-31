@@ -24,16 +24,6 @@ const errorHighlights = ref<string | null>(null);
 const errorReleases = ref<string | null>(null);
 const errorPopular = ref<string | null>(null);
 
-const welcomeSlide: CarouselSlide = {
-  type: "welcome",
-  id: "welcome-slide",
-  title: "Welcome to Vaultwave!",
-  subtitle: "Your New Home for Music Discovery & Commerce",
-  imageUrl: null,
-  description:
-    "Explore unique releases, support artists directly, and build your digital music collection. Vaultwave connects fans with the music they love.",
-};
-
 async function fetchHighlights() {
   isLoadingHighlights.value = true;
   errorHighlights.value = null;
@@ -43,21 +33,67 @@ async function fetchHighlights() {
     );
     const activeHighlights = response.data.results;
 
-    const highlightSlides: CarouselSlide[] = activeHighlights.map((item) => ({
-      type: "release",
-      id: `highlight-${item.id}`,
-      title: item.effective_title,
-      subtitle: item.subtitle || item.release_artist_name,
-      imageUrl: item.effective_image_url,
-      description: item.description || undefined,
-      linkUrl: `/releases/${item.release}`, // Changed from item.release_id to item.release
-    }));
+    carouselItems.value = activeHighlights.map((item) => {
+      const isReleaseHighlight = !!item.release; // True if release ID exists
+      const slideType = isReleaseHighlight ? "release" : "generic";
 
-    carouselItems.value = [welcomeSlide, ...highlightSlides];
+      let displayTitle = item.effective_title; // Already good (uses custom title or release title)
+      let displaySubtitle = item.subtitle; // Use custom subtitle first
+      let displayDescription = item.description;
+      let displayImageUrl = item.effective_image_url; // Already good (uses custom image or release cover)
+      let displayLinkUrl = item.link_url;
+
+      if (isReleaseHighlight) {
+        // For release highlights, if custom fields are empty, fall back to release data
+        if (!displaySubtitle)
+          displaySubtitle = item.release_artist_name || undefined; // Artist name as subtitle
+        // effective_title already handles fallback to release.title
+        // effective_image_url already handles fallback to release.cover_art
+        if (!displayLinkUrl) displayLinkUrl = `/releases/${item.release}`;
+      } else {
+        // For generic highlights, if custom fields are empty, we might want defaults or ensure they are set
+        // The backend model's clean() method now requires title, image, and link_url for generic highlights
+        // So, these fields should ideally be present in `item`.
+      }
+
+      return {
+        type: slideType,
+        id: `highlight-${item.id}`,
+        title: displayTitle,
+        subtitle: displaySubtitle || undefined, // Ensure it's undefined if truly no subtitle
+        imageUrl: displayImageUrl,
+        description: displayDescription || undefined,
+        linkUrl: displayLinkUrl || undefined, // Ensure it's undefined if no link
+      };
+    });
+
+    if (carouselItems.value.length === 0) {
+      // This fallback might still be useful if the API returns zero results
+      // and you always want at least one slide.
+      carouselItems.value.push({
+        type: "generic",
+        id: "welcome-slide-default",
+        title: "Welcome to Vaultwave!",
+        subtitle: "Your New Home for Music Discovery & Commerce",
+        imageUrl: null,
+        description:
+          "Explore unique releases, support artists directly, and build your digital music collection.",
+        linkUrl: "/about",
+      });
+    }
   } catch (err) {
     console.error("HomeView: Failed to fetch highlights:", err);
     errorHighlights.value = "Could not load featured highlights.";
-    carouselItems.value = [welcomeSlide];
+    carouselItems.value = [
+      {
+        type: "generic",
+        id: "error-slide",
+        title: "Error Loading Highlights",
+        description: "Please try again later.",
+        linkUrl: "/",
+        imageUrl: null,
+      },
+    ];
   } finally {
     isLoadingHighlights.value = false;
   }
@@ -108,13 +144,13 @@ onMounted(() => {
   <div class="home-view">
     <section class="highlights-section">
       <div
-        v-if="isLoadingHighlights && carouselItems.length <= 1"
+        v-if="isLoadingHighlights && carouselItems.length === 0"
         class="loading-placeholder"
       >
         Loading Highlights...
       </div>
       <div
-        v-else-if="errorHighlights && carouselItems.length <= 1"
+        v-else-if="errorHighlights && carouselItems.length === 0"
         class="error-message"
       >
         {{ errorHighlights }}
@@ -193,7 +229,6 @@ onMounted(() => {
 .loading-placeholder,
 .empty-message,
 .placeholder-message {
-  /* Combined for similar styling */
   text-align: center;
   padding: 2rem;
   font-style: italic;

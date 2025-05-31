@@ -10,7 +10,7 @@ const props = defineProps({
   },
   autoPlayInterval: {
     type: Number,
-    default: 7000, // Auto-play interval in milliseconds
+    default: 7000,
   },
 });
 
@@ -20,6 +20,15 @@ let autoPlayTimer: number | undefined = undefined;
 const currentSlide = computed(() => {
   return props.items[currentIndex.value];
 });
+
+const isExternalLink = (url: string | undefined | null): boolean => {
+  if (!url) return false;
+  return (
+    url.startsWith("http://") ||
+    url.startsWith("https://") ||
+    url.startsWith("//")
+  );
+};
 
 const nextSlide = () => {
   currentIndex.value = (currentIndex.value + 1) % props.items.length;
@@ -80,8 +89,20 @@ onUnmounted(() => {
             class="slide-image"
           />
           <div v-else class="slide-image-placeholder">
-            <span v-if="currentSlide.type === 'welcome'">🎶</span>
-            <span v-else>🎧</span>
+            <span
+              v-if="
+                currentSlide.type === 'welcome' ||
+                (currentSlide.type === 'generic' && !currentSlide.imageUrl)
+              "
+              >🎶</span
+            >
+            <span
+              v-else-if="
+                currentSlide.type === 'release' && !currentSlide.imageUrl
+              "
+              >🎧</span
+            >
+            <span v-else-if="!currentSlide.imageUrl">🖼️</span>
           </div>
         </div>
 
@@ -95,12 +116,26 @@ onUnmounted(() => {
           <p v-if="currentSlide.description" class="slide-description">
             {{ currentSlide.description }}
           </p>
-          <RouterLink
-            v-if="currentSlide.linkUrl && currentSlide.type === 'release'"
-            :to="currentSlide.linkUrl"
-            class="slide-link"
-            >View Release</RouterLink
-          >
+
+          <!-- Conditional rendering for internal vs external links -->
+          <template v-if="currentSlide.linkUrl">
+            <a
+              v-if="isExternalLink(currentSlide.linkUrl)"
+              :href="currentSlide.linkUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="slide-link"
+            >
+              {{
+                currentSlide.type === "release" ? "View Release" : "Learn More"
+              }}
+            </a>
+            <RouterLink v-else :to="currentSlide.linkUrl" class="slide-link">
+              {{
+                currentSlide.type === "release" ? "View Release" : "Learn More"
+              }}
+            </RouterLink>
+          </template>
         </div>
       </div>
     </transition>
@@ -134,7 +169,7 @@ onUnmounted(() => {
       ></span>
     </div>
   </div>
-  <div v-else class="carousel-empty"></div>
+  <div v-else class="carousel-empty">No highlights to display.</div>
 </template>
 
 <style scoped>
@@ -219,29 +254,20 @@ onUnmounted(() => {
   color: var(--color-heading);
   margin: 0 0 0.4rem 0;
   line-height: 1.2; /* Tightened line-height slightly */
-  /* CSS Line clamp will handle the 2 lines. No max-height here. */
 }
 
 .slide-content .slide-subtitle {
-  font-size: 1.05em; /* Slightly reduced */
+  font-size: 1.05em;
   color: var(--color-text);
   margin: 0 0 0.6rem 0;
   line-height: 1.3;
-  /* This will take up to 2 lines if text is long enough, but won't show "..." */
-  /* If it exceeds 2 lines visually due to char limit, it will just overflow (hidden by .slide-content) */
-  /* or wrap if there's space */
-  /* To enforce ellipsis for subtitle if it's too long for 2 lines: */
-  /* Apply .truncate-text class and :style="{ '--line-clamp': 2 }" to the <p> element */
 }
 
 .slide-content .slide-description {
-  font-size: 0.9em; /* Slightly reduced */
+  font-size: 0.9em;
   line-height: 1.45;
   margin: 0 0 1rem 0;
   color: var(--color-text-light);
-  /* This will take up to 3-4 lines if text is long enough, but won't show "..." */
-  /* To enforce ellipsis for description if it's too long: */
-  /* Apply .truncate-text class and :style="{ '--line-clamp': 3 or 4 }" to the <p> element */
 }
 
 .slide-link {
@@ -356,28 +382,26 @@ onUnmounted(() => {
   .slide-content {
     height: 60%;
     padding: 1rem 1.5rem;
-    justify-content: center; /* Reverted to center for mobile for overall balance */
+    justify-content: center;
     gap: 0.3rem;
   }
   .slide-content .slide-title {
-    font-size: 1.3em; /* Further reduced for mobile title */
+    font-size: 1.3em;
     margin-bottom: 0.2rem;
     line-height: 1.2;
   }
   .slide-content .slide-subtitle {
     font-size: 0.85em;
-    margin-bottom: 0.3rem; /* Reduced margin */
-    line-height: 1.25; /* Tighter line height for mobile subtitle */
+    margin-bottom: 0.3rem;
+    line-height: 1.25;
   }
   .slide-content .slide-description {
-    font-size: 0.8em; /* Further reduced for mobile description */
-    margin-bottom: 0.5rem; /* Reduced margin */
+    font-size: 0.8em;
+    margin-bottom: 0.5rem;
     line-height: 1.35;
-    /* Apply line-clamp to description on mobile if it's too long */
-    /* -webkit-line-clamp: 3; // Example, add this to .truncate-text for this element specifically if needed */
   }
   .slide-link {
-    align-self: center; /* Center button on mobile */
+    align-self: center;
     padding: 0.5rem 1rem;
     font-size: 0.9em;
     margin-top: 0.5rem;

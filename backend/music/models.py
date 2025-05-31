@@ -19,6 +19,7 @@ from vaultwave.utils import (
     validate_image_not_gif_utility
 )
 from vaultwave.constants import CURRENCY_CHOICES
+from django.utils.translation import gettext_lazy as _
 
 
 logger = logging.getLogger(__name__) 
@@ -363,12 +364,18 @@ class Comment(models.Model):
         ordering = ['created_at']
 
 class Highlight(models.Model):
-    release = models.ForeignKey(Release, on_delete=models.CASCADE, related_name='highlights')
+    release = models.ForeignKey(
+        Release, 
+        on_delete=models.CASCADE, 
+        related_name='highlights',
+        null=True, 
+        blank=True 
+    )
     
     title = models.CharField(
         max_length=70, 
         blank=True, 
-        help_text="Optional: Highlight title (max 70 chars). Defaults to release title."
+        help_text="Optional: Highlight title (max 70 chars). If no release, this is required."
     )
     subtitle = models.CharField(
         max_length=64, 
@@ -385,7 +392,12 @@ class Highlight(models.Model):
         null=True, 
         blank=True,
         validators=[validate_image_not_gif_utility],
-        help_text="Optional: Custom image for carousel. Defaults to release cover art."
+        help_text="Optional: Custom image for carousel. If no release, this might be required."
+    )
+    link_url = models.URLField( # New field
+        blank=True, 
+        null=True, 
+        help_text="Optional URL for generic highlights or to override release link."
     )
 
     display_start_datetime = models.DateTimeField(default=timezone.now,
@@ -396,8 +408,8 @@ class Highlight(models.Model):
     is_active = models.BooleanField(default=True, help_text="Manually activate or deactivate this highlight.")
     order = models.PositiveIntegerField(
         default=0, 
-        help_text="Order for display (e.g., 0 is first). Must be unique.", # Updated help_text
-        unique=True # Enforce uniqueness at the database level
+        help_text="Order for display (e.g., 0 is first). Must be unique.",
+        unique=True 
     )
     
     created_by = models.ForeignKey(
@@ -410,19 +422,35 @@ class Highlight(models.Model):
     created_at = models.DateTimeField(auto_now_add=True) 
     updated_at = models.DateTimeField(auto_now=True)
 
+    def clean(self):
+        super().clean()
+        if not self.release and not self.title:
+            raise ValidationError({
+                'title': _('A title is required for generic highlights (when no release is selected).'),
+            })
+        if not self.release and not self.custom_carousel_image:
+             raise ValidationError({
+                 'custom_carousel_image': _('A custom image is required for generic highlights if no release is selected.'),
+             })
+        if not self.release and not self.link_url:
+            raise ValidationError({
+                'link_url': _('A link URL is required for generic highlights (when no release is selected).'),
+            })
+
+
     def __str__(self):
         effective_title = self.get_effective_title()
         return f"Highlight: {effective_title} (Order: {self.order})"
 
     def get_effective_title(self):
-        return self.title or self.release.title 
+        return self.title or (self.release.title if self.release else "Untitled Highlight")
 
     def get_effective_image_url(self):
         if self.custom_carousel_image and hasattr(self.custom_carousel_image, 'url'):
             return self.custom_carousel_image.url
-        if self.release.cover_art and hasattr(self.release.cover_art, 'url'):
+        if self.release and self.release.cover_art and hasattr(self.release.cover_art, 'url'):
             return self.release.cover_art.url
-        return None
+        return None 
 
     class Meta:
         ordering = ['order', '-display_start_datetime', '-created_at']
