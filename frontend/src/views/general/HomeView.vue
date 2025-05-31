@@ -74,10 +74,10 @@ async function fetchHighlights() {
         type: "generic",
         id: "welcome-slide-default",
         title: "Welcome to Vaultwave!",
-        subtitle: "Your New Home for Music Discovery & Commerce",
+        subtitle: "A humble new beginning for music lovers...",
         imageUrl: null,
         description:
-          "Explore unique releases, support artists directly, and build your digital music collection.",
+          "Soon there will be featured highlights here, showcasing the best of our music releases and artists. Stay tuned!",
         linkUrl: "/about",
       });
     }
