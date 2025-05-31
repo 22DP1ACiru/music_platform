@@ -366,7 +366,7 @@ class Highlight(models.Model):
     release = models.ForeignKey(Release, on_delete=models.CASCADE, related_name='highlights')
     
     title = models.CharField(
-        max_length=70, # Adjusted max_length
+        max_length=70, 
         blank=True, 
         help_text="Optional: Highlight title (max 70 chars). Defaults to release title."
     )
@@ -394,7 +394,11 @@ class Highlight(models.Model):
                                               help_text="Optional: When this highlight should stop being displayed. Leave blank for indefinite.")
     
     is_active = models.BooleanField(default=True, help_text="Manually activate or deactivate this highlight.")
-    order = models.PositiveIntegerField(default=0, help_text="Order for display (e.g., 0 is first).")
+    order = models.PositiveIntegerField(
+        default=0, 
+        help_text="Order for display (e.g., 0 is first). Must be unique.", # Updated help_text
+        unique=True # Enforce uniqueness at the database level
+    )
     
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
@@ -408,7 +412,7 @@ class Highlight(models.Model):
 
     def __str__(self):
         effective_title = self.get_effective_title()
-        return f"Highlight: {effective_title}"
+        return f"Highlight: {effective_title} (Order: {self.order})"
 
     def get_effective_title(self):
         return self.title or self.release.title 

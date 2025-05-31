@@ -65,18 +65,27 @@ export interface CarouselSlide {
 }
 
 export interface HighlightItem {
-  // This is the raw data from /api/highlights/
   id: number;
-  release_id: number;
+  release: number;
   release_title: string;
   release_artist_name: string;
   effective_title: string;
-  title: string; // Previously carousel_title
-  subtitle?: string | null; // Previously carousel_subtitle
-  description?: string | null; // Previously carousel_description
+  title: string;
+  subtitle?: string | null;
+  description?: string | null;
   effective_image_url: string | null;
+  custom_carousel_image: string | null;
   order: number;
+  display_start_datetime: string;
+  display_end_datetime: string | null;
+  is_active: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 }
+
+// AdminHighlightInfo uses the same structure as HighlightItem from the API.
+export type AdminHighlightInfo = HighlightItem;
 
 export interface GeneratedDownloadStatus {
   id: number;
@@ -194,6 +203,7 @@ export type ReplyMessagePayload = Pick<
 export interface OrderItemDetail {
   id: number;
   product_name: string;
+  product: ProductSummaryForCart;
   quantity: number;
   price_at_purchase: string;
 }
@@ -224,4 +234,26 @@ export interface Playlist {
   created_at: string;
   updated_at: string;
   artist?: ArtistInfo;
+}
+
+export interface User {
+  id: number;
+  username: string;
+  email: string;
+  profile: UserProfileForAuth | null;
+  is_staff: boolean;
+}
+
+export interface UserProfileForAuth {
+  id: number;
+  bio: string | null;
+  profile_picture: string | null;
+  location: string | null;
+  website_url: string | null;
+  artist_profile_data: ArtistProfileForAuth | null;
+}
+
+export interface ArtistProfileForAuth {
+  id: number;
+  name: string;
 }

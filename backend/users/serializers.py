@@ -28,10 +28,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
 # Serializer for the built-in User model (exposing basic info + profile)
 class UserSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(read_only=True) # Nest the profile
+    is_staff = serializers.BooleanField(read_only=True) # Added is_staff
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'profile'] # Add 'profile'
+        fields = ['id', 'username', 'email', 'profile', 'is_staff'] # Add 'is_staff'
 
 
 # Serializer for user registration

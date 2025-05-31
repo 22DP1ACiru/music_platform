@@ -47,10 +47,10 @@ async function fetchHighlights() {
       type: "release",
       id: `highlight-${item.id}`,
       title: item.effective_title,
-      subtitle: item.subtitle || item.release_artist_name, // Use item.subtitle (new name)
+      subtitle: item.subtitle || item.release_artist_name,
       imageUrl: item.effective_image_url,
-      description: item.description || undefined, // Use item.description (new name)
-      linkUrl: `/releases/${item.release_id}`,
+      description: item.description || undefined,
+      linkUrl: `/releases/${item.release}`, // Changed from item.release_id to item.release
     }));
 
     carouselItems.value = [welcomeSlide, ...highlightSlides];

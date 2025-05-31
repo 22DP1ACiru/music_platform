@@ -3,6 +3,8 @@ from .models import Genre, Artist, Release, Track, Comment, Highlight, Generated
 from rest_framework.reverse import reverse
 from decimal import Decimal
 from django.utils.dateparse import parse_datetime 
+from django.utils.translation import gettext_lazy as _ # For translatable error messages
+from rest_framework.validators import UniqueValidator # Import UniqueValidator
 
 class ListenSegmentLogSerializer(serializers.Serializer):
     segment_start_timestamp_utc = serializers.DateTimeField(
@@ -207,7 +209,7 @@ class ReleaseSerializer(serializers.ModelSerializer):
         for fmt in formats:
             if fmt['value'] not in seen_values:
                  final_formats.append(fmt)
-                 seen_values.add(fmt['value'])
+                 seen_values.add(p_val)
         return final_formats
 
     def validate(self, data):
@@ -298,35 +300,60 @@ class CommentSerializer(serializers.ModelSerializer):
         read_only_fields = ['user']
 
 class HighlightSerializer(serializers.ModelSerializer):
-    release_id = serializers.IntegerField(source='release.id', read_only=True)
-    release_title = serializers.CharField(source='release.title', read_only=True)
-    release_artist_name = serializers.CharField(source='release.artist.name', read_only=True)
-    
     effective_title = serializers.CharField(source='get_effective_title', read_only=True)
-    effective_image_url = serializers.SerializerMethodField()
+    effective_image_url = serializers.SerializerMethodField(read_only=True)
+    release_artist_name = serializers.CharField(source='release.artist.name', read_only=True)
+    release_title = serializers.CharField(source='release.title', read_only=True)
+
+    release = serializers.PrimaryKeyRelatedField(queryset=Release.objects.all())
+    created_by = serializers.StringRelatedField(read_only=True)
     
-    # Directly use the renamed model fields for output - remove source if field name matches
-    title = serializers.CharField(read_only=True, allow_blank=True)
-    subtitle = serializers.CharField(read_only=True, allow_blank=True)
-    description = serializers.CharField(read_only=True, allow_blank=True)
+    # Explicitly declare the 'order' field to override default UniqueValidator messages
+    # and ensure our custom validate_order method is also respected.
+    order = serializers.IntegerField(
+        validators=[
+            UniqueValidator(
+                queryset=Highlight.objects.all(),
+                message=_("Highlight with this order already exists.") # Capitalized message
+            )
+        ]
+    )
+
 
     class Meta:
         model = Highlight
         fields = [
             'id', 
-            'release_id', 
-            'release_title',
+            'release', 
+            'release_title', 
             'release_artist_name',
             'effective_title', 
             'title', 
             'subtitle', 
             'description', 
+            'custom_carousel_image',
             'effective_image_url', 
             'order',
             'display_start_datetime', 
             'display_end_datetime',   
-            'is_active',              
+            'is_active',
+            'created_by', 
+            'created_at', 
+            'updated_at', 
         ]
+        read_only_fields = [
+            'effective_title', 'effective_image_url', 'release_artist_name', 'release_title',
+            'created_by', 'created_at', 'updated_at'
+        ]
+        extra_kwargs = {
+            'custom_carousel_image': {'required': False, 'allow_null': True},
+            'title': {'required': False, 'allow_blank': True, 'max_length': 70},
+            'subtitle': {'required': False, 'allow_blank': True, 'max_length': 64},
+            'description': {'required': False, 'allow_blank': True, 'max_length': 255},
+            'display_end_datetime': {'required': False, 'allow_null': True},
+            # 'order' field is now explicitly defined above, so no extra_kwargs needed for it here
+            # unless for other properties like 'required', 'min_value', etc.
+        }
     
     def get_effective_image_url(self, obj: Highlight):
         request = self.context.get('request')
@@ -334,6 +361,21 @@ class HighlightSerializer(serializers.ModelSerializer):
         if image_url and request:
             return request.build_absolute_uri(image_url)
         return None
+
+    # This custom validate_order can still exist as a belt-and-suspenders approach,
+    # or if you need more complex logic than a simple unique check.
+    # However, with the explicit UniqueValidator on the field, this might become redundant
+    # for the sole purpose of the unique error message.
+    def validate_order(self, value):
+        queryset = Highlight.objects.all() # Get all highlights
+        if self.instance: # If updating, exclude the current instance from the check
+            queryset = queryset.exclude(pk=self.instance.pk)
+        
+        # Check if any *other* highlight has this order value
+        if queryset.filter(order=value).exists():
+            raise serializers.ValidationError(_("Highlight with this order already exists."))
+        return value
+
 
 class GeneratedDownloadRequestSerializer(serializers.Serializer):
     requested_format = serializers.ChoiceField(choices=GeneratedDownload.DownloadFormatChoices.choices)

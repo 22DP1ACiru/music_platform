@@ -233,25 +233,64 @@ class CommentViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
-class HighlightViewSet(viewsets.ReadOnlyModelViewSet): 
+class HighlightViewSet(viewsets.ModelViewSet):
     serializer_class = HighlightSerializer
-    permission_classes = [permissions.AllowAny]
+    
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve', 'admin_list']: # Added admin_list here for clarity
+            permission_classes = [permissions.AllowAny]
+            if self.action == 'admin_list': # admin_list specifically requires IsAdminUser
+                 permission_classes = [permissions.IsAdminUser]
+        else:
+            permission_classes = [permissions.IsAdminUser]
+        return [permission() for permission in permission_classes]
 
     def get_queryset(self):
         now = timezone.now()
-        return Highlight.objects.filter(
-            is_active=True,
-            release__is_published=True, 
-            release__release_date__lte=now, 
-            display_start_datetime__lte=now
-        ).filter(
-            Q(display_end_datetime__isnull=True) | Q(display_end_datetime__gte=now)
-        ).select_related(
-            'release__artist' 
-        ).prefetch_related(
-            'release__genres', 
-            Prefetch('release__tracks', queryset=Track.objects.prefetch_related('genres')) 
-        ).order_by('order', '-display_start_datetime')
+        # For list view (frontend carousel), filter active and visible
+        # This is for the public /api/highlights/ endpoint
+        if self.action == 'list':
+            return Highlight.objects.filter(
+                is_active=True,
+                release__is_published=True, 
+                release__release_date__lte=now, 
+                display_start_datetime__lte=now
+            ).filter(
+                Q(display_end_datetime__isnull=True) | Q(display_end_datetime__gte=now)
+            ).select_related(
+                'release__artist' 
+            ).prefetch_related(
+                'release__genres', 
+                Prefetch('release__tracks', queryset=Track.objects.prefetch_related('genres')) 
+            ).order_by('order', '-display_start_datetime')
+        
+        # For admin actions (retrieve, update, delete, and the new admin_list if it used this)
+        # they will see all highlights.
+        # The 'admin_list' action will define its own queryset, so this default is for retrieve/update/delete.
+        return Highlight.objects.all().select_related(
+            'release__artist', 'created_by' # include created_by
+        ).order_by('order', '-created_at')
+
+    def perform_create(self, serializer):
+        # Automatically set 'created_by' to the current authenticated user (admin)
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=False, methods=['get'], url_path='admin-list', permission_classes=[IsAdminUser])
+    def admin_list(self, request):
+        """
+        Admin-specific list of all highlights, regardless of active status or dates.
+        """
+        queryset = Highlight.objects.all().select_related(
+            'release__artist', 'created_by'
+        ).order_by('order', '-display_start_datetime', '-created_at')
+        
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True, context={'request': request})
+        return Response(serializer.data)
 
 
 def stream_track_audio(request, track_id):

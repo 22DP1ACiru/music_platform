@@ -122,14 +122,41 @@ const router = createRouter({
       component: () => import("../views/playlist/PlaylistDetailView.vue"),
       props: true,
     },
-    // +++ NEW SEARCH ROUTE +++
     {
       path: "/search",
-      name: "search-results", // Name for programmatic navigation
-      component: () => import("../views/general/SearchView.vue"), // We will create this view next
-      props: (route) => ({ query: route.query.q }), // Pass 'q' query param as 'query' prop
+      name: "search-results",
+      component: () => import("../views/general/SearchView.vue"),
+      props: (route) => ({ query: route.query.q }),
     },
-    // +++ END NEW SEARCH ROUTE +++
+    // Admin Routes
+    {
+      path: "/admin",
+      name: "admin-dashboard",
+      component: () => import("../views/admin/AdminDashboardView.vue"),
+      meta: { requiresAuth: true, requiresStaff: true },
+      children: [
+        {
+          path: "highlights",
+          name: "admin-highlights",
+          component: () =>
+            import("../views/admin/highlights/AdminHighlightListView.vue"),
+        },
+        {
+          path: "highlights/new",
+          name: "admin-highlight-create",
+          component: () =>
+            import("../views/admin/highlights/AdminHighlightCreateView.vue"),
+        },
+        {
+          path: "highlights/edit/:highlightId", // Use highlightId to avoid conflict with other :id
+          name: "admin-highlight-edit",
+          component: () =>
+            import("../views/admin/highlights/AdminHighlightEditView.vue"),
+          props: true,
+        },
+        // Add more admin sub-routes here later (e.g., for stats)
+      ],
+    },
   ],
 });
 
@@ -138,24 +165,23 @@ router.beforeEach(async (to, _from, next) => {
 
   if (
     (!authStore.isLoggedIn && localStorage.getItem("accessToken")) ||
-    (authStore.isLoggedIn && !authStore.user)
+    (authStore.isLoggedIn && !authStore.authUser) // Check if user object is missing despite token
   ) {
     if (!authStore.authLoading) {
-      console.log("Router Guard: Attempting auto-login or user data fetch.");
       await authStore.tryAutoLogin(router);
     }
   }
 
+  // Wait for any ongoing authentication process to complete
   while (authStore.authLoading) {
-    console.log(
-      "Router Guard: Waiting for authentication/user data loading to complete..."
-    );
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
 
   const isLoggedIn = authStore.isLoggedIn;
+  const isStaffUser = authStore.isStaff; // Use the computed property from store
 
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth);
+  const requiresStaff = to.matched.some((record) => record.meta.requiresStaff);
   const requiresArtist = to.matched.some(
     (record) => record.meta.requiresArtist
   );
@@ -163,46 +189,26 @@ router.beforeEach(async (to, _from, next) => {
     (record) => record.meta.requiresArtistCreation
   );
 
-  if (requiresAuth && !isLoggedIn) {
-    console.log(
-      "Router Guard: requiresAuth=true, not logged in. Redirecting to login."
-    );
+  if (
+    (requiresAuth ||
+      requiresStaff ||
+      requiresArtist ||
+      requiresArtistCreation) &&
+    !isLoggedIn
+  ) {
     next({ name: "login", query: { redirect: to.fullPath } });
-  } else if (requiresArtist) {
-    if (!isLoggedIn) {
-      console.log(
-        "Router Guard: requiresArtist=true, not logged in. Redirecting to login."
-      );
-      next({ name: "login", query: { redirect: to.fullPath } });
-    } else if (!authStore.hasArtistProfile) {
-      console.log(
-        "Router Guard: requiresArtist=true, logged in, but no artist profile. Redirecting to profile."
-      );
-      alert(
-        "You need an artist profile to access this page. Please create one from your profile page."
-      );
-      next({ name: "profile" });
-    } else {
-      next();
-    }
-  } else if (requiresArtistCreation) {
-    if (!isLoggedIn) {
-      console.log(
-        "Router Guard: requiresArtistCreation=true, not logged in. Redirecting to login."
-      );
-      next({ name: "login", query: { redirect: to.fullPath } });
-    } else if (authStore.hasArtistProfile) {
-      console.log(
-        "Router Guard: requiresArtistCreation=true, but already has artist profile. Redirecting to artist detail."
-      );
-      alert("You already have an artist profile.");
-      next({
-        name: "artist-detail",
-        params: { id: authStore.artistProfileId || "error" },
-      });
-    } else {
-      next();
-    }
+  } else if (requiresStaff && !isStaffUser) {
+    alert("You do not have permission to access this page.");
+    next({ name: "home" }); // Or some other appropriate redirect
+  } else if (requiresArtist && !authStore.hasArtistProfile) {
+    alert("You need an artist profile to access this page.");
+    next({ name: "profile" });
+  } else if (requiresArtistCreation && authStore.hasArtistProfile) {
+    alert("You already have an artist profile.");
+    next({
+      name: "artist-detail",
+      params: { id: authStore.artistProfileId || "0" },
+    });
   } else {
     next();
   }
