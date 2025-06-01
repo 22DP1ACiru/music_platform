@@ -1,3 +1,4 @@
+import paypalrestsdk
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action # Ensure action is imported
@@ -8,6 +9,8 @@ from django.shortcuts import get_object_or_404 # For get_object_or_404
 from django.utils import timezone # For updating timestamp
 from library.models import UserLibraryItem # For adding to library
 from music.models import Release # For accessing Release model details
+from django.conf import settings
+from django.urls import reverse
 
 class OrderViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
@@ -80,3 +83,88 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(order)
         return Response(serializer.data)
+    
+    def _configure_paypal_sdk(self): # Helper method
+        paypalrestsdk.configure({
+            "mode": settings.PAYPAL_MODE, # "sandbox" or "live"
+            "client_id": settings.PAYPAL_CLIENT_ID,
+            "client_secret": settings.PAYPAL_CLIENT_SECRET
+        })
+
+    @action(detail=True, methods=['post'], url_path='create-paypal-payment')
+    def create_paypal_payment(self, request, pk=None):
+        order = self.get_object() # Gets the order instance
+
+        if order.status != Order.ORDER_STATUS_CHOICES[0][0]: # PENDING
+            return Response(
+                {"detail": "Payment can only be initiated for PENDING orders."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        self._configure_paypal_sdk()
+
+        # Ensure order currency is supported by PayPal or convert if necessary.
+        # For simplicity, let's assume order.currency is something PayPal accepts (e.g., USD, EUR).
+        # Your orders are already in ORDER_SETTLEMENT_CURRENCY which is USD.
+
+        # Construct return URLs (these will be frontend routes)
+        # Ensure FRONTEND_URL in settings.py is correct (e.g., http://localhost:5341)
+        base_return_url = settings.FRONTEND_URL.strip('/')
+        
+        # It's good practice to include the order ID in the return URLs
+        # so your frontend can potentially fetch order status on return,
+        # though webhook is the source of truth for completion.
+        success_url = f"{base_return_url}/order/payment/success/?order_id={order.id}"
+        cancel_url = f"{base_return_url}/order/payment/cancel/?order_id={order.id}"
+
+        payment_data = {
+            "intent": "sale",
+            "payer": {
+                "payment_method": "paypal"
+            },
+            "redirect_urls": {
+                "return_url": success_url,
+                "cancel_url": cancel_url
+            },
+            "transactions": [{
+                "item_list": {
+                    "items": [{
+                        "name": f"Order #{order.id} from Vaultwave",
+                        "sku": f"ORDER-{order.id}",
+                        "price": str(order.total_amount), # Must be string
+                        "currency": order.currency, # e.g., "USD"
+                        "quantity": 1
+                    }]
+                },
+                "amount": {
+                    "total": str(order.total_amount), # Must be string
+                    "currency": order.currency
+                },
+                "description": f"Payment for Vaultwave Order #{order.id}"
+            }]
+        }
+
+        try:
+            payment = paypalrestsdk.Payment(payment_data)
+            if payment.create():
+                # Store payment ID on order for reference (optional but good)
+                order.payment_gateway_id = payment.id # PayPal's payment ID
+                order.save(update_fields=['payment_gateway_id'])
+
+                approval_url = None
+                for link in payment.links:
+                    if link.rel == "approval_url":
+                        approval_url = str(link.href)
+                
+                if approval_url:
+                    return Response({"approval_url": approval_url, "payment_id": payment.id})
+                else:
+                    return Response({"detail": "Could not get PayPal approval URL."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            else:
+                # Log more details from payment.error if possible
+                error_details = payment.error if hasattr(payment, 'error') else "Unknown PayPal error"
+                print(f"PayPal Payment Creation Error: {error_details}")
+                return Response({"detail": f"PayPal payment creation failed: {error_details}"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            print(f"Exception creating PayPal payment: {e}")
+            return Response({"detail": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

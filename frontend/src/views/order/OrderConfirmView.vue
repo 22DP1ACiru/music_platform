@@ -1,7 +1,9 @@
+<!-- frontend/src/views/order/OrderConfirmView.vue -->
 <script setup lang="ts">
-import { onMounted, computed } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { onMounted, computed, ref } from "vue";
+import { useRoute, useRouter, RouterLink } from "vue-router"; // Added RouterLink
 import { useOrderStore } from "@/stores/order";
+import axios from "axios"; // Import axios
 
 const route = useRoute();
 const router = useRouter();
@@ -10,7 +12,9 @@ const orderStore = useOrderStore();
 const orderId = computed(() => route.params.orderId as string);
 const order = computed(() => orderStore.currentOrder);
 const isLoading = computed(() => orderStore.isLoadingSingle);
-const error = computed(() => orderStore.singleOrderError);
+const error = computed(() => orderStore.singleOrderError); // General error for fetching order
+const isProcessingPayment = ref(false); // Combined loading state for any payment action
+const paymentError = ref<string | null>(null); // Specific error for payment initiation/confirmation
 
 onMounted(() => {
   if (orderId.value) {
@@ -18,25 +22,62 @@ onMounted(() => {
   }
 });
 
-const handleConfirmPayment = async () => {
+const initiatePayPalPayment = async () => {
+  if (!order.value || order.value.status !== "PENDING") {
+    paymentError.value = "Order is not in a state to be paid or not loaded.";
+    return;
+  }
+  isProcessingPayment.value = true;
+  paymentError.value = null;
+  try {
+    const response = await axios.post(
+      `/shop/orders/${order.value.id}/create-paypal-payment/`
+    );
+    if (response.data && response.data.approval_url) {
+      // Redirect the user to PayPal's approval page
+      window.location.href = response.data.approval_url;
+      // Note: After redirecting to PayPal, the user will either complete or cancel.
+      // The actual order update to 'COMPLETED' will happen via a webhook from PayPal to your backend.
+      // The success/cancel URLs are for user experience, not for final order confirmation.
+    } else {
+      throw new Error("PayPal approval URL not received from backend.");
+    }
+  } catch (err: any) {
+    console.error("Failed to initiate PayPal payment:", err);
+    if (axios.isAxiosError(err) && err.response) {
+      paymentError.value =
+        err.response.data.detail || "Could not initiate PayPal payment.";
+    } else {
+      paymentError.value = "An unexpected error occurred with PayPal setup.";
+    }
+    // Do not set isProcessingPayment to false here if redirecting,
+    // but if an error occurs before redirect, then set it.
+    isProcessingPayment.value = false;
+  }
+  // If successful redirect, isProcessingPayment remains true until page navigates away.
+  // If error before redirect, it's set to false in the finally block of the catch.
+};
+
+// This simulated payment confirmation is now replaced by PayPal flow.
+// You can keep it for testing other parts if needed, or remove it.
+// For now, let's assume it's for a different payment method or testing.
+const handleSimulatedConfirmPayment = async () => {
   if (order.value && order.value.status === "PENDING") {
+    isProcessingPayment.value = true;
+    paymentError.value = null;
     const success = await orderStore.confirmOrderPayment(order.value.id);
     if (success) {
       alert(
-        "Payment confirmed! Your order is complete and items have been added to your library."
+        "Simulated Payment confirmed! Your order is complete and items have been added to your library."
       );
-      // The orderStore.confirmOrderPayment now updates currentOrder,
-      // so the view will reactively show the 'COMPLETED' status.
-      // We might want to navigate to order history or library.
-      router.push({ name: "library" }); // Or order-history
+      router.push({ name: "library" });
     } else {
-      // Error is handled by the store and displayed via `error` computed prop
-      alert(
-        `Failed to confirm payment: ${
-          orderStore.singleOrderError || "Unknown error"
-        }`
-      );
+      paymentError.value =
+        orderStore.singleOrderError ||
+        "Unknown error during simulated payment.";
+      alert(`Failed to confirm simulated payment: ${paymentError.value}`);
     }
+    isProcessingPayment.value = false;
   } else if (order.value) {
     alert(
       `This order is already ${
@@ -69,8 +110,10 @@ const formatDate = (dateString: string | undefined) => {
   <div class="order-confirm-view">
     <h2>Order Confirmation</h2>
 
-    <div v-if="isLoading" class="loading-message">Loading order details...</div>
-    <div v-else-if="error" class="error-message">{{ error }}</div>
+    <div v-if="isLoading && !order" class="loading-message">
+      Loading order details...
+    </div>
+    <div v-else-if="error && !order" class="error-message">{{ error }}</div>
     <div v-else-if="!order" class="error-message">Order details not found.</div>
 
     <div v-else class="order-details-card">
@@ -98,22 +141,35 @@ const formatDate = (dateString: string | undefined) => {
       </ul>
 
       <div v-if="order.status === 'PENDING'" class="payment-actions">
-        <button @click="handleConfirmPayment" class="confirm-payment-btn">
-          Confirm & Pay (Simulated)
+        <button
+          @click="initiatePayPalPayment"
+          class="confirm-payment-btn paypal-button"
+          :disabled="isProcessingPayment || isLoading"
+        >
+          {{
+            isProcessingPayment ? "Connecting to PayPal..." : "Pay with PayPal"
+          }}
         </button>
+        <!-- You might want to keep the simulated payment for testing or as an alternative -->
+        <!-- <button @click="handleSimulatedConfirmPayment" class="confirm-payment-btn" :disabled="isProcessingPayment || isLoading">
+          Confirm & Pay (Simulated)
+        </button> -->
+        <p v-if="paymentError" class="error-message payment-process-error">
+          {{ paymentError }}
+        </p>
       </div>
       <div v-else-if="order.status === 'COMPLETED'" class="completion-message">
         <p>✅ This order is complete. Items have been added to your library.</p>
-        <router-link :to="{ name: 'library' }" class="action-button"
-          >Go to My Library</router-link
+        <RouterLink :to="{ name: 'library' }" class="action-button"
+          >Go to My Library</RouterLink
         >
       </div>
       <div v-else class="completion-message">
         <p>
           This order is currently {{ order.status_display || order.status }}.
         </p>
-        <router-link :to="{ name: 'order-history' }" class="action-button"
-          >View Order History</router-link
+        <RouterLink :to="{ name: 'order-history' }" class="action-button"
+          >View Order History</RouterLink
         >
       </div>
     </div>
@@ -146,6 +202,9 @@ const formatDate = (dateString: string | undefined) => {
   border-radius: 4px;
   margin-bottom: 1rem;
   text-align: center;
+}
+.payment-process-error {
+  margin-top: 1rem; /* Specific margin for payment errors */
 }
 
 .order-details-card {
@@ -184,7 +243,7 @@ const formatDate = (dateString: string | undefined) => {
   padding: 0.2em 0.6em;
   border-radius: 4px;
   text-transform: capitalize;
-  color: white; /* Default for most badges */
+  color: white;
 }
 .status-pending {
   background-color: #ffc107;
@@ -229,23 +288,31 @@ const formatDate = (dateString: string | undefined) => {
 .payment-actions {
   margin-top: 2rem;
   text-align: center;
+  display: flex; /* For multiple buttons */
+  flex-direction: column; /* Stack buttons vertically */
+  align-items: center; /* Center buttons */
+  gap: 1rem; /* Space between buttons if you have more than one */
 }
 .confirm-payment-btn {
-  background-color: var(--color-accent);
-  color: var(--vt-c-white);
   border: none;
   padding: 0.8em 2em;
   font-size: 1.1em;
   border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.2s;
-}
-.confirm-payment-btn:hover {
-  background-color: var(--color-accent-hover);
+  min-width: 200px; /* Give button some width */
 }
 .confirm-payment-btn:disabled {
   background-color: var(--color-border);
   cursor: not-allowed;
+}
+
+.paypal-button {
+  background-color: #0070ba; /* PayPal blue */
+  color: white;
+}
+.paypal-button:hover:not(:disabled) {
+  background-color: #005ea6;
 }
 
 .completion-message {

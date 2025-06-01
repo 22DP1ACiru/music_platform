@@ -18,14 +18,24 @@ from celery.schedules import crontab # Import crontab
 
 env = environ.Env(
     # set casting, default value
-    DEBUG=(bool, False)
+    DEBUG=(bool, False),
+    PAYPAL_MODE=(str, 'sandbox'),
+    PAYPAL_CLIENT_ID=(str, 'NOT_SET_IN_ENV_INIT'),
+    PAYPAL_CLIENT_SECRET=(str, 'NOT_SET_IN_ENV_INIT'),
+    PAYPAL_WEBHOOK_ID=(str, ''),
+    FRONTEND_URL=(str, 'http://localhost:5341')
 )
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Take environment variables from .env file
-environ.Env.read_env(os.path.join(BASE_DIR, '../.env')) # Adjust path if .env is elsewhere
+ENV_FILE_PATH = BASE_DIR.parent / '.env'
+if os.path.exists(ENV_FILE_PATH):
+    print(f"DEBUG: Reading .env file from: {ENV_FILE_PATH}")
+    environ.Env.read_env(str(ENV_FILE_PATH))
+else:
+    print(f"DEBUG: .env file NOT FOUND at: {ENV_FILE_PATH}. Using system environment variables or defaults.")
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
@@ -38,6 +48,17 @@ DEBUG = env('DEBUG')
 
 ALLOWED_HOSTS = env('ALLOWED_HOSTS').split(' ')
 
+# Paypal settings
+
+PAYPAL_MODE = env('PAYPAL_MODE')
+PAYPAL_CLIENT_ID = env('PAYPAL_CLIENT_ID')
+PAYPAL_CLIENT_SECRET = env('PAYPAL_CLIENT_SECRET')
+PAYPAL_WEBHOOK_ID = env('PAYPAL_WEBHOOK_ID')
+FRONTEND_URL = env('FRONTEND_URL')
+
+print(f"DEBUG SETTINGS: PAYPAL_CLIENT_ID: {PAYPAL_CLIENT_ID}")
+print(f"DEBUG SETTINGS: PAYPAL_CLIENT_SECRET: {'*' * len(PAYPAL_CLIENT_SECRET) if PAYPAL_CLIENT_SECRET not in ['NOT_SET_IN_ENV_INIT', ''] else PAYPAL_CLIENT_SECRET}")
+print(f"DEBUG SETTINGS: PAYPAL_MODE: {PAYPAL_MODE}")
 
 # Application definition
 

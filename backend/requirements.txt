@@ -11,3 +11,4 @@ mutagen>=1.47
 django-filter>=24.2
 pydub>=0.25
 django-celery-beat>=2.5,<2.6
+paypalrestsdk>=1.13,<2.0

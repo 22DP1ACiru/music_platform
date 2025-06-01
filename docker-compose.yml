@@ -37,6 +37,11 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS} # e.g., localhost, 127.0.0.1
+      - PAYPAL_MODE=${PAYPAL_MODE}
+      - PAYPAL_CLIENT_ID=${PAYPAL_CLIENT_ID}
+      - PAYPAL_CLIENT_SECRET=${PAYPAL_CLIENT_SECRET}
+      - PAYPAL_WEBHOOK_ID=${PAYPAL_WEBHOOK_ID}
+      - FRONTEND_URL=${FRONTEND_URL}
     depends_on: # Ensure db and redis start before backend
       - db
       - redis
