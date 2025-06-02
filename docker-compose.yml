@@ -27,6 +27,7 @@ services:
     volumes:
       - ./backend:/app # Mount backend code into container for live reload
       - media_volume:/app/mediafiles # Mount media volume for persistent file uploads
+      - ./frontend/dist:/app/frontend_dist
     ports:
       - "8102:8000" # Map host port 8102 to container port 8000
     environment:
@@ -42,6 +43,7 @@ services:
       - PAYPAL_CLIENT_SECRET=${PAYPAL_CLIENT_SECRET}
       - PAYPAL_WEBHOOK_ID=${PAYPAL_WEBHOOK_ID}
       - FRONTEND_URL=${FRONTEND_URL}
+      - NGROK_DOMAIN=${NGROK_DOMAIN}
     depends_on: # Ensure db and redis start before backend
       - db
       - redis

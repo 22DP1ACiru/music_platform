@@ -157,6 +157,28 @@ const router = createRouter({
         // Add more admin sub-routes here later (e.g., for stats)
       ],
     },
+    {
+      path: "/order/payment/success",
+      name: "payment-success",
+      component: () => import("../views/order/PaymentSuccessView.vue"),
+      props: (route) => ({
+        order_id: route.query.order_id,
+        paypal_payment_id: route.query.paypal_payment_id, // If PayPal adds this (check actual redirect)
+        token: route.query.token, // PayPal often adds a token
+        PayerID: route.query.PayerID, // And a PayerID
+      }),
+      meta: { requiresAuth: true }, // User should be logged in to see their order status
+    },
+    {
+      path: "/order/payment/cancel",
+      name: "payment-cancel",
+      component: () => import("../views/order/PaymentCancelView.vue"),
+      props: (route) => ({
+        order_id: route.query.order_id,
+        token: route.query.token,
+      }),
+      meta: { requiresAuth: true }, // User should be logged in
+    },
   ],
 });
 

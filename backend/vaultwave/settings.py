@@ -23,6 +23,7 @@ env = environ.Env(
     PAYPAL_CLIENT_ID=(str, 'NOT_SET_IN_ENV_INIT'),
     PAYPAL_CLIENT_SECRET=(str, 'NOT_SET_IN_ENV_INIT'),
     PAYPAL_WEBHOOK_ID=(str, ''),
+    NGROK_DOMAIN=(str, ''),
     FRONTEND_URL=(str, 'http://localhost:5341')
 )
 
@@ -54,11 +55,29 @@ PAYPAL_MODE = env('PAYPAL_MODE')
 PAYPAL_CLIENT_ID = env('PAYPAL_CLIENT_ID')
 PAYPAL_CLIENT_SECRET = env('PAYPAL_CLIENT_SECRET')
 PAYPAL_WEBHOOK_ID = env('PAYPAL_WEBHOOK_ID')
+NGROK_DOMAIN = env('NGROK_DOMAIN', default='NOT_SET_NGROK')
 FRONTEND_URL = env('FRONTEND_URL')
 
 print(f"DEBUG SETTINGS: PAYPAL_CLIENT_ID: {PAYPAL_CLIENT_ID}")
 print(f"DEBUG SETTINGS: PAYPAL_CLIENT_SECRET: {'*' * len(PAYPAL_CLIENT_SECRET) if PAYPAL_CLIENT_SECRET not in ['NOT_SET_IN_ENV_INIT', ''] else PAYPAL_CLIENT_SECRET}")
+print(f"DEBUG SETTINGS: NGROK_DOMAIN: {NGROK_DOMAIN}")
 print(f"DEBUG SETTINGS: PAYPAL_MODE: {PAYPAL_MODE}")
+
+if DEBUG and NGROK_DOMAIN:
+    # ngrok URLs can be http or https, and might or might not include the scheme.
+    # ALLOWED_HOSTS expects just the hostname.
+    # We need to parse the hostname from the NGROK_DOMAIN_SETTING.
+    from urllib.parse import urlparse
+    try:
+        parsed_ngrok_url = urlparse(NGROK_DOMAIN)
+        if parsed_ngrok_url.hostname:
+            ALLOWED_HOSTS.append(parsed_ngrok_url.hostname)
+            # PayPal might also redirect to a www. version in some cases, though less common for ngrok
+            # ALLOWED_HOSTS.append(f"www.{parsed_ngrok_url.hostname}")
+        else: # If NGROK_DOMAIN was just the hostname
+            ALLOWED_HOSTS.append(NGROK_DOMAIN)
+    except Exception as e:
+        print(f"Warning: Could not parse NGROK_DOMAIN '{NGROK_DOMAIN}' for ALLOWED_HOSTS: {e}")
 
 # Application definition
 
@@ -100,6 +119,7 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5341", # Frontend's default port from docker-compose
     "http://127.0.0.1:5341",
+    NGROK_DOMAIN,
 ]
 # If you use credentials (like cookies or Authorization headers), set this:
 # CORS_ALLOW_CREDENTIALS = True
