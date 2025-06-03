@@ -1,4 +1,3 @@
-<!-- frontend/src/views/order/OrderConfirmView.vue -->
 <script setup lang="ts">
 import { onMounted, computed, ref } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router"; // Added RouterLink
@@ -58,9 +57,6 @@ const initiatePayPalPayment = async () => {
   // If error before redirect, it's set to false in the finally block of the catch.
 };
 
-// This simulated payment confirmation is now replaced by PayPal flow.
-// You can keep it for testing other parts if needed, or remove it.
-// For now, let's assume it's for a different payment method or testing.
 const handleSimulatedConfirmPayment = async () => {
   if (order.value && order.value.status === "PENDING") {
     isProcessingPayment.value = true;
@@ -150,10 +146,13 @@ const formatDate = (dateString: string | undefined) => {
             isProcessingPayment ? "Connecting to PayPal..." : "Pay with PayPal"
           }}
         </button>
-        <!-- You might want to keep the simulated payment for testing or as an alternative -->
-        <!-- <button @click="handleSimulatedConfirmPayment" class="confirm-payment-btn" :disabled="isProcessingPayment || isLoading">
+        <button
+          @click="handleSimulatedConfirmPayment"
+          class="confirm-payment-btn simulated-payment-btn"
+          :disabled="isProcessingPayment || isLoading"
+        >
           Confirm & Pay (Simulated)
-        </button> -->
+        </button>
         <p v-if="paymentError" class="error-message payment-process-error">
           {{ paymentError }}
         </p>
@@ -246,7 +245,7 @@ const formatDate = (dateString: string | undefined) => {
   color: white;
 }
 .status-pending {
-  background-color: #ffc107;
+  background-color: #ffc107; /* Yellow for pending */
   color: #333;
 }
 .status-completed {
@@ -314,6 +313,13 @@ const formatDate = (dateString: string | undefined) => {
 .paypal-button:hover:not(:disabled) {
   background-color: #005ea6;
 }
+.simulated-payment-btn {
+  background-color: #6c757d; /* A neutral gray for simulated */
+  color: white;
+}
+.simulated-payment-btn:hover:not(:disabled) {
+  background-color: #5a6268;
+}
 
 .completion-message {
   margin-top: 1.5rem;
@@ -338,7 +344,12 @@ const formatDate = (dateString: string | undefined) => {
   color: var(--vt-c-white);
   border: 1px solid var(--color-accent);
 }
+.action-button.secondary {
+  background-color: var(--color-background-mute);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
 .action-button:hover {
-  background-color: var(--color-accent-hover);
+  opacity: 0.9;
 }
 </style>
