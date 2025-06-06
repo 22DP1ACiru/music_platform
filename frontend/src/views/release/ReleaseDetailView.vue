@@ -8,6 +8,8 @@ import { useLibraryStore } from "@/stores/library";
 import { useCartStore } from "@/stores/cart";
 import type { ReleaseDetail, TrackInfoFromApi, PlayerTrackInfo } from "@/types";
 import BuyModal from "@/components/shop/BuyModal.vue";
+import TrackActionsDropdown from "@/components/track/TrackActionsDropdown.vue"; // Import new component
+import AddToPlaylistModal from "@/components/playlist/AddToPlaylistModal.vue"; // Import new modal
 
 const playerStore = usePlayerStore();
 const authStore = useAuthStore();
@@ -25,6 +27,10 @@ const addToLibraryError = ref<string | null>(null);
 
 const showBuyModal = ref(false);
 const modalError = ref<string | null>(null);
+
+// State for "Add to Playlist" modal
+const isAddToPlaylistModalVisible = ref(false);
+const trackForPlaylistModal = ref<TrackInfoFromApi | null>(null);
 
 const isOwner = computed(() => {
   if (!authStore.isLoggedIn || !release.value || !authStore.authUser) {
@@ -163,11 +169,22 @@ const handlePlayAllFromRelease = () => {
   playerStore.setQueueAndPlay(allReleasePlayerTracks, 0);
 };
 
-const handleAddTrackToQueue = (trackToAdd: TrackInfoFromApi) => {
+// Updated: This function is now triggered by TrackActionsDropdown
+const handleAddTrackToQueueFromDropdown = (trackToAdd: TrackInfoFromApi) => {
   if (!release.value) return;
   playerStore.addTrackToQueue(
     mapToPlayerTrackInfoUtil(trackToAdd, release.value)
   );
+};
+
+// New: Triggered by TrackActionsDropdown to open the modal
+const handleOpenAddToPlaylistModalFromDropdown = (track: TrackInfoFromApi) => {
+  if (!authStore.isLoggedIn) {
+    router.push({ name: "login", query: { redirect: route.fullPath } });
+    return;
+  }
+  trackForPlaylistModal.value = track;
+  isAddToPlaylistModalVisible.value = true;
 };
 
 const goToEditRelease = () => {
@@ -190,7 +207,7 @@ const handleAddFreeItemToLibrary = async () => {
 
   const success = await libraryStore.addItemToLibrary(release.value.id, "FREE");
   if (success) {
-    alert(`${release.value.title} has been added to your library!`);
+    // alert(`${release.value.title} has been added to your library!`); // Consider removing alert for better UX
   } else {
     addToLibraryError.value =
       libraryStore.error || "Failed to add free item to library.";
@@ -215,9 +232,7 @@ const openBuyModal = () => {
 };
 
 const handleModalItemAdded = () => {
-  alert(
-    `${release.value?.title} processed successfully! Check your cart or library.`
-  );
+  // alert(`${release.value?.title} processed successfully! Check your cart or library.`); // Consider removing alert
   if (authStore.isLoggedIn) {
     libraryStore.fetchLibraryItems();
     cartStore.fetchCart();
@@ -460,13 +475,16 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
             <span class="track-duration">{{
               formatDuration(track.duration_in_seconds)
             }}</span>
-            <button
-              @click="handleAddTrackToQueue(track)"
-              class="add-queue-button"
-              title="Add to Queue"
-            >
-              +
-            </button>
+            <!-- Replace existing + button with TrackActionsDropdown -->
+            <TrackActionsDropdown
+              :track="track"
+              :releaseData="release"
+              @add-to-queue="handleAddTrackToQueueFromDropdown(track)"
+              @open-add-to-playlist-modal="
+                handleOpenAddToPlaylistModalFromDropdown(track)
+              "
+              class="track-item-actions-dropdown"
+            />
           </li>
         </ol>
         <p v-else>No tracks found for this release.</p>
@@ -484,6 +502,20 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
       @close="showBuyModal = false"
       @item-added-to-cart="handleModalItemAdded"
       @error-adding-item="handleModalError"
+    />
+
+    <!-- Add to Playlist Modal -->
+    <AddToPlaylistModal
+      :is-visible="isAddToPlaylistModalVisible"
+      :track-to-add="trackForPlaylistModal"
+      @close="
+        isAddToPlaylistModalVisible = false;
+        trackForPlaylistModal = null;
+      "
+      @track-added="
+        isAddToPlaylistModalVisible = false;
+        trackForPlaylistModal = null;
+      "
     />
   </div>
 </template>
@@ -688,7 +720,7 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
   align-items: center;
   padding: 0.8rem 0.5rem;
   border-bottom: 1px solid var(--color-border-hover);
-  gap: 1rem;
+  gap: 1rem; /* Increased gap for more space */
   transition: background-color 0.2s ease;
 }
 .track-item:hover {
@@ -742,26 +774,13 @@ const formatDuration = (totalSeconds: number | null | undefined): string => {
 .track-duration {
   color: var(--color-text-light);
   font-size: 0.9em;
+  min-width: 40px; /* Give duration some space */
+  text-align: right;
 }
-.add-queue-button {
-  padding: 0.3em 0.7em;
-  font-size: 1em;
-  line-height: 1;
-  background-color: var(--color-background-soft);
-  border: 1px solid var(--color-border);
-  border-radius: 50%;
-  color: var(--color-text);
-  margin-left: 0.5rem;
-  cursor: pointer;
-  min-width: 28px;
-  min-height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.add-queue-button:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
+/* Styles for the new actions dropdown trigger */
+.track-item-actions-dropdown {
+  margin-left: auto; /* Push to the far right */
+  flex-shrink: 0; /* Prevent shrinking */
 }
 .error-message {
   color: red;

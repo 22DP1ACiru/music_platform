@@ -96,6 +96,11 @@ class OrderViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def _configure_paypal_sdk(self):
+        """
+        Helper method to configure the PayPal SDK with credentials from Django settings.
+        This ensures the SDK is initialized before making API calls to PayPal.
+        It's called at the beginning of methods interacting with PayPal.
+        """
         paypalrestsdk.configure({
             "mode": settings.PAYPAL_MODE,
             "client_id": settings.PAYPAL_CLIENT_ID,
@@ -104,9 +109,23 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='create-paypal-payment')
     def create_paypal_payment(self, request, pk=None):
+        """
+        API endpoint to initiate a PayPal payment for a specific order.
+        It creates a payment object with PayPal and returns an approval URL
+        to redirect the user for payment authorization.
+
+        Args:
+            request: The HTTP request object.
+            pk (str, optional): The primary key of the Order to process.
+
+        Returns:
+            Response: JSON response containing the PayPal approval URL and payment ID
+                      on success, or an error message on failure.
+        """
         order = self.get_object()
 
-        if order.status != Order.ORDER_STATUS_CHOICES[0][0]: # PENDING
+        # Validate that the order is in a 'PENDING' state before initiating payment.
+        if order.status != Order.ORDER_STATUS_CHOICES[0][0]:
             return Response(
                 {"detail": "Payment can only be initiated for PENDING orders."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -118,6 +137,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         else:
             effective_base_url = settings.FRONTEND_URL.strip('/')
 
+        # Define URLs where PayPal will redirect the user after payment attempt.
         success_url = f"{effective_base_url}/order/payment/success/?order_id={order.id}"
         cancel_url = f"{effective_base_url}/order/payment/cancel/?order_id={order.id}"
 
@@ -134,7 +154,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 "cancel_url": cancel_url
             },
             "transactions": [{
-                "item_list": {
+                "item_list": { # Details of items being purchased.
                     "items": [{
                         "name": f"Order #{order.id} from Vaultwave",
                         "sku": f"ORDER-{order.id}",
@@ -153,6 +173,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         }
 
         try:
+            # Attempt to create the payment on PayPal's servers.
             payment = paypalrestsdk.Payment(payment_data)
             if payment.create():
                 order.payment_gateway_id = payment.id # Store PayPal's payment ID

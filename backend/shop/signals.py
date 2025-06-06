@@ -1,9 +1,8 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
-from music.models import Release # Assuming music.models is the correct path
-from .models import Product # Use .models for local import
-# CURRENCY_CHOICES is not directly used here, but models.py might use constants.py
+from music.models import Release
+from .models import Product
 
 @receiver(post_save, sender=Release)
 def create_or_update_product_from_release(sender, instance: Release, created: bool, **kwargs):

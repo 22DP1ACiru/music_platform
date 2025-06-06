@@ -3,17 +3,20 @@ import { onMounted, computed, ref, onUnmounted, watch } from "vue";
 import { useLibraryStore, type LibraryItem } from "@/stores/library";
 import { usePlayerStore } from "@/stores/player";
 import { useAuthStore } from "@/stores/auth";
-import { RouterLink } from "vue-router";
+import { RouterLink, useRoute } from "vue-router"; // Added useRoute
 import axios from "axios";
 import type {
   TrackInfoFromApi,
-  // GeneratedDownloadStatus, // No longer directly used for notification logic here
   PlayerTrackInfo,
+  ReleaseDetail, // Added ReleaseDetail for releaseData prop
 } from "@/types";
+import TrackActionsDropdown from "@/components/track/TrackActionsDropdown.vue"; // Import new component
+import AddToPlaylistModal from "@/components/playlist/AddToPlaylistModal.vue"; // Import new modal
 
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
 const authStore = useAuthStore();
+const route = useRoute(); // For redirect query param
 
 const selectedFormats = ref<Record<number, string>>({});
 
@@ -21,16 +24,13 @@ const libraryItems = computed(() => libraryStore.libraryItems);
 const isLoading = computed(() => libraryStore.isLoading);
 const error = computed(() => libraryStore.error);
 
-// Watcher for activeDownloadRequests is still useful for reacting to store changes,
-// even without alerts. For example, if future UI elements depend on these changes.
-// For now, its direct utility is reduced without alerts, but keeping it doesn't harm.
-// If it causes performance issues with very large libraries, it could be re-evaluated.
+// State for "Add to Playlist" modal
+const isAddToPlaylistModalVisible = ref(false);
+const trackForPlaylistModal = ref<TrackInfoFromApi | null>(null);
+
 watch(
   () => libraryStore.activeDownloadRequests,
   (currentRequests, oldRequests) => {
-    // Logic related to notifications (alerts and notifiedItemsThisSession) has been removed.
-    // The UI will reactively update based on changes in libraryStore.activeDownloadRequests.
-    // This watcher could be used in the future if other side effects are needed when statuses change.
     console.log(
       "LibraryView: Active download requests updated in store.",
       currentRequests
@@ -42,8 +42,6 @@ watch(
 onMounted(async () => {
   if (authStore.isLoggedIn) {
     await libraryStore.fetchLibraryItems();
-
-    // Ensure polling is active for any ongoing downloads when the view mounts
     for (const itemIdStr in libraryStore.activeDownloadRequests) {
       const itemId = parseInt(itemIdStr);
       const request = libraryStore.activeDownloadRequests[itemId];
@@ -51,9 +49,6 @@ onMounted(async () => {
         request &&
         (request.status === "PENDING" || request.status === "PROCESSING")
       ) {
-        console.log(
-          `LibraryView onMount: Ensuring polling is active for item ${itemId}, download ${request.id} (Status: ${request.status})`
-        );
         libraryStore.startPollingForLibraryItem(itemId, request.id);
       }
     }
@@ -66,7 +61,7 @@ onUnmounted(() => {
 
 function mapToPlayerTrackInfoFromLibrary(
   apiTrack: TrackInfoFromApi,
-  releaseData: LibraryItem["release"]
+  releaseData: LibraryItem["release"] // This is ReleaseDetail
 ): PlayerTrackInfo {
   return {
     id: apiTrack.id,
@@ -105,6 +100,26 @@ const handlePlayTrackFromLibrary = (
   }
 };
 
+// Updated: This function is now triggered by TrackActionsDropdown
+const handleAddTrackToQueueFromDropdown = (
+  trackToAdd: TrackInfoFromApi,
+  libraryItemRelease: ReleaseDetail // Pass the release data for mapping
+) => {
+  playerStore.addTrackToQueue(
+    mapToPlayerTrackInfoFromLibrary(trackToAdd, libraryItemRelease)
+  );
+};
+
+// New: Triggered by TrackActionsDropdown to open the modal
+const handleOpenAddToPlaylistModalFromDropdown = (track: TrackInfoFromApi) => {
+  if (!authStore.isLoggedIn) {
+    router.push({ name: "login", query: { redirect: route.fullPath } });
+    return;
+  }
+  trackForPlaylistModal.value = track;
+  isAddToPlaylistModalVisible.value = true;
+};
+
 const handleAddReleaseToQueue = (libraryItem: LibraryItem) => {
   if (!libraryItem.release.tracks || libraryItem.release.tracks.length === 0)
     return;
@@ -113,7 +128,6 @@ const handleAddReleaseToQueue = (libraryItem: LibraryItem) => {
       mapToPlayerTrackInfoFromLibrary(apiTrack, libraryItem.release)
     );
   });
-  // Removed alert: alert(`${libraryItem.release.title} added to queue.`);
 };
 
 const handleRemoveItem = async (libraryItemId: number) => {
@@ -125,16 +139,11 @@ const handleRemoveItem = async (libraryItemId: number) => {
 const handleRequestDownloadForLibraryItem = async (libraryItemId: number) => {
   const format = selectedFormats.value[libraryItemId];
   if (!format) {
-    // Consider a less obtrusive way to show this error if alerts are fully removed
-    console.warn("Please select a download format.");
-    // For now, let's keep a console warning or a soft UI error if you add one
     libraryStore.activeDownloadErrors[libraryItemId] =
       "Please select a download format.";
     return;
   }
-  // Clear any previous error for this item before making a new request
   libraryStore.activeDownloadErrors[libraryItemId] = null;
-
   await libraryStore.requestLibraryItemDownload(libraryItemId, format);
 };
 
@@ -150,13 +159,11 @@ const triggerActualDownloadFromLibrary = async (libraryItemId: number) => {
           Authorization: `Bearer ${authStore.accessToken}`,
         },
       });
-
       const blob = new Blob([response.data], {
         type: response.headers["content-type"] || "application/zip",
       });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-
       const contentDisposition = response.headers["content-disposition"];
       const libraryEntry = libraryStore.libraryItems.find(
         (item) => item.id === libraryItemId
@@ -176,15 +183,12 @@ const triggerActualDownloadFromLibrary = async (libraryItemId: number) => {
       document.body.removeChild(link);
       URL.revokeObjectURL(link.href);
     } catch (err) {
-      console.error("Failed to download file blob from library:", err);
       libraryStore.activeDownloadErrors[libraryItemId] =
         "Could not download the file. Please try again.";
     } finally {
       libraryStore.isProcessingDownload[libraryItemId] = false;
     }
   } else {
-    // Consider a less obtrusive way to show this error if alerts are fully removed
-    console.warn("Download URL not available.");
     libraryStore.activeDownloadErrors[libraryItemId] =
       "Download URL not available. Please try requesting again.";
   }
@@ -353,17 +357,18 @@ watch(
               <span class="track-duration">{{
                 formatDuration(track.duration_in_seconds)
               }}</span>
-              <button
-                @click="
-                  playerStore.addTrackToQueue(
-                    mapToPlayerTrackInfoFromLibrary(track, item.release)
-                  )
+              <!-- Replace existing + button with TrackActionsDropdown -->
+              <TrackActionsDropdown
+                :track="track"
+                :releaseData="item.release"
+                @add-to-queue="
+                  handleAddTrackToQueueFromDropdown(track, item.release)
                 "
-                class="add-queue-button"
-                title="Add to Queue"
-              >
-                +
-              </button>
+                @open-add-to-playlist-modal="
+                  handleOpenAddToPlaylistModalFromDropdown(track)
+                "
+                class="track-item-actions-dropdown"
+              />
             </li>
           </ol>
         </details>
@@ -512,6 +517,19 @@ watch(
         </span>
       </div>
     </div>
+    <!-- Add to Playlist Modal Instance -->
+    <AddToPlaylistModal
+      :is-visible="isAddToPlaylistModalVisible"
+      :track-to-add="trackForPlaylistModal"
+      @close="
+        isAddToPlaylistModalVisible = false;
+        trackForPlaylistModal = null;
+      "
+      @track-added="
+        isAddToPlaylistModalVisible = false;
+        trackForPlaylistModal = null;
+      "
+    />
   </div>
 </template>
 
@@ -630,8 +648,8 @@ watch(
   background-color: var(--color-accent-hover);
 }
 .remove-item-btn {
-  margin-top: auto; /* Pushes to bottom if other actions wrap */
-  align-self: flex-start; /* Aligns with other buttons if they are on the same line */
+  margin-top: auto;
+  align-self: flex-start;
   background-color: var(--vt-c-red-soft);
   border-color: var(--vt-c-red-dark);
   color: var(--vt-c-red-dark);
@@ -644,9 +662,9 @@ watch(
 .purchased-item-note {
   font-size: 0.8em;
   color: var(--color-text-light);
-  margin-top: auto; /* Similar alignment to button */
+  margin-top: auto;
   align-self: flex-start;
-  padding: 0.4em 0.8em; /* Match button padding for alignment */
+  padding: 0.4em 0.8em;
   font-style: italic;
 }
 
@@ -662,7 +680,7 @@ watch(
 }
 .item-track-list {
   list-style: none;
-  padding-left: 0.5rem; /* Indent tracks slightly */
+  padding-left: 0.5rem;
   margin-top: 0.5rem;
 }
 .track-sub-item {
@@ -670,7 +688,7 @@ watch(
   align-items: center;
   padding: 0.5rem 0.2rem;
   border-top: 1px solid var(--color-border-hover);
-  gap: 0.5rem;
+  gap: 0.5rem; /* Adjusted gap */
 }
 .track-sub-item:first-child {
   border-top: none;
@@ -687,7 +705,7 @@ watch(
   font-size: 1em;
   cursor: pointer;
   padding: 0 0.2em;
-  width: 20px;
+  width: 20px; /* Ensure consistent width */
   text-align: center;
 }
 .track-number {
@@ -699,18 +717,20 @@ watch(
 .track-title {
   flex-grow: 1;
   font-size: 0.95em;
+  white-space: nowrap; /* Added to prevent title from wrapping */
+  overflow: hidden; /* Added to prevent title from wrapping */
+  text-overflow: ellipsis; /* Added to prevent title from wrapping */
 }
 .track-duration {
   color: var(--color-text-light);
   font-size: 0.9em;
+  min-width: 35px; /* Ensure duration has enough space */
+  text-align: right;
 }
-.add-queue-button {
-  font-size: 0.9em;
-  padding: 0.1em 0.4em;
-  border-radius: 50%;
-  line-height: 1;
-  min-width: 20px;
-  min-height: 20px;
+.track-item-actions-dropdown {
+  /* Style for the dropdown container in track item */
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .item-download-section {

@@ -29,7 +29,6 @@ SIGNIFICANT_LISTEN_DEBOUNCE_FACTOR = 1.0
 
 @shared_task(bind=True)
 def generate_release_download_zip(self, generated_download_id):
-    # ... (generate_release_download_zip code remains the same)
     try:
         download_request = GeneratedDownload.objects.select_related('release__artist').get(id=generated_download_id)
         download_request.status = GeneratedDownload.StatusChoices.PROCESSING
@@ -193,7 +192,6 @@ def generate_release_download_zip(self, generated_download_id):
 
 @shared_task(name="cleanup_generated_downloads")
 def cleanup_generated_downloads_task():
-    # ... (cleanup_generated_downloads_task code remains the same)
     now = timezone.now()
     items_to_cleanup = GeneratedDownload.objects.filter(
         Q(status=GeneratedDownload.StatusChoices.FAILED) |
@@ -278,16 +276,9 @@ def process_listen_segment_task(user_id, track_id, segment_start_timestamp_utc_i
         logger.info(f"Celery Task: Listen segment for track ID {track.id} (user: {user_instance.username}, duration: {segment_duration_ms}ms) was not duration-significant. Not creating ListenEvent record.")
         return
 
-    # Segment IS duration-significant. Now check debounce for this user and track.
     # Calculate dynamic debounce window based on track duration
     if track.duration_in_seconds and track.duration_in_seconds > 0 : # Ensure positive duration
         dynamic_debounce_seconds = track.duration_in_seconds * SIGNIFICANT_LISTEN_DEBOUNCE_FACTOR
-        # Ensure a minimum sensible debounce, e.g., 5 minutes, to avoid too frequent counts even for short songs if factor is small
-        # Or, just use the calculated value. For 1.0 factor, it is the track length.
-        # For extremely short tracks (e.g. 10s), this means debounce window is 10s.
-        # Let's add a MINIMUM debounce window for very short tracks if the factor results in too small a window.
-        # For example, if track_duration * factor < 60s, use 60s.
-        # For now, let's stick to the direct factor multiplication.
         if dynamic_debounce_seconds < 1: # Ensure it's at least 1 second
             dynamic_debounce_seconds = 1
 

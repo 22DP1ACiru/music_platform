@@ -32,7 +32,8 @@ const totalUnreadChatMessages = computed(() => {
   return unreadSum;
 });
 
-const isStaffUser = computed(() => authStore.isStaff); // Added computed for staff status
+const isStaffUser = computed(() => authStore.isStaff);
+const hasArtistProfile = computed(() => authStore.hasArtistProfile);
 
 const closeUserMenu = (event: MouseEvent) => {
   const target = event.target as HTMLElement;
@@ -81,6 +82,8 @@ watch(
       </template>
 
       <template v-else>
+        <!-- Artist/Release Creation Link REMOVED FROM HERE -->
+
         <RouterLink
           v-if="isStaffUser"
           :to="{ name: 'admin-dashboard' }"
@@ -136,6 +139,28 @@ watch(
               class="dropdown-item"
               >My Orders</RouterLink
             >
+
+            <!-- MOVED Artist/Release Creation Links HERE -->
+            <hr class="dropdown-divider" v-if="authStore.isLoggedIn" />
+            <RouterLink
+              v-if="!hasArtistProfile"
+              :to="{ name: 'artist-create' }"
+              @click="isUserMenuOpen = false"
+              class="dropdown-item action-dropdown-item"
+            >
+              Become an Artist
+            </RouterLink>
+            <RouterLink
+              v-if="hasArtistProfile"
+              :to="{ name: 'release-create' }"
+              @click="isUserMenuOpen = false"
+              class="dropdown-item action-dropdown-item"
+            >
+              Create Release
+            </RouterLink>
+            <hr class="dropdown-divider" v-if="authStore.isLoggedIn" />
+            <!-- END MOVED Links -->
+
             <button @click="handleLogout" class="dropdown-item logout-action">
               Logout
             </button>
@@ -194,10 +219,11 @@ watch(
   color: var(--color-heading);
 }
 
+/* .action-link style removed as it's no longer in the main navbar links */
+
 .admin-link {
-  /* Style for the admin link */
   font-weight: bold;
-  color: var(--vt-c-red); /* Example: Make it stand out */
+  color: var(--vt-c-red);
 }
 .admin-link:hover {
   color: var(--vt-c-red-dark);
@@ -273,6 +299,28 @@ watch(
   background-color: var(--color-background-mute);
   color: var(--color-heading);
 }
+
+.action-dropdown-item {
+  /* Style for "Become an Artist" / "Create Release" in dropdown */
+  font-weight: 500; /* Make it slightly bolder */
+  color: var(--color-accent); /* Use accent color */
+}
+.action-dropdown-item:hover {
+  background-color: var(
+    --color-accent-soft,
+    var(--color-background-mute)
+  ); /* Soft accent or default hover */
+  color: var(--color-accent-hover, var(--color-accent));
+}
+
+.dropdown-divider {
+  height: 1px;
+  margin: 0.5rem 0;
+  overflow: hidden;
+  background-color: var(--color-border);
+  border: none;
+}
+
 .dropdown-item.logout-action:hover {
   background-color: var(--vt-c-red-soft);
   color: var(--vt-c-red-dark);

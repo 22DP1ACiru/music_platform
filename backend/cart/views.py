@@ -45,16 +45,6 @@ class CartViewSet(viewsets.GenericViewSet): # Not ModelViewSet as we have custom
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # --- MODIFICATION: Comment out or relax this currency check for now ---
-            # if cart.items.exists():
-            #     current_cart_currency = cart.items.first().product.currency
-            #     if product.currency != current_cart_currency:
-            #         return Response(
-            #             {"detail": f"Cannot add item with currency {product.currency} to cart with currency {current_cart_currency}. Please clear cart or checkout existing items first."},
-            #             status=status.HTTP_400_BAD_REQUEST
-            #         )
-            # --- END MODIFICATION ---
-            
             cart_item, created = CartItem.objects.get_or_create(
                 cart=cart,
                 product=product,
@@ -66,9 +56,6 @@ class CartViewSet(viewsets.GenericViewSet): # Not ModelViewSet as we have custom
                     if cart_item.price_override != price_override:
                         cart_item.price_override = price_override
                         cart_item.save()
-                # No specific message needed if just re-fetching after "already in cart"
-                # The CartSerializer will return the current state.
-                # If you want to explicitly state it's already there, use a different status or detail message.
                 return Response(CartSerializer(cart, context={'request': request}).data, status=status.HTTP_200_OK) 
             
             return Response(CartSerializer(cart, context={'request': request}).data, status=status.HTTP_201_CREATED)
