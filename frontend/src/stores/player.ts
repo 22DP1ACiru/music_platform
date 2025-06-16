@@ -12,13 +12,14 @@ interface PersistedPlayerState {
   persistedVolume: number;
   persistedIsMuted: boolean;
   persistedRepeatMode: "none" | "one" | "all";
+  persistedIsShuffleActive?: boolean; // Added for shuffle persistence
 }
 
 const PLAYER_STORAGE_KEY = "vaultwavePlayerState";
 const MIN_LOGGABLE_SEGMENT_MS = 2000;
 
 export const usePlayerStore = defineStore("player", () => {
-  const authStore = useAuthStore(); // Initialize AuthStore
+  const authStore = useAuthStore();
 
   const loadInitialState = (): Partial<PersistedPlayerState> => {
     const storedStateRaw = localStorage.getItem(PLAYER_STORAGE_KEY);
@@ -38,6 +39,7 @@ export const usePlayerStore = defineStore("player", () => {
       persistedVolume: 0.75,
       persistedIsMuted: false,
       persistedRepeatMode: "none",
+      persistedIsShuffleActive: false,
     };
   };
 
@@ -62,6 +64,12 @@ export const usePlayerStore = defineStore("player", () => {
   const repeatMode = ref<"none" | "one" | "all">(
     initialState.persistedRepeatMode ?? "none"
   );
+
+  const isShuffleActive = ref<boolean>(
+    initialState.persistedIsShuffleActive ?? false
+  );
+  const shuffledPlayOrderIndices = ref<number[]>([]);
+  const currentShuffledOrderIndex = ref<number>(-1);
 
   const unmutedSegmentStartTime = ref<number | null>(null);
   const currentTrackIdForLogging = ref<number | null>(
@@ -93,12 +101,13 @@ export const usePlayerStore = defineStore("player", () => {
     );
   });
 
+  const canShuffle = computed(() => queue.value.length >= 3);
+
   function savePlayerStateToLocalStorage(
     options: { preservePersistedTime?: boolean } = {}
   ) {
     const { preservePersistedTime = false } = options;
     let timeToPersist = currentTime.value;
-
     if (preservePersistedTime) {
       const storedStateRaw = localStorage.getItem(PLAYER_STORAGE_KEY);
       if (storedStateRaw) {
@@ -114,11 +123,9 @@ export const usePlayerStore = defineStore("player", () => {
         timeToPersist = 0;
       }
     }
-
     if (!currentTrack.value) {
       timeToPersist = 0;
     }
-
     const stateToPersist: PersistedPlayerState = {
       persistedTrack: currentTrack.value,
       persistedQueue: queue.value,
@@ -127,8 +134,8 @@ export const usePlayerStore = defineStore("player", () => {
       persistedVolume: volumeInternal.value,
       persistedIsMuted: isMutedInternal.value,
       persistedRepeatMode: repeatMode.value,
+      persistedIsShuffleActive: isShuffleActive.value,
     };
-
     if (
       stateToPersist.persistedTrack === null &&
       stateToPersist.persistedQueue.length === 0
@@ -144,27 +151,12 @@ export const usePlayerStore = defineStore("player", () => {
     segmentStartTimeMs: number,
     segmentDurationMs: number
   ) {
-    // +++ ADD AUTHENTICATION CHECK +++
     if (!authStore.isLoggedIn) {
-      console.log(
-        "PlayerStore: User not logged in. Skipping listen segment log."
-      );
       return;
     }
-    // +++ END AUTHENTICATION CHECK +++
-
     if (segmentDurationMs < MIN_LOGGABLE_SEGMENT_MS) {
-      console.log(
-        `PlayerStore: Skipping log for short segment (${segmentDurationMs}ms, min: ${MIN_LOGGABLE_SEGMENT_MS}ms) for track ${trackId}`
-      );
       return;
     }
-
-    console.log(
-      `PlayerStore: Logging listen segment for track ${trackId}, start: ${new Date(
-        segmentStartTimeMs
-      ).toISOString()}, duration: ${segmentDurationMs}ms`
-    );
     try {
       await axios.post(`/tracks/${trackId}/log_listen_segment/`, {
         segment_start_timestamp_utc: new Date(segmentStartTimeMs).toISOString(),
@@ -181,11 +173,7 @@ export const usePlayerStore = defineStore("player", () => {
   function handleUnmutedSegmentEnd(reason: string) {
     if (unmutedSegmentStartTime.value && currentTrackIdForLogging.value) {
       const durationMs = Date.now() - unmutedSegmentStartTime.value;
-      console.log(
-        `PlayerStore: Unmuted segment ended for track ${currentTrackIdForLogging.value}. Reason: ${reason}. Duration: ${durationMs}ms.`
-      );
       logListenSegment(
-        // This will now check for auth internally
         currentTrackIdForLogging.value,
         unmutedSegmentStartTime.value,
         durationMs
@@ -200,15 +188,11 @@ export const usePlayerStore = defineStore("player", () => {
         "starting new segment (precautionary end in handleUnmutedSegmentStart)"
       );
     }
-
     if (
       isEffectivelyAudible.value &&
       currentTrack.value &&
       currentTrack.value.id
     ) {
-      console.log(
-        `PlayerStore: New unmuted segment started for track ${currentTrack.value.id}.`
-      );
       unmutedSegmentStartTime.value = Date.now();
       currentTrackIdForLogging.value = currentTrack.value.id;
     } else {
@@ -218,7 +202,6 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   function handleSeekOperation() {
-    console.log("PlayerStore: Seek operation detected.");
     if (unmutedSegmentStartTime.value) {
       handleUnmutedSegmentEnd("seek operation");
     }
@@ -239,7 +222,7 @@ export const usePlayerStore = defineStore("player", () => {
 
   watch(
     currentTrack,
-    (newTrack, oldTrack) => {
+    (newTrack) => {
       currentTrackIdForLogging.value = newTrack?.id || null;
       if (!newTrack && unmutedSegmentStartTime.value) {
         handleUnmutedSegmentEnd("track became null");
@@ -287,7 +270,7 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   watch(
-    [queue, currentQueueIndex],
+    [queue, currentQueueIndex, isShuffleActive],
     () => {
       savePlayerStateToLocalStorage({ preservePersistedTime: true });
     },
@@ -300,7 +283,6 @@ export const usePlayerStore = defineStore("player", () => {
 
   function _startPlayback(track: PlayerTrackInfo) {
     const oldTrackId = currentTrack.value?.id;
-
     if (
       oldTrackId &&
       oldTrackId !== track.id &&
@@ -316,21 +298,61 @@ export const usePlayerStore = defineStore("player", () => {
         `_startPlayback replaying same track: ${track.title}`
       );
     }
-
     currentTrack.value = track;
     currentTrackIdForLogging.value = track.id;
-
     if (
-      currentQueueIndex.value === -1 ||
-      queue.value[currentQueueIndex.value]?.id !== track.id
+      !isShuffleActive.value &&
+      (currentQueueIndex.value === -1 ||
+        queue.value[currentQueueIndex.value]?.id !== track.id)
+    ) {
+      currentTime.value = 0;
+    } else if (
+      isShuffleActive.value &&
+      (oldTrackId !== track.id || currentTime.value === duration.value)
     ) {
       currentTime.value = 0;
     }
     isPlaying.value = true;
-
     if (isEffectivelyAudible.value) {
       handleUnmutedSegmentStart();
     }
+  }
+
+  function _generateShuffledIndices(length: number): number[] {
+    const indices = Array.from({ length }, (_, i) => i);
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+    return indices;
+  }
+
+  function toggleShuffle() {
+    if (!canShuffle.value && !isShuffleActive.value) {
+      return;
+    }
+    isShuffleActive.value = !isShuffleActive.value;
+    if (isShuffleActive.value) {
+      shuffledPlayOrderIndices.value = _generateShuffledIndices(
+        queue.value.length
+      );
+      currentShuffledOrderIndex.value = -1;
+      if (currentTrack.value && currentQueueIndex.value !== -1) {
+        const currentTrackOriginalIndex = currentQueueIndex.value;
+        const newPosInShuffled = shuffledPlayOrderIndices.value.indexOf(
+          currentTrackOriginalIndex
+        );
+        if (newPosInShuffled !== -1) {
+          shuffledPlayOrderIndices.value.splice(newPosInShuffled, 1);
+          shuffledPlayOrderIndices.value.unshift(currentTrackOriginalIndex);
+          currentShuffledOrderIndex.value = 0; // Set after unshift
+        }
+      }
+    } else {
+      shuffledPlayOrderIndices.value = [];
+      currentShuffledOrderIndex.value = -1;
+    }
+    savePlayerStateToLocalStorage();
   }
 
   function setQueueAndPlay(tracks: PlayerTrackInfo[], startIndex: number = 0) {
@@ -339,34 +361,68 @@ export const usePlayerStore = defineStore("player", () => {
       return;
     }
     if (startIndex < 0 || startIndex >= tracks.length) startIndex = 0;
-
     queue.value = [...tracks];
     currentQueueIndex.value = startIndex;
+    if (isShuffleActive.value) {
+      if (queue.value.length < 3) {
+        isShuffleActive.value = false;
+        shuffledPlayOrderIndices.value = [];
+        currentShuffledOrderIndex.value = -1;
+      } else {
+        shuffledPlayOrderIndices.value = _generateShuffledIndices(
+          queue.value.length
+        );
+        const newPosInShuffled =
+          shuffledPlayOrderIndices.value.indexOf(startIndex);
+        if (newPosInShuffled !== -1) {
+          shuffledPlayOrderIndices.value.splice(newPosInShuffled, 1);
+          shuffledPlayOrderIndices.value.unshift(startIndex);
+        }
+        currentShuffledOrderIndex.value = 0;
+        _startPlayback(queue.value[shuffledPlayOrderIndices.value[0]]);
+        return;
+      }
+    }
     _startPlayback(queue.value[startIndex]);
   }
 
   function playTrack(track: PlayerTrackInfo) {
+    if (isShuffleActive.value) toggleShuffle();
     setQueueAndPlay([track], 0);
   }
 
   function pauseTrack() {
     isPlaying.value = false;
   }
-
   function resumeTrack() {
     if (currentTrack.value) isPlaying.value = true;
   }
 
   function togglePlayPause() {
     if (!currentTrack.value && queue.value.length > 0) {
-      const indexToPlay =
-        currentQueueIndex.value !== -1 &&
-        currentQueueIndex.value < queue.value.length
-          ? currentQueueIndex.value
-          : 0;
-      if (indexToPlay < queue.value.length) {
-        currentQueueIndex.value = indexToPlay;
-        _startPlayback(queue.value[indexToPlay]);
+      if (isShuffleActive.value) {
+        if (shuffledPlayOrderIndices.value.length > 0) {
+          currentShuffledOrderIndex.value =
+            (currentShuffledOrderIndex.value + 1) %
+            shuffledPlayOrderIndices.value.length;
+          const nextOriginalIndex =
+            shuffledPlayOrderIndices.value[currentShuffledOrderIndex.value];
+          currentQueueIndex.value = nextOriginalIndex;
+          _startPlayback(queue.value[nextOriginalIndex]);
+        } else {
+          toggleShuffle();
+          if (shuffledPlayOrderIndices.value.length > 0) playNextInQueue();
+        }
+      } else {
+        const indexToPlay =
+          currentQueueIndex.value !== -1 &&
+          currentQueueIndex.value < queue.value.length
+            ? currentQueueIndex.value
+            : 0;
+        if (indexToPlay < queue.value.length) {
+          currentQueueIndex.value = indexToPlay;
+          _startPlayback(queue.value[indexToPlay]);
+        }
       }
     } else if (currentTrack.value) {
       if (
@@ -391,73 +447,129 @@ export const usePlayerStore = defineStore("player", () => {
       resetTimes();
       return;
     }
-    let nextIndex = currentQueueIndex.value + 1;
-    if (nextIndex >= queue.value.length) {
-      if (repeatMode.value === "all") {
-        nextIndex = 0;
-      } else {
-        if (unmutedSegmentStartTime.value)
-          handleUnmutedSegmentEnd("queue ended, no repeat all");
-        isPlaying.value = false;
-        if (duration.value > 0) currentTime.value = duration.value;
-        return;
+
+    if (isShuffleActive.value) {
+      if (shuffledPlayOrderIndices.value.length === 0) {
+        toggleShuffle();
+        if (shuffledPlayOrderIndices.value.length === 0) {
+          isPlaying.value = false;
+          return;
+        }
       }
+      currentShuffledOrderIndex.value++;
+      if (
+        currentShuffledOrderIndex.value >= shuffledPlayOrderIndices.value.length
+      ) {
+        // If shuffle is on, and it's not repeat-one (which handleTrackEnd deals with), then loop the shuffle.
+        shuffledPlayOrderIndices.value = _generateShuffledIndices(
+          queue.value.length
+        );
+        currentShuffledOrderIndex.value = 0;
+        if (
+          queue.value.length > 1 &&
+          currentTrack.value &&
+          queue.value[shuffledPlayOrderIndices.value[0]].id ===
+            currentTrack.value.id
+        ) {
+          currentShuffledOrderIndex.value =
+            1 % shuffledPlayOrderIndices.value.length;
+        }
+      }
+      const nextOriginalIndex =
+        shuffledPlayOrderIndices.value[currentShuffledOrderIndex.value];
+      currentQueueIndex.value = nextOriginalIndex;
+      _startPlayback(queue.value[nextOriginalIndex]);
+    } else {
+      // Sequential playback
+      let nextIndex = currentQueueIndex.value + 1;
+      if (nextIndex >= queue.value.length) {
+        if (repeatMode.value === "all") {
+          nextIndex = 0;
+        } else {
+          // repeatMode is 'none' (or 'one' but handled by handleTrackEnd)
+          if (unmutedSegmentStartTime.value)
+            handleUnmutedSegmentEnd(
+              "sequential queue ended, no repeat all/one"
+            );
+          isPlaying.value = false;
+          if (duration.value > 0) currentTime.value = duration.value;
+          return;
+        }
+      }
+      currentQueueIndex.value = nextIndex;
+      _startPlayback(queue.value[nextIndex]);
     }
-    currentQueueIndex.value = nextIndex;
-    _startPlayback(queue.value[nextIndex]);
   }
 
   function playPreviousInQueue() {
     if (queue.value.length === 0) return;
-    if (
-      (currentTime.value > 3 && currentTrack.value) ||
-      (currentTime.value <= 3 &&
-        currentQueueIndex.value === 0 &&
-        repeatMode.value !== "all")
-    ) {
+    if (isShuffleActive.value) {
+      if (shuffledPlayOrderIndices.value.length === 0) {
+        toggleShuffle();
+        if (shuffledPlayOrderIndices.value.length === 0) return;
+      }
+      currentShuffledOrderIndex.value--;
+      if (currentShuffledOrderIndex.value < 0) {
+        // For shuffle, "previous" when at the start of a shuffled list can mean end of *current* shuffle, or re-shuffle.
+        // Let's go to the end of the current shuffled list to act like a loop.
+        currentShuffledOrderIndex.value =
+          shuffledPlayOrderIndices.value.length - 1;
+        // Or, if you want it to re-shuffle and pick a "random previous":
+        // shuffledPlayOrderIndices.value = _generateShuffledIndices(queue.value.length);
+        // currentShuffledOrderIndex.value = shuffledPlayOrderIndices.value.length -1;
+      }
+      const prevOriginalIndex =
+        shuffledPlayOrderIndices.value[currentShuffledOrderIndex.value];
+      currentQueueIndex.value = prevOriginalIndex;
+      _startPlayback(queue.value[prevOriginalIndex]);
+    } else {
       if (
-        unmutedSegmentStartTime.value &&
-        currentTrack.value &&
-        currentTime.value > 0
+        (currentTime.value > 3 && currentTrack.value) ||
+        (currentTime.value <= 3 &&
+          currentQueueIndex.value === 0 &&
+          repeatMode.value !== "all")
       ) {
-        handleUnmutedSegmentEnd("replay current track");
-      }
-      currentTime.value = 0;
-      if (currentTrack.value) {
-        isPlaying.value = true;
-        if (isEffectivelyAudible.value) handleUnmutedSegmentStart();
-      }
-      return;
-    }
-    let prevIndex = currentQueueIndex.value - 1;
-    if (prevIndex < 0) {
-      if (repeatMode.value === "all") {
-        prevIndex = queue.value.length - 1;
-      } else {
+        if (
+          unmutedSegmentStartTime.value &&
+          currentTrack.value &&
+          currentTime.value > 0
+        )
+          handleUnmutedSegmentEnd("replay current track");
+        currentTime.value = 0;
         if (currentTrack.value) {
-          if (
-            unmutedSegmentStartTime.value &&
-            currentTrack.value &&
-            currentTime.value > 0
-          ) {
-            handleUnmutedSegmentEnd("replay current track at start of queue");
-          }
-          currentTime.value = 0;
           isPlaying.value = true;
           if (isEffectivelyAudible.value) handleUnmutedSegmentStart();
         }
         return;
       }
+      let prevIndex = currentQueueIndex.value - 1;
+      if (prevIndex < 0) {
+        if (repeatMode.value === "all") {
+          prevIndex = queue.value.length - 1;
+        } else {
+          if (currentTrack.value) {
+            if (
+              unmutedSegmentStartTime.value &&
+              currentTrack.value &&
+              currentTime.value > 0
+            )
+              handleUnmutedSegmentEnd("replay current track at start of queue");
+            currentTime.value = 0;
+            isPlaying.value = true;
+            if (isEffectivelyAudible.value) handleUnmutedSegmentStart();
+          }
+          return;
+        }
+      }
+      currentQueueIndex.value = prevIndex;
+      _startPlayback(queue.value[prevIndex]);
     }
-    currentQueueIndex.value = prevIndex;
-    _startPlayback(queue.value[prevIndex]);
   }
 
   function handleTrackEnd() {
     if (currentTrack.value && unmutedSegmentStartTime.value) {
       handleUnmutedSegmentEnd("track naturally ended");
     }
-
     if (repeatMode.value === "one" && currentTrack.value) {
       currentTime.value = 0;
       _startPlayback(currentTrack.value);
@@ -472,7 +584,6 @@ export const usePlayerStore = defineStore("player", () => {
   function setDuration(time: number) {
     duration.value = time;
   }
-
   function toggleMute() {
     setMuted(!isMutedInternal.value);
   }
@@ -484,28 +595,66 @@ export const usePlayerStore = defineStore("player", () => {
     else if (repeatMode.value === "all") setRepeatMode("one");
     else setRepeatMode("none");
   }
-
   function resetTimes() {
     currentTime.value = 0;
     duration.value = 0;
   }
 
   function clearQueue() {
+    isShuffleActive.value = false;
+    shuffledPlayOrderIndices.value = [];
+    currentShuffledOrderIndex.value = -1;
     resetPlayerState(false);
   }
 
   function addTrackToQueue(track: PlayerTrackInfo) {
     const existingTrackIndex = queue.value.findIndex((t) => t.id === track.id);
-    if (existingTrackIndex === -1) queue.value.push(track);
-
+    if (existingTrackIndex === -1) {
+      queue.value.push(track);
+      if (isShuffleActive.value && queue.value.length >= 3) {
+        const currentPlayingOriginalIndex = currentTrack.value
+          ? queue.value.findIndex((t) => t.id === currentTrack.value!.id)
+          : -1;
+        shuffledPlayOrderIndices.value = _generateShuffledIndices(
+          queue.value.length
+        );
+        if (currentPlayingOriginalIndex !== -1) {
+          const newPos = shuffledPlayOrderIndices.value.indexOf(
+            currentPlayingOriginalIndex
+          );
+          if (newPos !== -1) {
+            shuffledPlayOrderIndices.value.splice(newPos, 1);
+            shuffledPlayOrderIndices.value.unshift(currentPlayingOriginalIndex);
+            currentShuffledOrderIndex.value = 0;
+          } else {
+            currentShuffledOrderIndex.value = -1;
+          }
+        } else {
+          currentShuffledOrderIndex.value = -1;
+        }
+      } else if (queue.value.length >= 3 && !isShuffleActive.value) {
+        /* Do nothing to shuffle state */
+      } else if (queue.value.length < 3 && isShuffleActive.value) {
+        isShuffleActive.value = false;
+        shuffledPlayOrderIndices.value = [];
+        currentShuffledOrderIndex.value = -1;
+      }
+    }
     if (!currentTrack.value && queue.value.length > 0) {
-      const playIndex = queue.value.findIndex((t) => t.id === track.id);
-      currentQueueIndex.value = playIndex !== -1 ? playIndex : 0;
-      _startPlayback(queue.value[currentQueueIndex.value]);
+      if (isShuffleActive.value && shuffledPlayOrderIndices.value.length > 0) {
+        currentShuffledOrderIndex.value = 0;
+        const originalIndex = shuffledPlayOrderIndices.value[0];
+        currentQueueIndex.value = originalIndex;
+        _startPlayback(queue.value[originalIndex]);
+      } else {
+        currentQueueIndex.value = queue.value.length - 1;
+        _startPlayback(queue.value[currentQueueIndex.value]);
+      }
     }
   }
 
   function playTrackFromQueueByIndex(index: number) {
+    if (isShuffleActive.value) toggleShuffle();
     if (index >= 0 && index < queue.value.length) {
       currentQueueIndex.value = index;
       _startPlayback(queue.value[index]);
@@ -514,37 +663,88 @@ export const usePlayerStore = defineStore("player", () => {
 
   function removeTrackFromQueue(indexToRemove: number) {
     if (indexToRemove < 0 || indexToRemove >= queue.value.length) return;
-    const isRemovingCurrentTrack = currentQueueIndex.value === indexToRemove;
+    const removedTrackOriginalId = queue.value[indexToRemove].id;
+    const isRemovingCurrentTrack =
+      currentTrack.value?.id === removedTrackOriginalId;
     const wasPlaying = isPlaying.value;
-
-    if (
-      isRemovingCurrentTrack &&
-      currentTrack.value &&
-      unmutedSegmentStartTime.value
-    ) {
+    if (isRemovingCurrentTrack && unmutedSegmentStartTime.value) {
       handleUnmutedSegmentEnd("removed current track from queue");
     }
-
     queue.value.splice(indexToRemove, 1);
-
-    if (queue.value.length === 0) {
-      resetPlayerState(false);
-      return;
-    }
-    if (isRemovingCurrentTrack) {
-      let newIndexToPlay = indexToRemove;
-      if (newIndexToPlay >= queue.value.length) newIndexToPlay = 0;
-      currentQueueIndex.value = newIndexToPlay;
-      if (wasPlaying) _startPlayback(queue.value[newIndexToPlay]);
-      else {
-        currentTrack.value = queue.value[newIndexToPlay];
-        currentTrackIdForLogging.value = currentTrack.value.id;
-        duration.value = currentTrack.value.duration || 0;
-        currentTime.value = 0;
+    if (isShuffleActive.value) {
+      if (queue.value.length < 3) {
+        isShuffleActive.value = false;
+        shuffledPlayOrderIndices.value = [];
+        currentShuffledOrderIndex.value = -1;
+        if (currentTrack.value) {
+          const newIdx = queue.value.findIndex(
+            (t) => t.id === currentTrack.value!.id
+          );
+          currentQueueIndex.value = newIdx;
+          if (newIdx === -1 && queue.value.length > 0) {
+            currentQueueIndex.value = 0;
+            if (wasPlaying) _startPlayback(queue.value[0]);
+            else currentTrack.value = queue.value[0];
+          } else if (newIdx === -1 && queue.value.length === 0) {
+            resetPlayerState(false);
+          }
+        } else if (queue.value.length > 0) {
+          currentQueueIndex.value = 0;
+        } else {
+          resetPlayerState(false);
+        }
+      } else {
+        const currentPlayingOriginalIndexAfterRemove = currentTrack.value
+          ? queue.value.findIndex((t) => t.id === currentTrack.value!.id)
+          : -1;
+        shuffledPlayOrderIndices.value = _generateShuffledIndices(
+          queue.value.length
+        );
+        if (currentPlayingOriginalIndexAfterRemove !== -1) {
+          const newPos = shuffledPlayOrderIndices.value.indexOf(
+            currentPlayingOriginalIndexAfterRemove
+          );
+          if (newPos !== -1) {
+            shuffledPlayOrderIndices.value.splice(newPos, 1);
+            shuffledPlayOrderIndices.value.unshift(
+              currentPlayingOriginalIndexAfterRemove
+            );
+            currentShuffledOrderIndex.value = 0;
+          } else {
+            currentShuffledOrderIndex.value = -1;
+          }
+        } else {
+          currentShuffledOrderIndex.value = -1;
+          if (isRemovingCurrentTrack && queue.value.length > 0 && wasPlaying) {
+            currentShuffledOrderIndex.value = 0;
+            const nextOriginalIndex = shuffledPlayOrderIndices.value[0];
+            currentQueueIndex.value = nextOriginalIndex;
+            _startPlayback(queue.value[nextOriginalIndex]);
+          } else if (isRemovingCurrentTrack && queue.value.length === 0) {
+            resetPlayerState(false);
+          }
+        }
       }
-    } else if (indexToRemove < currentQueueIndex.value) {
-      currentQueueIndex.value--;
+    } else {
+      if (isRemovingCurrentTrack) {
+        if (queue.value.length === 0) {
+          resetPlayerState(false);
+          return;
+        }
+        let newIndexToPlay = indexToRemove;
+        if (newIndexToPlay >= queue.value.length) newIndexToPlay = 0;
+        currentQueueIndex.value = newIndexToPlay;
+        if (wasPlaying) _startPlayback(queue.value[newIndexToPlay]);
+        else {
+          currentTrack.value = queue.value[newIndexToPlay];
+          duration.value = currentTrack.value.duration || 0;
+          currentTime.value = 0;
+        }
+      } else if (indexToRemove < currentQueueIndex.value) {
+        currentQueueIndex.value--;
+      }
     }
+    savePlayerStateToLocalStorage();
   }
 
   function resetPlayerState(fullReset = true) {
@@ -559,7 +759,9 @@ export const usePlayerStore = defineStore("player", () => {
     duration.value = 0;
     currentTrackIdForLogging.value = null;
     unmutedSegmentStartTime.value = null;
-
+    isShuffleActive.value = false;
+    shuffledPlayOrderIndices.value = [];
+    currentShuffledOrderIndex.value = -1;
     if (fullReset) {
       volumeInternal.value = 0.75;
       isMutedInternal.value = false;
@@ -571,7 +773,6 @@ export const usePlayerStore = defineStore("player", () => {
       localStorage.removeItem("playerMuted");
       localStorage.removeItem("playerRepeatMode");
     }
-    console.log("Player Store: State reset. Full reset:", fullReset);
   }
 
   window.addEventListener("beforeunload", () => {
@@ -599,6 +800,8 @@ export const usePlayerStore = defineStore("player", () => {
     currentTrackUrl,
     currentTrackCoverArtUrl,
     currentTrackDisplayInfo,
+    isShuffleActive,
+    canShuffle,
     playTrack,
     setQueueAndPlay,
     addTrackToQueue,
@@ -621,5 +824,6 @@ export const usePlayerStore = defineStore("player", () => {
     removeTrackFromQueue,
     resetPlayerState,
     handleSeekOperation,
+    toggleShuffle,
   };
 });

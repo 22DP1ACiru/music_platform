@@ -27,6 +27,10 @@ const formattedDuration = computed(() => formatTime(playerStore.duration));
 
 const hasActiveTrack = computed(() => !!playerStore.currentTrack);
 
+// Shuffle computed properties
+const canShuffle = computed(() => playerStore.canShuffle);
+const isShuffleActive = computed(() => playerStore.isShuffleActive);
+
 function formatTime(secs: number): string {
   if (isNaN(secs) || !isFinite(secs) || secs < 0) return "0:00";
   const minutes = Math.floor(secs / 60);
@@ -93,7 +97,6 @@ const tryToPlayAudio = () => {
 
   if (playerStore.isPlaying && audioPlayer.value.paused) {
     if (audioPlayer.value.readyState >= 3) {
-      // HAVE_FUTURE_DATA or more
       audioPlayer.value.play().catch((e) => {
         console.warn(
           "Play failed, possibly due to user interaction policy:",
@@ -103,10 +106,6 @@ const tryToPlayAudio = () => {
           playerStore.pauseTrack();
         }
       });
-    } else {
-      console.log("AudioPlayer: Waiting for more data to play...");
-      // It might be beneficial to listen for 'canplay' or 'canplaythrough' here if auto-play on load is desired
-      // and user interaction has already occurred.
     }
   } else if (!playerStore.isPlaying && !audioPlayer.value.paused) {
     audioPlayer.value.pause();
@@ -118,9 +117,7 @@ const onLoadedMetadata = () => {
     const currentAudioDuration = audioPlayer.value.duration;
     playerStore.setDuration(currentAudioDuration);
     syncAudioElementState();
-
     const persistedTimeFromStore = playerStore.currentTime;
-
     if (
       playerStore.currentTrackUrl === audioPlayer.value.src &&
       !isSeeking.value
@@ -157,19 +154,16 @@ const onCanPlay = () => {
     tryToPlayAudio();
   }
 };
-
 const onTimeUpdate = () => {
   if (audioPlayer.value && !isSeeking.value && hasActiveTrack.value)
     playerStore.setCurrentTime(audioPlayer.value.currentTime);
 };
-
 const onVolumeChange = () => {
   if (audioPlayer.value) {
-    // Update store only if it's different to avoid loops
     if (playerStore.volume !== audioPlayer.value.volume)
-      playerStore.setVolume(audioPlayer.value.volume); // Use the new setter
+      playerStore.setVolume(audioPlayer.value.volume);
     if (playerStore.isMuted !== audioPlayer.value.muted)
-      playerStore.setMuted(audioPlayer.value.muted); // Use the new setter
+      playerStore.setMuted(audioPlayer.value.muted);
   }
 };
 const onEnded = () => {
@@ -178,19 +172,16 @@ const onEnded = () => {
 
 watch(
   () => playerStore.currentTrackUrl,
-  (newUrl, oldUrl) => {
+  (newUrl) => {
     isTitleOverflowing.value = false;
     isArtistOverflowing.value = false;
-
     if (audioPlayer.value) {
       if (newUrl) {
         if (newUrl !== audioPlayer.value.src) {
           audioPlayer.value.src = newUrl;
-          syncAudioElementState(); // Sync before load
+          syncAudioElementState();
           audioPlayer.value.load();
-          // tryToPlayAudio will be called by onCanPlay if isPlaying is true
         } else if (playerStore.isPlaying && audioPlayer.value.paused) {
-          // If src is same, but player is paused and store wants play (e.g. replay)
           tryToPlayAudio();
         }
       } else {
@@ -216,7 +207,6 @@ watch(
     }
   }
 );
-
 watch(
   () => playerStore.currentTime,
   (newStoreTime) => {
@@ -228,18 +218,13 @@ watch(
     ) {
       const delta = Math.abs(audioPlayer.value.currentTime - newStoreTime);
       if (delta > 0.8) {
-        // Threshold to prevent jitter from minor discrepancies
         if (newStoreTime >= 0 && newStoreTime <= playerStore.duration) {
-          console.log(
-            `AudioPlayer: Syncing audio element time to store's ${newStoreTime} from ${audioPlayer.value.currentTime}`
-          );
           audioPlayer.value.currentTime = newStoreTime;
         }
       }
     }
   }
 );
-
 watch(
   () => playerStore.volume,
   (newVolume) => {
@@ -256,14 +241,11 @@ watch(
     }
   }
 );
-
 watch(
   hasActiveTrack,
   (newHasActiveTrack) => {
     if (!newHasActiveTrack) {
-      if (audioPlayer.value) {
-        audioPlayer.value.pause();
-      }
+      if (audioPlayer.value) audioPlayer.value.pause();
       playerStore.setDuration(0);
       playerStore.setCurrentTime(0);
     }
@@ -275,9 +257,8 @@ watch(
 const handleProgressSeek = (event: Event) => {
   if (audioPlayer.value && playerStore.duration > 0 && hasActiveTrack.value) {
     const newTime = parseFloat((event.target as HTMLInputElement).value);
-    audioPlayer.value.currentTime = newTime; // Directly set audio element's time
-    playerStore.setCurrentTime(newTime); // Update store's time
-    // playerStore.handleSeekOperation(); // Call new action for seek
+    audioPlayer.value.currentTime = newTime;
+    playerStore.setCurrentTime(newTime);
   }
 };
 const onSeekMouseDown = () => {
@@ -286,24 +267,23 @@ const onSeekMouseDown = () => {
 };
 const onSeekMouseUp = () => {
   if (isSeeking.value) {
-    // Only if a seek was in progress
     isSeeking.value = false;
     if (audioPlayer.value && hasActiveTrack.value) {
-      playerStore.handleSeekOperation(); // Call on mouseup to confirm seek end
-      tryToPlayAudio(); // Attempt to resume/start playback if applicable
+      playerStore.handleSeekOperation();
+      tryToPlayAudio();
     }
   }
 };
-
 const handleTogglePlayPauseClick = () => {
   if (!userHasInteracted.value) userHasInteracted.value = true;
-  if (hasActiveTrack.value) playerStore.togglePlayPause();
+  if (hasActiveTrack.value || playerStore.queue.length > 0)
+    playerStore.togglePlayPause(); // Allow play if queue has items even if no current track
 };
 const handleVolumeSeek = (event: Event) => {
   if (!userHasInteracted.value) userHasInteracted.value = true;
   const newVolume = parseFloat((event.target as HTMLInputElement).value);
-  playerStore.setVolume(newVolume); // Use the setter
-  if (newVolume > 0 && playerStore.isMuted) playerStore.setMuted(false); // Use the setter
+  playerStore.setVolume(newVolume);
+  if (newVolume > 0 && playerStore.isMuted) playerStore.setMuted(false);
 };
 const toggleQueuePopup = () => (showQueuePopup.value = !showQueuePopup.value);
 
@@ -314,21 +294,14 @@ onMounted(() => {
     if (playerStore.currentTrackUrl) {
       if (audioPlayer.value.src !== playerStore.currentTrackUrl) {
         audioPlayer.value.src = playerStore.currentTrackUrl;
-        // No explicit audioPlayer.value.load() here; let onloadedmetadata handle it if src changes.
-        // Or rely on the watcher for currentTrackUrl
       } else {
-        // Src is same, check if metadata is loaded (e.g. on page refresh with persisted state)
-        if (audioPlayer.value.readyState >= 1) {
-          // HAVE_METADATA
-          onLoadedMetadata(); // Manually call if metadata might already be there
-        }
+        if (audioPlayer.value.readyState >= 1) onLoadedMetadata();
       }
     } else {
       playerStore.setDuration(0);
       playerStore.setCurrentTime(0);
     }
   }
-
   if (titleContainerRef.value && artistContainerRef.value) {
     resizeObserver = new ResizeObserver(checkTextOverflow);
     if (titleContainerRef.value)
@@ -338,7 +311,6 @@ onMounted(() => {
   }
   checkTextOverflow();
 });
-
 onUnmounted(() => {
   if (resizeObserver) {
     if (titleContainerRef.value)
@@ -357,6 +329,7 @@ const repeatModeIcon = computed(() =>
     : "➡️"
 );
 const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
+const shuffleButtonIcon = "🔀"; // Icon for shuffle
 </script>
 
 <template>
@@ -385,7 +358,6 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
           class="cover-art-small"
         />
         <div v-else class="cover-art-small placeholder"></div>
-
         <div class="track-details">
           <template v-if="hasActiveTrack">
             <div class="title-container" ref="titleContainerRef">
@@ -439,7 +411,7 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
         <button
           @click="playerStore.playPreviousInQueue()"
           title="Previous"
-          :disabled="!hasActiveTrack"
+          :disabled="!hasActiveTrack && playerStore.queue.length === 0"
         >
           ⏮
         </button>
@@ -447,14 +419,14 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
           @click="handleTogglePlayPauseClick"
           class="play-pause-btn"
           :title="playerStore.isPlaying ? 'Pause' : 'Play'"
-          :disabled="!hasActiveTrack"
+          :disabled="!hasActiveTrack && playerStore.queue.length === 0"
         >
           {{ playerStore.isPlaying && hasActiveTrack ? "❚❚" : "►" }}
         </button>
         <button
           @click="playerStore.playNextInQueue()"
           title="Next"
-          :disabled="!hasActiveTrack"
+          :disabled="!hasActiveTrack && playerStore.queue.length === 0"
         >
           ⏭
         </button>
@@ -497,11 +469,21 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
           :value="playerStore.isMuted ? 0 : playerStore.volume"
           @input="handleVolumeSeek"
         />
+        <!-- Shuffle Button -->
+        <button
+          @click="playerStore.toggleShuffle()"
+          :title="isShuffleActive ? 'Turn Shuffle Off' : 'Turn Shuffle On'"
+          class="shuffle-button"
+          :class="{ active: isShuffleActive }"
+          :disabled="!canShuffle && !isShuffleActive"
+        >
+          {{ shuffleButtonIcon }}
+        </button>
         <button
           @click="playerStore.cycleRepeatMode()"
           :title="`Repeat: ${playerStore.repeatMode}`"
           class="repeat-button"
-          :disabled="!hasActiveTrack"
+          :disabled="!hasActiveTrack && playerStore.queue.length === 0"
         >
           {{ repeatModeIcon }}
         </button>
@@ -759,14 +741,16 @@ const queueButtonIcon = computed(() => (showQueuePopup.value ? "✕" : "☰"));
   color: var(--c-player-controls-disabled, #aaa);
   cursor: not-allowed;
 }
+/* Make active buttons (like shuffle, repeat, queue) use the accent color */
+.player-controls-side button.active {
+  color: var(--c-player-controls-side-icon-hover, #007bff);
+}
 
 .repeat-button,
-.queue-toggle-button {
+.queue-toggle-button,
+.shuffle-button {
   min-width: 2em;
   text-align: center;
-}
-.queue-toggle-button.active {
-  color: var(--c-player-controls-side-icon-hover, #007bff);
 }
 
 .volume-slider {

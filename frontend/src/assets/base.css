@@ -40,6 +40,8 @@
 
   --color-accent: #007bff; /* Example accent color (buttons, active states) */
   --color-accent-hover: #0056b3;
+  --color-accent-soft: #e6f2ff; /* A softer version of accent for backgrounds */
+  --color-accent-dark: #0056b3; /* A darker version for text on light accent */
 
   --vt-c-red: #ff3b30;
   --vt-c-red-dark: #d92c20;
@@ -106,6 +108,9 @@
       235,
       0.44
     ); /* Lighter for dark mode secondary text */
+
+    --color-accent-soft: #2a3f5c; /* Darker soft accent for dark mode */
+    --color-accent-dark: #99ccff; /* Lighter accent text on dark accent for dark mode */
 
     /* === Audio Player Specific Variables (Dark Theme) === */
     --c-player-bg: #1e1e1e; /* Darker background for player */
@@ -185,6 +190,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-wrap: break-word;
+  overflow-x: hidden; /* Added to prevent horizontal scrollbar globally */
 }
 
 blockquote,
@@ -211,7 +217,7 @@ h5,
 h6 {
   font-size: inherit;
   font-weight: inherit;
-  color: var(--color-heading); /* Ensure headings use the heading color */
+  color: var(--color-heading);
 }
 
 a,
@@ -227,8 +233,8 @@ textarea {
 }
 
 a {
-  color: var(--color-link); /* Use semantic link color */
-  text-decoration: none; /* Default no underline, can add on hover */
+  color: var(--color-link);
+  text-decoration: none;
 }
 a:hover {
   color: var(--color-link-hover);
@@ -280,22 +286,20 @@ input,
 optgroup,
 select,
 textarea {
-  border: 1px solid var(--color-border); /* Default border for form elements */
-  padding: 0.5em 0.8em; /* Default padding */
+  border: 1px solid var(--color-border);
+  padding: 0.5em 0.8em;
   line-height: inherit;
   color: inherit;
-  background-color: var(--color-background-soft); /* Default background */
-  border-radius: 4px; /* Default border radius */
+  background-color: var(--color-background-soft);
+  border-radius: 4px;
 }
 
 button {
-  background-color: var(
-    --color-accent
-  ); /* Buttons use accent color by default */
-  color: var(--vt-c-white); /* Text on accent buttons often white */
+  background-color: var(--color-accent);
+  color: var(--vt-c-white);
   border: 1px solid var(--color-accent);
   cursor: pointer;
-  padding: 0.6em 1.2em; /* Slightly larger padding for primary buttons */
+  padding: 0.6em 1.2em;
 }
 button:hover {
   background-color: var(--color-accent-hover);
@@ -304,7 +308,7 @@ button:hover {
 
 button:focus,
 button:focus-visible {
-  outline: 2px solid var(--color-accent); /* Focus ring with accent color */
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 button:focus:not(:focus-visible) {
@@ -359,7 +363,7 @@ select {
 fieldset {
   margin: 0;
   padding: 0;
-  border: none; /* Remove default fieldset border if not desired */
+  border: none;
 }
 
 .visually-hidden {
