@@ -10,8 +10,8 @@ from music.views import (
     TrackViewSet, CommentViewSet, HighlightViewSet, 
     stream_track_audio, GeneratedDownloadStatusViewSet
 )
-# Remove: from interactions.views import FollowViewSet 
-from notifications.views import NotificationViewSet
+# from interactions.views import FollowViewSet # interactions.urls will be included directly
+from notifications.views import NotificationViewSet # New import
 
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -26,16 +26,13 @@ router.register(r'users', UserViewSet, basename='user')
 router.register(r'profiles', UserProfileViewSet, basename='userprofile')
 
 router.register(r'genres', GenreViewSet)
-router.register(r'artists', ArtistViewSet) # Keep ArtistViewSet for artist details, etc.
+router.register(r'artists', ArtistViewSet) 
 router.register(r'releases', ReleaseViewSet, basename='release') 
 router.register(r'tracks', TrackViewSet, basename='track') 
 router.register(r'comments', CommentViewSet)
 router.register(r'highlights', HighlightViewSet, basename='highlight') 
 
 router.register(r'generated-download-status', GeneratedDownloadStatusViewSet, basename='generated-download-status')
-
-# Remove direct registration of FollowViewSet from here:
-# router.register(r'interactions', FollowViewSet, basename='interaction-follow') 
 
 router.register(r'notifications', NotificationViewSet, basename='notification')
 
@@ -45,15 +42,15 @@ urlpatterns = [
     
     path('api/', include(router.urls)), 
     
-    # Include app-specific routers under their own namespace
     path('api/playlists/', include('playlists.urls')), 
     path('api/library/', include('library.urls')),
     path('api/cart/', include('cart.urls')),
-    path('api/music/', include('music.urls')), # For non-router music URLs like generated-download-file
+    path('api/music/', include('music.urls')), 
     path('api/tracks/<int:track_id>/stream/', stream_track_audio, name='track-stream'),
     
     path('api/chat/', include('chat.urls')), 
-    path('api/interactions/', include('interactions.urls')), # Add this line
+    path('api/interactions/', include('interactions.urls')), 
+    path('api/stats/', include('stats.urls')), # ADD THIS LINE FOR STATS APP
 
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')), 
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),

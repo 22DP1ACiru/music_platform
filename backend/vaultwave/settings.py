@@ -100,8 +100,9 @@ INSTALLED_APPS = [
     'chat',
     'library',
     'cart',
-    'interactions', # New app
-    'notifications', # New app
+    'interactions',
+    'notifications',
+    'stats', # New app for statistics
     'vaultwave'
 ]
 
