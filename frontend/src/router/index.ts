@@ -48,10 +48,22 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: "/profile/listening-habits", // New route for user listening habits
+      name: "user-listening-habits",
+      component: () => import("../views/profile/UserListeningHabitsView.vue"),
+      meta: { requiresAuth: true },
+    },
+    {
       path: "/artist/create",
       name: "artist-create",
       component: () => import("../views/artist/CreateArtistView.vue"),
       meta: { requiresAuth: true, requiresArtistCreation: true },
+    },
+    {
+      path: "/artist/dashboard",
+      name: "artist-dashboard",
+      component: () => import("../views/artist/ArtistDashboardView.vue"),
+      meta: { requiresAuth: true, requiresArtist: true },
     },
     {
       path: "/release/create",
@@ -148,7 +160,7 @@ const router = createRouter({
             import("../views/admin/highlights/AdminHighlightCreateView.vue"),
         },
         {
-          path: "highlights/edit/:highlightId", // Use highlightId to avoid conflict with other :id
+          path: "highlights/edit/:highlightId",
           name: "admin-highlight-edit",
           component: () =>
             import("../views/admin/highlights/AdminHighlightEditView.vue"),
@@ -163,11 +175,11 @@ const router = createRouter({
       component: () => import("../views/order/PaymentSuccessView.vue"),
       props: (route) => ({
         order_id: route.query.order_id,
-        paypal_payment_id: route.query.paypal_payment_id, // If PayPal adds this (check actual redirect)
-        token: route.query.token, // PayPal often adds a token
-        PayerID: route.query.PayerID, // And a PayerID
+        paypal_payment_id: route.query.paypal_payment_id,
+        token: route.query.token,
+        PayerID: route.query.PayerID,
       }),
-      meta: { requiresAuth: true }, // User should be logged in to see their order status
+      meta: { requiresAuth: true },
     },
     {
       path: "/order/payment/cancel",
@@ -177,7 +189,7 @@ const router = createRouter({
         order_id: route.query.order_id,
         token: route.query.token,
       }),
-      meta: { requiresAuth: true }, // User should be logged in
+      meta: { requiresAuth: true },
     },
   ],
 });
@@ -187,20 +199,20 @@ router.beforeEach(async (to, _from, next) => {
 
   if (
     (!authStore.isLoggedIn && localStorage.getItem("accessToken")) ||
-    (authStore.isLoggedIn && !authStore.authUser) // Check if user object is missing despite token
+    (authStore.isLoggedIn && !authStore.authUser)
   ) {
     if (!authStore.authLoading) {
       await authStore.tryAutoLogin(router);
     }
   }
 
-  // Wait for any ongoing authentication process to complete
   while (authStore.authLoading) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 
   const isLoggedIn = authStore.isLoggedIn;
-  const isStaffUser = authStore.isStaff; // Use the computed property from store
+  const isStaffUser = authStore.isStaff;
+  const hasArtistProfile = authStore.hasArtistProfile;
 
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth);
   const requiresStaff = to.matched.some((record) => record.meta.requiresStaff);
@@ -221,11 +233,11 @@ router.beforeEach(async (to, _from, next) => {
     next({ name: "login", query: { redirect: to.fullPath } });
   } else if (requiresStaff && !isStaffUser) {
     alert("You do not have permission to access this page.");
-    next({ name: "home" }); // Or some other appropriate redirect
-  } else if (requiresArtist && !authStore.hasArtistProfile) {
+    next({ name: "home" });
+  } else if (requiresArtist && !hasArtistProfile) {
     alert("You need an artist profile to access this page.");
-    next({ name: "profile" });
-  } else if (requiresArtistCreation && authStore.hasArtistProfile) {
+    next({ name: "artist-create" });
+  } else if (requiresArtistCreation && hasArtistProfile) {
     alert("You already have an artist profile.");
     next({
       name: "artist-detail",

@@ -82,8 +82,6 @@ watch(
       </template>
 
       <template v-else>
-        <!-- Artist/Release Creation Link REMOVED FROM HERE -->
-
         <RouterLink
           v-if="isStaffUser"
           :to="{ name: 'admin-dashboard' }"
@@ -140,26 +138,32 @@ watch(
               >My Orders</RouterLink
             >
 
-            <!-- MOVED Artist/Release Creation Links HERE -->
             <hr class="dropdown-divider" v-if="authStore.isLoggedIn" />
+            <template v-if="hasArtistProfile">
+              <RouterLink
+                :to="{ name: 'artist-dashboard' }"
+                @click="isUserMenuOpen = false"
+                class="dropdown-item action-dropdown-item"
+              >
+                Artist Dashboard
+              </RouterLink>
+              <RouterLink
+                :to="{ name: 'release-create' }"
+                @click="isUserMenuOpen = false"
+                class="dropdown-item action-dropdown-item"
+              >
+                Create Release
+              </RouterLink>
+            </template>
             <RouterLink
-              v-if="!hasArtistProfile"
+              v-else
               :to="{ name: 'artist-create' }"
               @click="isUserMenuOpen = false"
               class="dropdown-item action-dropdown-item"
             >
               Become an Artist
             </RouterLink>
-            <RouterLink
-              v-if="hasArtistProfile"
-              :to="{ name: 'release-create' }"
-              @click="isUserMenuOpen = false"
-              class="dropdown-item action-dropdown-item"
-            >
-              Create Release
-            </RouterLink>
             <hr class="dropdown-divider" v-if="authStore.isLoggedIn" />
-            <!-- END MOVED Links -->
 
             <button @click="handleLogout" class="dropdown-item logout-action">
               Logout
@@ -218,8 +222,6 @@ watch(
   font-weight: bold;
   color: var(--color-heading);
 }
-
-/* .action-link style removed as it's no longer in the main navbar links */
 
 .admin-link {
   font-weight: bold;
@@ -301,15 +303,11 @@ watch(
 }
 
 .action-dropdown-item {
-  /* Style for "Become an Artist" / "Create Release" in dropdown */
-  font-weight: 500; /* Make it slightly bolder */
-  color: var(--color-accent); /* Use accent color */
+  font-weight: 500;
+  color: var(--color-accent);
 }
 .action-dropdown-item:hover {
-  background-color: var(
-    --color-accent-soft,
-    var(--color-background-mute)
-  ); /* Soft accent or default hover */
+  background-color: var(--color-accent-soft, var(--color-background-mute));
   color: var(--color-accent-hover, var(--color-accent));
 }
 

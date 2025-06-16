@@ -1,34 +1,29 @@
+// frontend/src/views/profile/ProfileView.vue
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from "vue";
 import { useAuthStore } from "@/stores/auth";
-import {
-  useRouter,
-  RouterLink,
-  useRoute, // Added useRoute
-} from "vue-router";
-import ProfileEditForm from "@/components/profile/ProfileEditForm.vue"; // Updated import path
+import { useRouter, RouterLink, useRoute } from "vue-router";
+import ProfileEditForm from "@/components/profile/ProfileEditForm.vue";
 import { useChatStore } from "@/stores/chat";
-import ChooseSenderIdentityModal from "@/components/chat/ChooseSenderIdentityModal.vue"; // Path is already correct
-import axios from "axios"; // Import axios if fetching other users' profiles
+import ChooseSenderIdentityModal from "@/components/chat/ChooseSenderIdentityModal.vue";
+import axios from "axios";
 
-// Hypothetical prop if this view could show other users' profiles
 const props = defineProps<{
-  userIdToShow?: string | null; // ID of the profile being viewed, if not 'me'
+  userIdToShow?: string | null;
 }>();
 
 const authStore = useAuthStore();
 const chatStore = useChatStore();
 const router = useRouter();
-const route = useRoute(); // For current route info
+const route = useRoute();
 
 const isEditing = ref(false);
 const editError = ref<string | null>(null);
 const showIdentityModal = ref(false);
 
-// This will hold the profile data being displayed (either 'me' or another user)
-const displayedUser = ref<ReturnType<typeof authStore.authUser>>(null); // Using the type from authUser
+const displayedUser = ref<ReturnType<typeof authStore.authUser>>(null);
 const displayedProfile =
-  ref<ReturnType<typeof authStore.authUser>["value"]["profile"]>(null); // Using the type from authUser.profile
+  ref<ReturnType<typeof authStore.authUser>["value"]["profile"]>(null);
 
 const isLoadingDisplayedProfile = ref(false);
 const errorLoadingDisplayedProfile = ref<string | null>(null);
@@ -44,7 +39,6 @@ async function fetchProfileData() {
     : authStore.authUser?.id;
 
   if (!targetUserId) {
-    // If not logged in and no userIdToShow, can't load anything
     if (!authStore.isLoggedIn) router.push({ name: "login" });
     errorLoadingDisplayedProfile.value = "No user to display.";
     return;
@@ -54,45 +48,27 @@ async function fetchProfileData() {
   errorLoadingDisplayedProfile.value = null;
 
   if (targetUserId === authStore.authUser?.id) {
-    // Fetching own profile (or ensuring it's loaded from store)
     if (!authStore.authUser || !authStore.authUser.profile) {
-      await authStore.fetchUser(); // Ensure full user data is loaded
+      await authStore.fetchUser();
     }
     displayedUser.value = authStore.authUser;
     displayedProfile.value = authStore.authUser?.profile || null;
   } else {
-    // Fetching another user's profile
     try {
-      // You'll need an endpoint like /api/users/:id/profile-details/ or similar
-      // that returns both User (username, id) and UserProfile data.
-      // For now, let's assume two separate calls or a combined one.
-      const userRes = await axios.get(`/users/${targetUserId}/`); // Basic user data
-      // This needs to be a publicly accessible profile endpoint
-      // Assuming /profiles/<user_id>/ would be a protected UserProfileViewSet detail
-      // Let's hypothesize a non-protected endpoint or adjust this part.
-      // For now, I'll assume `userRes.data.profile` contains the profile if it's nested.
-      // If UserSerializer in backend returns nested profile, this changes.
-      // If not, you'll need a separate public profile endpoint.
-      // The original `UserProfileViewSet` had `/profiles/me/` but not `/profiles/<id>/` for public.
-      // This part might need backend changes to work for other users.
-      // For now, displaying only username if it's not 'me' and profile cannot be fetched.
+      const userRes = await axios.get(`/users/${targetUserId}/`);
       if (userRes.data.profile) {
         displayedProfile.value = userRes.data.profile;
       } else {
-        // Attempting to fetch profile specifically for this user ID if not nested
-        // This assumes your UserProfileViewSet can fetch by user ID and is public or allows it
-        // For simplicity, let's assume the /users/<id>/ endpoint already includes the profile for now
-        // as per the UserSerializer in backend/users/serializers.py
         const profileResponse = await axios.get(
           `/profiles/?user_id=${targetUserId}`
-        ); // Placeholder
+        );
         if (profileResponse.data && profileResponse.data.length > 0) {
-          displayedProfile.value = profileResponse.data[0]; // Assuming it returns a list
+          displayedProfile.value = profileResponse.data[0];
         } else {
-          displayedProfile.value = null; // No profile found
+          displayedProfile.value = null;
         }
       }
-      displayedUser.value = userRes.data; // User data from userRes
+      displayedUser.value = userRes.data;
     } catch (err) {
       console.error("Failed to fetch public profile data:", err);
       errorLoadingDisplayedProfile.value =
@@ -109,7 +85,6 @@ const onProfileUpdate = async (updatedProfileDataFromForm: any) => {
   isEditing.value = false;
   editError.value = null;
   alert("Profile updated successfully!");
-  // Re-fetch displayed profile if it was 'me'
   if (isMyOwnProfile.value) {
     displayedProfile.value = authStore.authUser?.profile || null;
   }
@@ -121,47 +96,38 @@ const handleUpdateError = (errorMessage: string | null) => {
 
 const proceedWithChatToUser = (chosenSenderIdentity: "USER" | "ARTIST") => {
   if (!displayedUser.value || !authStore.authUser) return;
-
   const senderArtistProfileId =
     chosenSenderIdentity === "ARTIST" ? authStore.artistProfileId : null;
-
   const existingConversation = chatStore.conversations.find((convo) => {
     const participantIds = convo.participants.map((p) => p.id);
     const involvesMe = participantIds.includes(authStore.authUser!.id);
     const involvesTargetUser = participantIds.includes(displayedUser.value!.id);
-
     if (!(involvesMe && involvesTargetUser && participantIds.length === 2))
       return false;
-
-    // Check if I (with chosenSenderIdentity) initiated to this user
     if (
       convo.initiator_user?.id === authStore.authUser!.id &&
       convo.initiator_identity_type === chosenSenderIdentity &&
       (chosenSenderIdentity === "ARTIST"
         ? convo.initiator_artist_profile_details?.id === senderArtistProfileId
         : true) &&
-      !convo.related_artist_recipient_details && // Target is a USER
+      !convo.related_artist_recipient_details &&
       convo.participants.some(
         (p) =>
           p.id === displayedUser.value!.id && p.id !== authStore.authUser!.id
-      ) // Target user is the other participant
-    ) {
+      )
+    )
       return true;
-    }
-    // Check if this user initiated to me (with chosenSenderIdentity)
     if (
-      convo.initiator_user?.id === displayedUser.value!.id && // Target user initiated
-      convo.initiator_identity_type === "USER" && // As user
-      !convo.related_artist_recipient_details && // To me as user (not my artist profile)
+      convo.initiator_user?.id === displayedUser.value!.id &&
+      convo.initiator_identity_type === "USER" &&
+      !convo.related_artist_recipient_details &&
       (chosenSenderIdentity === "USER"
-        ? !convo.related_artist_recipient_details // I am replying as USER to a user-to-user DM
-        : convo.related_artist_recipient_details?.id === senderArtistProfileId) // OR I am replying as ARTIST to a User-to-Artist(me) DM
-    ) {
+        ? !convo.related_artist_recipient_details
+        : convo.related_artist_recipient_details?.id === senderArtistProfileId)
+    )
       return true;
-    }
     return false;
   });
-
   if (existingConversation) {
     router.push({
       name: "chat-conversation",
@@ -193,7 +159,6 @@ const startChatWithDisplayedUser = () => {
     alert("You cannot send a message to yourself.");
     return;
   }
-
   if (authStore.hasArtistProfile) {
     showIdentityModal.value = true;
   } else {
@@ -220,7 +185,6 @@ watch(
   () => authStore.authUser,
   (newUser, oldUser) => {
     if (isMyOwnProfile.value || !props.userIdToShow) {
-      // If viewing own profile, or if no specific user ID prop
       if (newUser && (!oldUser || newUser.profile !== oldUser.profile)) {
         displayedUser.value = newUser;
         displayedProfile.value = newUser.profile || null;
@@ -249,7 +213,7 @@ watch(
       <div class="profile-details">
         <img
           v-if="displayedProfile?.profile_picture"
-          :src="displayedProfile.profile_picture"
+          :src="getFullImageUrl(displayedProfile.profile_picture)"
           alt="Profile picture"
           class="profile-pic"
         />
@@ -275,7 +239,6 @@ watch(
         </p>
         <p class="bio-text" v-else>(No bio set)</p>
 
-        <!-- "Send Message" button appears if viewing another user's profile -->
         <button
           v-if="authStore.isLoggedIn && !isMyOwnProfile"
           @click="startChatWithDisplayedUser"
@@ -284,8 +247,16 @@ watch(
           Send Message to {{ displayedUser.username }}
         </button>
 
-        <!-- Artist specific section for own profile -->
         <div v-if="isMyOwnProfile">
+          <div class="user-actions-section">
+            <RouterLink
+              :to="{ name: 'user-listening-habits' }"
+              class="action-button"
+            >
+              View My Listening Habits
+            </RouterLink>
+          </div>
+
           <div
             v-if="
               authStore.hasArtistProfile &&
@@ -381,6 +352,10 @@ watch(
 .profile-details {
   text-align: left;
   line-height: 1.8;
+  padding: 1rem;
+  background-color: var(--color-background);
+  border-radius: 6px;
+  /* border: 1px solid var(--color-border); Optional: if you want a border around view mode */
 }
 .profile-pic,
 .profile-pic-placeholder {
@@ -408,6 +383,7 @@ watch(
   min-height: 40px;
 }
 
+.user-actions-section, /* New class for styling user-specific action links */
 .artist-section,
 .artist-create-section {
   margin-top: 1.5rem;
@@ -422,20 +398,43 @@ watch(
   margin-top: 1rem;
   margin-right: 0.5rem;
   padding: 0.6em 1.2em;
-}
-.edit-button {
-  margin-top: 1.5rem;
-}
-.error-message {
-  color: red;
-}
-.send-message-button {
+  text-decoration: none; /* Ensure RouterLink as button looks like button */
+  display: inline-block; /* For RouterLink as button */
+  border-radius: 4px;
+  cursor: pointer;
   background-color: var(--color-accent);
-  color: white;
-  margin-top: 1rem;
+  color: var(--vt-c-white);
   border: 1px solid var(--color-accent);
 }
-.send-message-button:hover {
+.action-button:hover {
   background-color: var(--color-accent-hover);
 }
+
+.edit-button {
+  margin-top: 1.5rem;
+  background-color: var(--color-background-soft); /* Different style for edit */
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+.edit-button:hover {
+  border-color: var(--color-border-hover);
+  background-color: var(--color-background-mute);
+}
+.error-message {
+  color: var(--vt-c-red-dark);
+  background-color: var(--vt-c-red-soft);
+  border: 1px solid var(--vt-c-red-dark);
+  padding: 0.75rem;
+  border-radius: 4px;
+  margin: 1rem 0;
+}
+.send-message-button {
+  /* background-color: var(--color-accent);
+  color: white; */
+  margin-top: 1rem;
+  /* border: 1px solid var(--color-accent); */
+}
+/* .send-message-button:hover {
+  background-color: var(--color-accent-hover);
+} */
 </style>
