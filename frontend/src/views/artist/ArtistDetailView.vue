@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from "vue";
-import { RouterLink, useRouter } from "vue-router";
+import { RouterLink, useRouter, useRoute } from "vue-router"; // Added useRoute
 import axios from "axios";
 import { useAuthStore } from "@/stores/auth";
-import ArtistEditForm from "@/components/artist/ArtistEditForm.vue"; // Updated import path
+import { useInteractionsStore } from "@/stores/interactions"; // Import interactions store
+import ArtistEditForm from "@/components/artist/ArtistEditForm.vue";
 import { useChatStore } from "@/stores/chat";
 import type { Conversation } from "@/types";
 import ChooseSenderIdentityModal from "@/components/chat/ChooseSenderIdentityModal.vue";
@@ -39,8 +40,10 @@ const props = defineProps<{
 }>();
 
 const authStore = useAuthStore();
+const interactionsStore = useInteractionsStore(); // Use interactions store
 const chatStore = useChatStore();
 const router = useRouter();
+const route = useRoute(); // For redirect query on login for chat
 const artist = ref<ArtistDetail | null>(null);
 const releases = ref<ReleaseSummary[]>([]);
 const isLoadingArtist = ref(true);
@@ -60,11 +63,54 @@ const isOwner = computed(() => {
   );
 });
 
-const isMyArtistProfile = computed(() => {
+// Renamed from isMyArtistProfile to avoid confusion with isOwner
+const isViewingOwnArtistProfile = computed(() => {
   return (
     authStore.isLoggedIn && authStore.artistProfileId === parseInt(props.id, 10)
   );
 });
+
+// --- Follow/Unfollow Logic ---
+const currentArtistId = computed(() => artist.value?.id);
+
+const isFollowing = computed(() => {
+  if (currentArtistId.value === undefined) return false;
+  return interactionsStore.getFollowingStatus(currentArtistId.value) || false;
+});
+
+const isLoadingFollowStatus = computed(() => {
+  if (currentArtistId.value === undefined) return false;
+  return interactionsStore.getIsLoadingStatus(currentArtistId.value);
+});
+
+const isLoadingFollowAction = computed(() => {
+  if (currentArtistId.value === undefined) return false;
+  return interactionsStore.getIsLoadingAction(currentArtistId.value);
+});
+
+const followButtonText = computed(() => {
+  if (isLoadingFollowStatus.value) return "Loading...";
+  if (isLoadingFollowAction.value)
+    return isFollowing.value ? "Unfollowing..." : "Following...";
+  return isFollowing.value ? "Unfollow" : "Follow";
+});
+
+const handleFollowToggle = async () => {
+  if (!authStore.isLoggedIn) {
+    router.push({ name: "login", query: { redirect: route.fullPath } });
+    return;
+  }
+  if (currentArtistId.value === undefined || isLoadingFollowAction.value)
+    return;
+
+  if (isFollowing.value) {
+    await interactionsStore.unfollowArtist(currentArtistId.value);
+  } else {
+    await interactionsStore.followArtist(currentArtistId.value);
+  }
+  // Error handling can be done by observing interactionsStore.error if needed
+};
+// --- End Follow/Unfollow Logic ---
 
 const fetchArtistDetail = async (artistId: string) => {
   isLoadingArtist.value = true;
@@ -73,6 +119,10 @@ const fetchArtistDetail = async (artistId: string) => {
   try {
     const response = await axios.get<ArtistDetail>(`/artists/${artistId}/`);
     artist.value = response.data;
+    if (artist.value && authStore.isLoggedIn && !isOwner.value) {
+      // Check follow status if logged in and not owner
+      interactionsStore.checkFollowingStatus(artist.value.id);
+    }
   } catch (err: any) {
     console.error(`Failed to fetch artist ${artistId}:`, err);
     if (axios.isAxiosError(err) && err.response?.status === 404) {
@@ -173,8 +223,6 @@ const proceedWithChatNavigation = (chosenSenderIdentity: "USER" | "ARTIST") => {
         chosenSenderIdentity === "USER" &&
         convo.related_artist_recipient_details?.id === artist.value!.id
       ) {
-        // This case handles when the target artist's USER account DMed THIS artist profile,
-        // and I am now trying to reply as USER to this artist profile.
         return true;
       }
     }
@@ -200,7 +248,7 @@ const proceedWithChatNavigation = (chosenSenderIdentity: "USER" | "ARTIST") => {
       query: queryParams,
     });
   }
-  showIdentityModal.value = false; // Close modal after navigation
+  showIdentityModal.value = false;
 };
 
 const startChatWithArtist = async () => {
@@ -212,9 +260,12 @@ const startChatWithArtist = async () => {
     });
     return;
   }
-  if (authStore.artistProfileId === artist.value.id) {
+  // Cannot send a message TO your own artist profile via this button
+  // This is slightly different from the `isOwner` check for editing,
+  // as this refers to the *target* of the message.
+  if (artist.value.id === authStore.artistProfileId) {
     alert(
-      "You cannot send a message to your own artist profile using this button."
+      "You cannot send a message to your own artist profile page using this button."
     );
     return;
   }
@@ -225,9 +276,6 @@ const startChatWithArtist = async () => {
     proceedWithChatNavigation("USER");
   }
 };
-
-// No need for handleIdentityChosen here as it's encapsulated in the modal component.
-// The modal will emit 'identity-chosen' which `proceedWithChatNavigation` handles.
 
 onMounted(() => {
   loadData(props.id);
@@ -282,34 +330,51 @@ watch(
               isEditing = true;
               editError = null;
             "
-            class="edit-button"
+            class="edit-button action-button"
           >
             Edit Artist Profile
           </button>
 
+          <!-- Follow/Unfollow Button -->
           <button
             v-if="
-              authStore.isLoggedIn && artist.user_id !== authStore.authUser?.id
+              authStore.isLoggedIn && !isOwner && !isViewingOwnArtistProfile
             "
+            @click="handleFollowToggle"
+            :disabled="isLoadingFollowStatus || isLoadingFollowAction"
+            class="action-button follow-button"
+            :class="{ 'is-following': isFollowing }"
+          >
+            {{ followButtonText }}
+          </button>
+          <p v-else-if="!authStore.isLoggedIn && !isOwner" class="info-text">
+            <RouterLink
+              :to="{ name: 'login', query: { redirect: route.fullPath } }"
+              >Login</RouterLink
+            >
+            to follow.
+          </p>
+          <!-- End Follow/Unfollow Button -->
+
+          <button
+            v-if="authStore.isLoggedIn && !isViewingOwnArtistProfile"
             @click="startChatWithArtist"
-            class="send-message-button"
+            class="action-button send-message-button"
           >
             Send Message
           </button>
           <p
-            v-else-if="
-              authStore.isLoggedIn && artist.user_id === authStore.authUser?.id
-            "
+            v-else-if="isViewingOwnArtistProfile"
             class="info-text self-profile-text"
           >
             This is your artist profile.
           </p>
-          <p v-else class="info-text">
+          <p
+            v-else-if="!authStore.isLoggedIn && !isViewingOwnArtistProfile"
+            class="info-text"
+          >
             <RouterLink
-              :to="{
-                name: 'login',
-                query: { redirect: router.currentRoute.value.fullPath },
-              }"
+              :to="{ name: 'login', query: { redirect: route.fullPath } }"
               >Login</RouterLink
             >
             to send a message.
@@ -411,6 +476,7 @@ watch(
   display: flex;
   gap: 1rem;
   align-items: center;
+  flex-wrap: wrap; /* Allow meta items to wrap */
 }
 .artist-meta a {
   color: var(--color-link);
@@ -428,30 +494,52 @@ watch(
   display: flex;
   gap: 1rem;
   align-items: center;
+  flex-wrap: wrap; /* Allow buttons to wrap */
 }
-.edit-button,
-.send-message-button {
+.action-button {
+  /* General style for action buttons */
   padding: 0.6em 1.2em;
   border-radius: 5px;
   cursor: pointer;
   font-size: 0.95em;
+  border: 1px solid transparent;
 }
 .edit-button {
   background-color: var(--color-background-mute);
-  border: 1px solid var(--color-border);
+  border-color: var(--color-border);
   color: var(--color-text);
 }
 .edit-button:hover {
   border-color: var(--color-border-hover);
 }
-.send-message-button {
+
+.follow-button {
   background-color: var(--color-accent);
   color: white;
-  border: 1px solid var(--color-accent);
+  border-color: var(--color-accent);
+}
+.follow-button.is-following {
+  background-color: var(--color-background-soft);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.follow-button:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.follow-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.send-message-button {
+  background-color: #5cb85c; /* Example: Green for message */
+  color: white;
+  border-color: #4cae4c;
 }
 .send-message-button:hover {
-  background-color: var(--color-accent-hover);
+  background-color: #4cae4c;
 }
+
 .info-text {
   font-size: 0.9em;
   color: var(--color-text-light);
