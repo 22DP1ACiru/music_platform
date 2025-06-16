@@ -119,7 +119,7 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5341", # Frontend's default port from docker-compose
     "http://127.0.0.1:5341",
-    NGROK_DOMAIN,
+    # NGROK_DOMAIN,
 ]
 # If you use credentials (like cookies or Authorization headers), set this:
 # CORS_ALLOW_CREDENTIALS = True
