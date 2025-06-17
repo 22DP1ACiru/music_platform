@@ -48,7 +48,7 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: "/profile/listening-habits", // New route for user listening habits
+      path: "/profile/listening-habits",
       name: "user-listening-habits",
       component: () => import("../views/profile/UserListeningHabitsView.vue"),
       meta: { requiresAuth: true },
@@ -140,7 +140,6 @@ const router = createRouter({
       component: () => import("../views/general/SearchView.vue"),
       props: (route) => ({ query: route.query.q }),
     },
-    // Admin Routes
     {
       path: "/admin",
       name: "admin-dashboard",
@@ -166,7 +165,13 @@ const router = createRouter({
             import("../views/admin/highlights/AdminHighlightEditView.vue"),
           props: true,
         },
-        // Add more admin sub-routes here later (e.g., for stats)
+        {
+          // New Admin Stats Route
+          path: "platform-stats", // Changed path to avoid conflict with root "stats" API
+          name: "admin-platform-stats",
+          component: () =>
+            import("../views/admin/stats/AdminPlatformStatsView.vue"),
+        },
       ],
     },
     {

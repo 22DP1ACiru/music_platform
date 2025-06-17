@@ -1,26 +1,27 @@
-from rest_framework import viewsets, permissions, status
+    from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from django.db.models import Sum, Count, F
+from django.db.models import Sum, Count, F, Q # Import Q
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
+from django.contrib.auth import get_user_model
 
-from music.models import Artist, Release, Track, ListenEvent, Genre # ADD ListenEvent, Genre
+from music.models import Artist, Release, Track, ListenEvent, Genre 
 from interactions.models import Follow
-from shop.models import OrderItem, Order
+from shop.models import OrderItem, Order, Product
 from .serializers import (
     ArtistDashboardStatsSerializer, 
-    UserListeningHabitsSerializer, # New Import
-    # Other imports might not be directly used as arguments here
-    # UserListenedTrackStatSerializer, # Will be used by UserListeningHabitsSerializer
-    # UserListenedArtistStatSerializer,
-    # UserListenedGenreStatSerializer
+    UserListeningHabitsSerializer,
+    AdminDashboardStatsSerializer, 
+    PlatformActivitySummarySerializer 
 )
+
+User = get_user_model()
 
 class ArtistStatsViewSet(viewsets.ViewSet): 
     permission_classes = [permissions.IsAuthenticated]
-
+    
     def get_artist_profile(self, request):
         try:
             return request.user.artist_profile 
@@ -93,13 +94,13 @@ class ArtistStatsViewSet(viewsets.ViewSet):
 
 class UserStatsViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
-
+    
     @action(detail=False, methods=['get'], url_path='my-listening-habits')
     def my_listening_habits(self, request):
         user = request.user
         
         period_param = request.query_params.get('period', 'all_time')
-        limit_param = int(request.query_params.get('limit', 5)) # How many top items to return
+        limit_param = int(request.query_params.get('limit', 5)) 
         now = timezone.now()
         start_date = None
 
@@ -108,83 +109,67 @@ class UserStatsViewSet(viewsets.ViewSet):
         elif period_param == '30days':
             start_date = now - timedelta(days=30)
 
-        # Base query for user's listen events within the period
         listen_events_query = ListenEvent.objects.filter(user=user)
         if start_date:
             listen_events_query = listen_events_query.filter(listened_at__gte=start_date)
 
-        # 1. Top Listened Tracks by this User
         top_listened_tracks_data = listen_events_query.values(
-            'track_id', 
-            'track__title', 
-            'track__duration_in_seconds',
-            'track__release__title', 
-            'track__release__artist__name',
-            'track__release__artist__id',
-            'track__release__id',
-            'track__release__cover_art'
-        ).annotate(
-            user_listen_count=Count('track_id')
-        ).order_by('-user_listen_count')[:limit_param]
+            'track_id', 'track__title', 'track__duration_in_seconds',
+            'track__release__title', 'track__release__artist__name',
+            'track__release__artist__id', 'track__release__id', 'track__release__cover_art'
+        ).annotate(user_listen_count=Count('track_id')).order_by('-user_listen_count')[:limit_param]
 
-        # Manually construct track objects for the serializer due to grouped/annotated data
-        # This is because .values() returns dicts, not model instances.
         top_tracks_for_serializer = []
         for item in top_listened_tracks_data:
             top_tracks_for_serializer.append({
-                'id': item['track_id'],
-                'title': item['track__title'],
+                'id': item['track_id'], 'title': item['track__title'],
                 'duration_in_seconds': item['track__duration_in_seconds'],
-                'release_title': item['track__release__title'],
+                'release_title': item['track__release__title'], 
                 'artist_name': item['track__release__artist__name'],
-                'artist_id': item['track__release__artist__id'],
-                'release_id': item['track__release__id'],
-                'cover_art': item['track__release__cover_art'], # This will be path, serializer handles full URL
+                'artist_id': item['track__release__artist__id'],   
+                'release_id': item['track__release__id'],      
+                'cover_art': item['track__release__cover_art'], 
                 'user_listen_count': item['user_listen_count']
             })
         
-        # 2. Top Listened Artists by this User
         top_listened_artists_data = listen_events_query.values(
-            'track__release__artist_id', 
-            'track__release__artist__name',
-            'track__release__artist__artist_picture', # Assuming artist_picture is on Artist model
-            'track__release__artist__user_id' # Assuming user_id is on Artist model for ArtistSerializer compatibility
-        ).annotate(
-            user_listen_count_for_artist=Count('track__release__artist_id')
+            'track__release__artist_id', 'track__release__artist__name',
+            'track__release__artist__artist_picture', 'track__release__artist__user_id' 
+        ).annotate(user_listen_count_for_artist=Count('track__release__artist_id')
         ).order_by('-user_listen_count_for_artist').filter(track__release__artist_id__isnull=False)[:limit_param]
 
         top_artists_for_serializer = []
         for item in top_listened_artists_data:
             top_artists_for_serializer.append({
-                'id': item['track__release__artist_id'],
-                'name': item['track__release__artist__name'],
+                'id': item['track__release__artist_id'], 'name': item['track__release__artist__name'],
                 'artist_picture': item['track__release__artist__artist_picture'],
-                'user_id': item['track__release__artist__user_id'], # For FullArtistSerializer if it needs user
                 'user_listen_count_for_artist': item['user_listen_count_for_artist']
-                # Add other fields if your UserListenedArtistStatSerializer expects them from FullArtistSerializer
             })
-
-        # 3. Top Listened Genres by this User
-        # This is a bit more complex as genres are M2M on Track
-        # We'll count listen events for tracks that belong to each genre
+        
         top_listened_genres_data = listen_events_query.filter(
-            track__genres__isnull=False # Only consider tracks that have genres
+            track__genres__isnull=False 
         ).values(
-            'track__genres__id', 
-            'track__genres__name'
-        ).annotate(
-            user_listen_count_for_genre=Count('track__genres__id')
+            'track__genres__id', 'track__genres__name'
+        ).annotate(user_listen_count_for_genre=Count('track__genres__id')
         ).order_by('-user_listen_count_for_genre')[:limit_param]
+        
+        # DEBUG PRINT
+        # print(f"DEBUG UserStats: User ID: {user.id}")
+        # user_listen_events_for_genre_debug = listen_events_query.filter(track__genres__isnull=False).select_related('track')
+        # print(f"DEBUG UserStats: Found {user_listen_events_for_genre_debug.count()} listen events for tracks that have genres.")
+        # for le_debug in user_listen_events_for_genre_debug[:10]: 
+        #     track_genres_debug = [g.name for g in le_debug.track.genres.all()]
+        #     print(f"  ListenEvent ID: {le_debug.id}, Track: '{le_debug.track.title}', Track Genres: {track_genres_debug}")
+        # print(f"DEBUG UserStats: Raw top_listened_genres_data from DB: {list(top_listened_genres_data)}")
+
 
         top_genres_for_serializer = []
         for item in top_listened_genres_data:
             top_genres_for_serializer.append({
-                'id': item['track__genres__id'],
-                'name': item['track__genres__name'],
+                'id': item['track__genres__id'], 'name': item['track__genres__name'],
                 'user_listen_count_for_genre': item['user_listen_count_for_genre']
             })
         
-        # 4. Total listen events (significant listens)
         total_listen_events_count = listen_events_query.count()
 
         user_habits_data = {
@@ -193,6 +178,86 @@ class UserStatsViewSet(viewsets.ViewSet):
             'top_listened_genres': top_genres_for_serializer,
             'total_listen_events_count': total_listen_events_count,
         }
-
         serializer = UserListeningHabitsSerializer(instance=user_habits_data, context={'request': request})
+        return Response(serializer.data)
+
+
+class AdminStatsViewSet(viewsets.ViewSet):
+    permission_classes = [permissions.IsAdminUser]
+
+    @action(detail=False, methods=['get'], url_path='platform-overview')
+    def platform_overview(self, request):
+        period_param = request.query_params.get('period', 'all_time')
+        limit_param = int(request.query_params.get('limit', 5))
+        now = timezone.now()
+        start_date = None
+
+        if period_param == '7days':
+            start_date = now - timedelta(days=7)
+        elif period_param == '30days':
+            start_date = now - timedelta(days=30)
+
+        total_registered_users = User.objects.count()
+        total_artists = Artist.objects.count()
+        total_releases = Release.objects.count()
+        total_tracks = Track.objects.count()
+        
+        listen_events_summary_query = ListenEvent.objects.all()
+        if start_date:
+            listen_events_summary_query = listen_events_summary_query.filter(listened_at__gte=start_date)
+        total_listen_events = listen_events_summary_query.count()
+
+        completed_orders_query = Order.objects.filter(status=Order.ORDER_STATUS_CHOICES[2][0])
+        if start_date:
+            completed_orders_query = completed_orders_query.filter(created_at__gte=start_date)
+        
+        total_sales_summary = completed_orders_query.aggregate(
+            total_count=Sum('items__quantity'), 
+            total_value=Sum(F('items__quantity') * F('items__price_at_purchase'))
+        )
+        total_sales_count = total_sales_summary['total_count'] or 0
+        total_sales_value_usd = total_sales_summary['total_value'] or Decimal('0.00')
+
+        platform_summary_data = {
+            'total_registered_users': total_registered_users,
+            'total_artists': total_artists,
+            'total_releases': total_releases,
+            'total_tracks': total_tracks,
+            'total_listen_events': total_listen_events,
+            'total_sales_count': total_sales_count,    
+            'total_sales_value_usd': total_sales_value_usd,
+        }
+
+        # Most Popular Releases (platform-wide)
+        release_period_filter = Q()
+        if start_date:
+            release_period_filter = Q(listen_events__listened_at__gte=start_date)
+        
+        most_popular_releases_qs = Release.objects.annotate(
+            period_listens=Count('listen_events', filter=release_period_filter)
+        ).order_by('-listen_count')[:limit_param] # Still order by all-time listen_count for overall popularity
+
+        # Most Popular Tracks (platform-wide)
+        track_period_filter = Q()
+        if start_date:
+            track_period_filter = Q(listen_events__listened_at__gte=start_date)
+
+        most_popular_tracks_qs = Track.objects.annotate(
+             period_listens=Count('listen_events', filter=track_period_filter)
+        ).order_by('-listen_count')[:limit_param]
+
+
+        most_popular_genres_qs = Genre.objects.annotate(
+            num_tracks_in_genre=Count('tracks')
+        ).order_by('-num_tracks_in_genre')[:limit_param]
+
+
+        admin_dashboard_data = {
+            'platform_summary': platform_summary_data,
+            'most_popular_releases': most_popular_releases_qs,
+            'most_popular_tracks': most_popular_tracks_qs,
+            'most_popular_genres': most_popular_genres_qs,
+        }
+
+        serializer = AdminDashboardStatsSerializer(instance=admin_dashboard_data, context={'request': request})
         return Response(serializer.data)

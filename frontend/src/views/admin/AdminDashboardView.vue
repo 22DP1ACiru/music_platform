@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RouterLink } from "vue-router";
+import { RouterLink, RouterView } from "vue-router"; // Added RouterView
 </script>
 
 <template>
@@ -9,15 +9,16 @@ import { RouterLink } from "vue-router";
       <RouterLink :to="{ name: 'admin-highlights' }" class="admin-nav-link">
         Manage Highlights
       </RouterLink>
-      <!-- Add more admin links here as features are built -->
-      <!-- <RouterLink :to="{ name: 'admin-stats' }" class="admin-nav-link">
-        View Statistics
-      </RouterLink> -->
+      <RouterLink :to="{ name: 'admin-platform-stats' }" class="admin-nav-link">
+        Platform Statistics
+      </RouterLink>
     </nav>
     <div class="admin-content">
-      <p>Welcome to the admin area. Select a section to manage.</p>
-      <router-view></router-view>
-      <!-- For nested admin routes -->
+      <!-- Default message if no sub-route is active, or the content of the child route -->
+      <RouterView v-slot="{ Component }">
+        <component :is="Component" v-if="Component" />
+        <p v-else>Welcome to the admin area. Select a section to manage.</p>
+      </RouterView>
     </div>
   </div>
 </template>
@@ -48,7 +49,9 @@ import { RouterLink } from "vue-router";
   background-color: var(--color-background-soft);
 }
 .admin-nav-link:hover,
-.admin-nav-link.router-link-active {
+.admin-nav-link.router-link-active, /* For active link styling */
+.admin-nav-link.router-link-exact-active {
+  /* For exact active link styling */
   background-color: var(--color-accent);
   color: white;
   border-color: var(--color-accent);

@@ -89,3 +89,18 @@ class UserListeningHabitsSerializer(serializers.Serializer):
     top_listened_artists = UserListenedArtistStatSerializer(many=True)
     top_listened_genres = UserListenedGenreStatSerializer(many=True)
     total_listen_events_count = serializers.IntegerField(default=0)
+
+class PlatformActivitySummarySerializer(serializers.Serializer):
+    total_registered_users = serializers.IntegerField(default=0)
+    total_artists = serializers.IntegerField(default=0)
+    total_releases = serializers.IntegerField(default=0)
+    total_tracks = serializers.IntegerField(default=0)
+    total_listen_events = serializers.IntegerField(default=0)
+    total_sales_count = serializers.IntegerField(default=0) # Across all orders
+    total_sales_value_usd = serializers.DecimalField(max_digits=12, decimal_places=2, default=0.00) # Across all orders
+
+class AdminDashboardStatsSerializer(serializers.Serializer):
+    platform_summary = PlatformActivitySummarySerializer()
+    most_popular_releases = StatsReleaseSerializer(many=True, read_only=True) # Top N by listen_count
+    most_popular_tracks = StatsTrackSerializer(many=True, read_only=True)   # Top N by listen_count
+    most_popular_genres = GenreSerializer(many=True, read_only=True)
